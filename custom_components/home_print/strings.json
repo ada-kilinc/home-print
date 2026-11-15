@@ -1,0 +1,60 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add printer",
+        "description": "Enter the address of a network printer that supports IPP.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "base_path": "Path",
+          "ssl": "Use TLS (ipps)",
+          "verify_ssl": "Verify certificate"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Add discovered printer",
+        "description": "Found {name} at {host}. Add it to Home Assistant?"
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the printer. Check the address and that the printer is on.",
+      "unknown": "Something unexpected went wrong."
+    },
+    "abort": {
+      "already_configured": "This printer is already added.",
+      "cannot_connect": "Could not connect to the printer. Check that it is on."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Printer settings",
+        "data": {
+          "default_sides": "Default sides",
+          "default_color_mode": "Default color mode",
+          "max_file_mb": "Max file size (MB)",
+          "scan_interval": "Status refresh interval (seconds)",
+          "admin_only": "Only admins can print"
+        }
+      }
+    }
+  },
+  "selector": {
+    "sides": {
+      "options": {
+        "one-sided": "One-sided",
+        "two-sided-long-edge": "Two-sided (long edge)",
+        "two-sided-short-edge": "Two-sided (short edge)"
+      }
+    },
+    "color_mode": {
+      "options": {
+        "auto": "Printer default",
+        "color": "Color",
+        "monochrome": "Black and white"
+      }
+    }
+  }
+}

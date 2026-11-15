@@ -1,0 +1,60 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Yazıcı ekle",
+        "description": "IPP destekleyen ağ yazıcısının adresini gir.",
+        "data": {
+          "host": "Adres",
+          "port": "Port",
+          "base_path": "Yol",
+          "ssl": "TLS kullan (ipps)",
+          "verify_ssl": "Sertifikayı doğrula"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Bulunan yazıcıyı ekle",
+        "description": "{host} adresinde {name} bulundu. Home Assistant'a eklensin mi?"
+      }
+    },
+    "error": {
+      "cannot_connect": "Yazıcıya bağlanılamadı. Adresi ve yazıcının açık olduğunu kontrol et.",
+      "unknown": "Beklenmedik bir sorun çıktı."
+    },
+    "abort": {
+      "already_configured": "Bu yazıcı zaten ekli.",
+      "cannot_connect": "Yazıcıya bağlanılamadı. Yazıcının açık olduğunu kontrol et."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Yazıcı ayarları",
+        "data": {
+          "default_sides": "Varsayılan baskı yüzü",
+          "default_color_mode": "Varsayılan renk modu",
+          "max_file_mb": "En büyük dosya boyutu (MB)",
+          "scan_interval": "Durum yenileme aralığı (saniye)",
+          "admin_only": "Sadece yöneticiler yazdırabilsin"
+        }
+      }
+    }
+  },
+  "selector": {
+    "sides": {
+      "options": {
+        "one-sided": "Tek yüze",
+        "two-sided-long-edge": "Çift yüze (uzun kenar)",
+        "two-sided-short-edge": "Çift yüze (kısa kenar)"
+      }
+    },
+    "color_mode": {
+      "options": {
+        "auto": "Yazıcı varsayılanı",
+        "color": "Renkli",
+        "monochrome": "Siyah beyaz"
+      }
+    }
+  }
+}
