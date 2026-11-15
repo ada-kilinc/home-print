@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.common import async_capture_events
 from custom_components.home_print.client import (
     CannotConnect,
     PrinterRejected,
+    PrintTimeout,
     UnsupportedOption,
 )
 from custom_components.home_print.const import (
@@ -25,7 +26,9 @@ from custom_components.home_print.printing import (
     InvalidPrintOption,
     OptionNotSupportedByPrinter,
     PrinterRejectedJob,
+    PrintError,
     PrinterUnavailable,
+    PrintTimedOut,
     UnsupportedFileType,
     async_print,
     build_options,
@@ -152,6 +155,8 @@ async def test_async_print_maps_printer_rejected(hass, mock_client):
         PrintOptions(page_ranges="1-x"),
         PrintOptions(page_ranges="1,,2"),
         PrintOptions(page_ranges="-3"),
+        PrintOptions(page_ranges="1-99999999999"),
+        PrintOptions(page_ranges="10000"),
     ],
 )
 async def test_async_print_rejects_invalid_options(hass, mock_client, options):
@@ -264,3 +269,48 @@ async def test_build_options_applies_entry_defaults(hass, mock_client):
     assert build_options(entry, color_mode="auto").color_mode is None
     with pytest.raises(InvalidPrintOption):
         build_options(entry, sides="sideways")
+
+
+async def test_async_print_timeout_maps_to_print_timeout(hass, mock_client):
+    entry = await setup_entry(hass)
+    events = async_capture_events(hass, EVENT_JOB)
+    mock_client.print_job.side_effect = PrintTimeout("slow")
+
+    with pytest.raises(PrintTimedOut) as exc:
+        await async_print(
+            hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    assert exc.value.key == "print_timeout"
+    assert exc.value.http_status == 504
+    assert events[0].data["error"] == "print_timeout"
+
+
+async def test_async_print_accepts_max_page_number(hass, mock_client):
+    entry = await setup_entry(hass)
+    await async_print(
+        hass,
+        entry,
+        PDF,
+        file_name="a.pdf",
+        options=PrintOptions(page_ranges="1-9999"),
+        user=None,
+    )
+    mock_client.print_job.assert_called_once()
+
+
+async def test_async_print_unexpected_error_still_reports(hass, mock_client):
+    entry = await setup_entry(hass)
+    events = async_capture_events(hass, EVENT_JOB)
+    mock_client.print_job.side_effect = RuntimeError("bug")
+
+    with pytest.raises(PrintError) as exc:
+        await async_print(
+            hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    assert type(exc.value) is PrintError
+    assert exc.value.key == "print_failed"
+    assert events[0].data["result"] == "error"
+    assert events[0].data["error"] == "print_failed"
+    assert entry.runtime_data.coordinator.last_job.state == "error"

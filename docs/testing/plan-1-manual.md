@@ -80,16 +80,8 @@ Home Print cihaz sayfasını aç. Şunlar olmalı:
 
 Önce dosyayı HA'nın okuyabildiği yere koy.
 
-- `test.pdf`'i HA'daki `/media` klasörüne kopyala. Örnek yol: `/media/test.pdf`.
-- `configuration.yaml` içinde `allowlist_external_dirs` altında `/media` olmalı. Yoksa servis "Home Assistant'ın /media yolunu okuma izni yok" der (`path_not_allowed`).
-
-```yaml
-homeassistant:
-  allowlist_external_dirs:
-    - /media
-```
-
-- Ayarı ekledinse HA'yı yeniden başlat.
+- `test.pdf`'i HA'daki medya klasörüne (`/media`) kopyala. Örnek yol: `/media/test.pdf`.
+- Medya klasörünü HA zaten okuyabiliyor, ek ayar gerekmez. Dosyayı başka bir klasöre koyarsan o klasör HA'nın okuyabildiği bir yer olmalı (örneğin `allowlist_external_dirs` altına eklenmiş). Değilse servis "Home Assistant'ın ... yolunu okuma izni yok" der (`path_not_allowed`).
 
 Şimdi servisi çalıştır: Geliştirici Araçları → Eylemler → **Dosya yazdır** (`home_print.print_file`). YAML moduna geçip yapıştırabilirsin. `config_entry_id` için aşağıdaki "entry_id nasıl bulunur" kısmına bak, ya da arayüzden yazıcıyı seçebilirsin.
 

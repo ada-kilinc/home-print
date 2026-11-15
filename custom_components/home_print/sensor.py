@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -66,12 +70,16 @@ class MarkerSensor(HomePrintEntity, SensorEntity):
 
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_suggested_display_precision = 0
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: HomePrintCoordinator, index: int) -> None:
         super().__init__(coordinator, f"marker_{index}")
         self._index = index
-        self._attr_name = coordinator.data.markers[index].name
+        marker = coordinator.data.markers[index]
+        self._attr_name = marker.name
+        # Ink/toner levels are primary; waste/maintenance boxes are diagnostic.
+        if "waste" in marker.kind or "maintenance" in marker.kind:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def available(self) -> bool:

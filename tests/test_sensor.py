@@ -185,3 +185,17 @@ async def test_polling_updates_state(hass, mock_client, freezer):
     assert (
         hass.states.get("sensor.generic_ippe_4000_series_status").state == "processing"
     )
+
+
+async def test_marker_sensor_category_and_state_class(hass, mock_client):
+    await setup_entry(hass)
+    registry = er.async_get(hass)
+    for slug, diagnostic in (
+        ("black_ink", False),
+        ("yellow_ink", False),
+        ("maintenance_box", True),
+    ):
+        entity_id = f"sensor.generic_ippe_4000_series_{slug}"
+        reg = registry.async_get(entity_id)
+        assert (reg.entity_category == "diagnostic") is diagnostic, slug
+        assert hass.states.get(entity_id).attributes["state_class"] == "measurement"

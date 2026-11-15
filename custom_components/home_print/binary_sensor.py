@@ -18,9 +18,11 @@ PARALLEL_UPDATES = 0
 PROBLEM_PREFIXES = (
     "media-empty",
     "media-jam",
+    "media-needed",
     "door-open",
     "cover-open",
     "marker-supply-empty",
+    "marker-supply-missing",
     "toner-empty",
 )
 SEVERITY_SUFFIXES = ("-error", "-warning", "-report")

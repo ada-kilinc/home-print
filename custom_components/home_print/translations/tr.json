@@ -65,6 +65,11 @@
           "idle": "Boşta",
           "processing": "Yazdırıyor",
           "stopped": "Durdu"
+        },
+        "state_attributes": {
+          "reasons": {
+            "name": "Nedenler"
+          }
         }
       },
       "last_job": {
@@ -88,7 +93,7 @@
         },
         "path": {
           "name": "Dosya yolu",
-          "description": "Dosyanın tam yolu. allowlist_external_dirs içindeki bir klasörde olmalı."
+          "description": "Dosyanın tam yolu. Medya klasöründe (ya da Home Assistant'ın okuyabildiği başka bir klasörde) olmalı."
         },
         "copies": {
           "name": "Kopya",
@@ -96,11 +101,11 @@
         },
         "sides": {
           "name": "Baskı yüzü",
-          "description": "Tek ya da çift yüz. Boş bırakırsan varsayılan ayar kullanılır."
+          "description": "Tek ya da çift yüz. Boş bırakırsan entegrasyon seçeneklerinde bu yazıcı için seçtiğin varsayılan kullanılır."
         },
         "color_mode": {
           "name": "Renk modu",
-          "description": "Renkli ya da siyah beyaz. Boş bırakırsan varsayılan ayar kullanılır."
+          "description": "Renkli ya da siyah beyaz. Boş bırakırsan entegrasyon seçeneklerinde bu yazıcı için seçtiğin varsayılan kullanılır."
         },
         "page_ranges": {
           "name": "Sayfalar",
@@ -127,6 +132,9 @@
     },
     "printer_unavailable": {
       "message": "Yazıcıya ulaşılamıyor. Açık ve ağa bağlı mı, bir bak."
+    },
+    "print_timeout": {
+      "message": "Yazıcı işi zamanında onaylamadı. Belki yine de yazdırmıştır, tekrar denemeden önce yazıcıya bir bak."
     },
     "print_failed": {
       "message": "Yazıcıda beklenmedik bir hata çıktı, yazdırılamadı."

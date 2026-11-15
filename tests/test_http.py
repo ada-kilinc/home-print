@@ -7,7 +7,11 @@ import pytest
 from aiohttp import BodyPartReader
 from pytest_homeassistant_custom_component.common import async_capture_events
 
-from custom_components.home_print.client import CannotConnect, UnsupportedOption
+from custom_components.home_print.client import (
+    CannotConnect,
+    PrintTimeout,
+    UnsupportedOption,
+)
 from custom_components.home_print.const import (
     CONF_ADMIN_ONLY,
     CONF_MAX_FILE_MB,
@@ -197,6 +201,17 @@ async def test_upload_printer_offline(hass, mock_client, hass_client):
     assert body["message"]
 
 
+async def test_upload_print_timeout(hass, mock_client, hass_client):
+    entry = await setup_entry(hass)
+    mock_client.print_job.side_effect = PrintTimeout("slow")
+    client = await hass_client()
+    resp = await client.post(url(entry.entry_id), data=form())
+    assert resp.status == 504
+    body = await resp.json()
+    assert body["error"] == "print_timeout"
+    assert "may still" in body["message"]
+
+
 async def test_upload_format_not_supported_by_printer(hass, mock_client, hass_client):
     # The fixture printer does not list image/png.
     entry = await setup_entry(hass)
@@ -223,6 +238,7 @@ async def test_upload_option_not_supported(hass, mock_client, hass_client):
         {"sides": "sideways"},
         {"color_mode": "rainbow"},
         {"page_ranges": "3-1"},
+        {"page_ranges": "1-99999999999"},
         {"unexpected": "x"},
     ],
 )

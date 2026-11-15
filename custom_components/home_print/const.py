@@ -14,6 +14,8 @@ DEFAULT_PORT = 631
 DEFAULT_PATH = "/ipp/print"
 DEFAULT_MAX_FILE_MB = 25
 DEFAULT_SCAN_INTERVAL = 60
+# Seconds allowed for a whole Print-Job upload; slow inkjets may need to wake.
+PRINT_TIMEOUT = 300
 
 EVENT_JOB = "home_print_job"
 
@@ -40,4 +42,5 @@ __all__ = [
     "DEFAULT_SCAN_INTERVAL",
     "DOMAIN",
     "EVENT_JOB",
+    "PRINT_TIMEOUT",
 ]

@@ -249,3 +249,35 @@ async def test_options_flow_auto_color_stores_none(hass, mock_client):
         },
     )
     assert entry.options[CONF_DEFAULT_COLOR_MODE] is None
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (("_ipp._tcp.local.", 631), ("_ipps._tcp.local.", 443)),
+        (("_ipps._tcp.local.", 443), ("_ipp._tcp.local.", 631)),
+    ],
+)
+async def test_zeroconf_other_type_only_updates_host(hass, mock_client, first, second):
+    result = await _start_zc(hass, _zc(first[0], port=first[1]))
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    entry = result["result"]
+    before = dict(entry.data)
+    result = await _start_zc(
+        hass, _zc(second[0], host="192.168.1.77", port=second[1], rp="ipp/other")
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data == {**before, CONF_HOST: "192.168.1.77"}
+
+
+async def test_zeroconf_same_type_updates_port_and_path(hass, mock_client):
+    result = await _start_zc(hass, _zc())
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    entry = result["result"]
+    result = await _start_zc(hass, _zc(host="192.168.1.77", port=8631, rp="ipp/other"))
+    assert result["type"] is FlowResultType.ABORT
+    assert entry.data[CONF_HOST] == "192.168.1.77"
+    assert entry.data[CONF_PORT] == 8631
+    assert entry.data[CONF_BASE_PATH] == "/ipp/other"
+    assert entry.data[CONF_SSL] is False

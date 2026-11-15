@@ -138,9 +138,7 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
         # A known TXT uuid lets us dedupe (and follow IP changes) before probing.
         if txt_uuid:
             await self.async_set_unique_id(txt_uuid)
-            self._abort_if_unique_id_configured(
-                updates={CONF_HOST: host, CONF_PORT: port}
-            )
+            self._abort_if_unique_id_configured(updates=self._zeroconf_updates(data))
 
         try:
             info = await self._probe(data)
@@ -151,12 +149,28 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(
             _unique_id(info, host, port, base_path, txt_uuid)
         )
-        self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
+        self._abort_if_unique_id_configured(updates=self._zeroconf_updates(data))
 
         self._data = data
         self._title = info.make_model
         self.context["title_placeholders"] = {"name": info.make_model}
         return await self.async_step_zeroconf_confirm()
+
+    def _zeroconf_updates(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Entry updates for a re-announcement of an already configured printer.
+
+        A printer may advertise both _ipp (631) and _ipps (443). Port and path
+        belong to one transport, so they only follow a discovery of the same
+        type as the entry; otherwise only the host is updated.
+        """
+        updates: dict[str, Any] = {CONF_HOST: data[CONF_HOST]}
+        entry = self.hass.config_entries.async_entry_for_domain_unique_id(
+            DOMAIN, self.unique_id
+        )
+        if entry is not None and bool(entry.data.get(CONF_SSL)) == data[CONF_SSL]:
+            updates[CONF_PORT] = data[CONF_PORT]
+            updates[CONF_BASE_PATH] = data[CONF_BASE_PATH]
+        return updates
 
     async def async_step_zeroconf_confirm(
         self, user_input: dict[str, Any] | None = None

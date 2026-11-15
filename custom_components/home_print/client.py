@@ -18,6 +18,7 @@ from pyipp.exceptions import (
 from pyipp.parser import parse_ieee1284_device_id
 from pyipp.tags import ATTRIBUTE_TAG_MAP
 
+from .const import PRINT_TIMEOUT
 from .models import (
     Capabilities,
     JobResult,
@@ -28,6 +29,8 @@ from .models import (
 )
 
 # pyipp's serializer silently drops attributes it has no tag for.
+# This mutates pyipp's module-level map, so it is process-wide; that is
+# intentional and additive (setdefault never overrides an existing tag).
 ATTRIBUTE_TAG_MAP.setdefault("sides", IppTag.KEYWORD)
 ATTRIBUTE_TAG_MAP.setdefault("print-color-mode", IppTag.KEYWORD)
 ATTRIBUTE_TAG_MAP.setdefault("page-ranges", IppTag.RANGE)
@@ -67,6 +70,14 @@ class HomePrintError(Exception):
 
 class CannotConnect(HomePrintError):
     """The printer could not be reached."""
+
+
+class PrintTimeout(HomePrintError):
+    """The Print-Job request timed out after it was sent.
+
+    The printer answered Get-Printer-Attributes just before, so the job may
+    still have been received and printed.
+    """
 
 
 class PrinterRejected(HomePrintError):
@@ -197,21 +208,34 @@ class HomePrintClient:
         verify_ssl: bool,
         session: aiohttp.ClientSession,
     ) -> None:
-        self._ipp = IPP(
-            host=host,
-            port=port,
-            base_path=base_path,
-            tls=tls,
-            verify_ssl=verify_ssl,
-            session=session,
-        )
+        def ipp(request_timeout: int | None = None) -> IPP:
+            client = IPP(
+                host=host,
+                port=port,
+                base_path=base_path,
+                tls=tls,
+                verify_ssl=verify_ssl,
+                session=session,
+            )
+            if request_timeout is not None:
+                client.request_timeout = request_timeout
+            return client
+
+        # Status polls keep pyipp's short default timeout; the Print-Job
+        # timeout covers the whole upload, so it gets its own long one.
+        self._ipp = ipp()
+        self._print_ipp = ipp(PRINT_TIMEOUT)
 
     async def _execute(
-        self, operation: IppOperation, message: dict[str, Any]
+        self, operation: IppOperation, message: dict[str, Any], ipp: IPP | None = None
     ) -> dict[str, Any]:
         try:
-            return await self._ipp.execute(operation, message)
-        except (IPPConnectionError, IPPConnectionUpgradeRequired) as err:
+            return await (ipp or self._ipp).execute(operation, message)
+        except IPPConnectionError as err:
+            if ipp is self._print_ipp and isinstance(err.__cause__, TimeoutError):
+                raise PrintTimeout(str(err)) from err
+            raise CannotConnect(str(err)) from err
+        except IPPConnectionUpgradeRequired as err:
             raise CannotConnect(str(err)) from err
         except IPPResponseError as err:
             status = err.args[1].get("status-code") if len(err.args) > 1 else None
@@ -276,6 +300,7 @@ class HomePrintClient:
                 "job-attributes-tag": job_attrs,
                 "data": data,
             },
+            self._print_ipp,
         )
         job = next(iter(response.get("jobs") or []), {})
         if "job-id" not in job:

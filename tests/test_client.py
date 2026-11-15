@@ -12,9 +12,11 @@ from custom_components.home_print.client import (
     CannotConnect,
     HomePrintClient,
     PrinterRejected,
+    PrintTimeout,
     UnsupportedOption,
     parse_printer,
 )
+from custom_components.home_print.const import PRINT_TIMEOUT
 from custom_components.home_print.models import (
     JobResult,
     PrintOptions,
@@ -34,6 +36,7 @@ def _client(execute: AsyncMock) -> HomePrintClient:
         session=MagicMock(),
     )
     client._ipp.execute = execute
+    client._print_ipp.execute = execute
     return client
 
 
@@ -230,3 +233,44 @@ async def test_mock_client_fixture(mock_client):
         options=PrintOptions(),
     )
     assert job == JobResult(job_id=42, state="pending")
+
+
+async def test_print_job_uses_long_timeout():
+    client = _client(AsyncMock())
+    status = AsyncMock(return_value=_printer_response())
+    job = AsyncMock(return_value={"status-code": 0, "jobs": [{"job-id": 1}]})
+    client._ipp.execute = status
+    client._print_ipp.execute = job
+    assert client._ipp.request_timeout == 8
+    assert client._print_ipp.request_timeout == PRINT_TIMEOUT == 300
+    await client.print_job(
+        b"%PDF-1.4",
+        document_format="application/pdf",
+        job_name="j",
+        user_name="u",
+        options=PrintOptions(),
+    )
+    assert status.await_args.args[0] == IppOperation.GET_PRINTER_ATTRIBUTES
+    assert job.await_args.args[0] == IppOperation.PRINT_JOB
+
+
+async def test_print_job_timeout_raises_print_timeout():
+    timeout = IPPConnectionError("Timeout occurred while connecting to IPP server.")
+    timeout.__cause__ = TimeoutError()
+    client = _client(AsyncMock(side_effect=[_printer_response(), timeout]))
+    with pytest.raises(PrintTimeout):
+        await client.print_job(
+            b"%PDF-1.4",
+            document_format="application/pdf",
+            job_name="j",
+            user_name="u",
+            options=PrintOptions(),
+        )
+
+
+async def test_status_timeout_still_cannot_connect():
+    timeout = IPPConnectionError("Timeout occurred while connecting to IPP server.")
+    timeout.__cause__ = TimeoutError()
+    client = _client(AsyncMock(side_effect=timeout))
+    with pytest.raises(CannotConnect):
+        await client.get_printer()

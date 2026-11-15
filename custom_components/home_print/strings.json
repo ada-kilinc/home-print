@@ -93,7 +93,7 @@
         },
         "path": {
           "name": "File path",
-          "description": "Full path of the file. It must be inside a folder listed in allowlist_external_dirs."
+          "description": "Full path of a file under the media folder (or another folder Home Assistant may read)."
         },
         "copies": {
           "name": "Copies",
@@ -101,11 +101,11 @@
         },
         "sides": {
           "name": "Sides",
-          "description": "One-sided or two-sided. Uses the printer's default setting when empty."
+          "description": "One-sided or two-sided. Uses this printer's default from the integration options when empty."
         },
         "color_mode": {
           "name": "Color mode",
-          "description": "Color or black and white. Uses the printer's default setting when empty."
+          "description": "Color or black and white. Uses this printer's default from the integration options when empty."
         },
         "page_ranges": {
           "name": "Pages",
@@ -132,6 +132,9 @@
     },
     "printer_unavailable": {
       "message": "Can't reach the printer. Check that it is on and connected."
+    },
+    "print_timeout": {
+      "message": "The printer didn't confirm the job in time. It may still have printed, so check the printer before trying again."
     },
     "print_failed": {
       "message": "Printing failed because of an unexpected printer error."

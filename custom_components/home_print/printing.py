@@ -13,7 +13,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
-from .client import CannotConnect, HomePrintError, PrinterRejected, UnsupportedOption
+from .client import (
+    CannotConnect,
+    HomePrintError,
+    PrinterRejected,
+    PrintTimeout,
+    UnsupportedOption,
+)
 from .const import (
     CONF_DEFAULT_COLOR_MODE,
     CONF_DEFAULT_SIDES,
@@ -34,6 +40,7 @@ COLOR_MODES = ("auto", "color", "monochrome")
 COLOR_AUTO = "auto"  # printer default: send no print-color-mode
 DEFAULT_USER_NAME = "Home Assistant"
 MAX_JOB_NAME_BYTES = 255  # IPP name(MAX)
+MAX_PAGE_NUMBER = 9999  # keeps page-ranges well inside IPP's int32
 
 _MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"%PDF-", "application/pdf"),
@@ -99,6 +106,13 @@ class PrinterUnavailable(PrintError):
     http_status = 502
 
 
+class PrintTimedOut(PrintError):
+    """The printer did not answer the job in time; it may still print."""
+
+    key = "print_timeout"
+    http_status = 504
+
+
 class InvalidPrintOption(PrintError, ServiceValidationError):
     """A print option has an invalid value."""
 
@@ -138,7 +152,8 @@ def validate_options(options: PrintOptions) -> None:
             raise InvalidPrintOption(option="page_ranges")
         for part in value.split(","):
             low, _, high = part.partition("-")
-            if int(low) < 1 or int(high or low) < int(low):
+            first, last = int(low), int(high or low)
+            if first < 1 or last < first or last > MAX_PAGE_NUMBER:
                 raise InvalidPrintOption(option="page_ranges")
 
 
@@ -231,6 +246,11 @@ async def async_print(
     except PrintError as err:
         async_report_result(hass, entry, file_name=file_name, user=user, error=err)
         raise
+    except Exception as err:
+        _LOGGER.exception("Unexpected error printing %s", file_name)
+        error = PrintError()
+        async_report_result(hass, entry, file_name=file_name, user=user, error=error)
+        raise error from err
     async_report_result(hass, entry, file_name=file_name, user=user, result=result)
     return result
 
@@ -268,6 +288,8 @@ async def _async_send(
             user_name=_user_name(user),
             options=options,
         )
+    except PrintTimeout as err:
+        raise PrintTimedOut() from err
     except CannotConnect as err:
         raise PrinterUnavailable() from err
     except UnsupportedOption as err:
