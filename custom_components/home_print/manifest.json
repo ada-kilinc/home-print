@@ -1,0 +1,15 @@
+{
+  "domain": "home_print",
+  "name": "Home Print",
+  "after_dependencies": ["zeroconf"],
+  "codeowners": ["@adakilinc"],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/adakilinc/home-print",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/adakilinc/home-print/issues",
+  "requirements": ["pyipp==0.17.0"],
+  "version": "0.1.0",
+  "zeroconf": ["_ipp._tcp.local.", "_ipps._tcp.local."]
+}
