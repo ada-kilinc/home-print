@@ -56,5 +56,30 @@
         "monochrome": "Black and white"
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "processing": "Printing",
+          "stopped": "Stopped"
+        },
+        "state_attributes": {
+          "reasons": {
+            "name": "Reasons"
+          }
+        }
+      },
+      "last_job": {
+        "name": "Last job"
+      }
+    },
+    "binary_sensor": {
+      "problem": {
+        "name": "Problem"
+      }
+    }
   }
 }

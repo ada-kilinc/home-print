@@ -56,5 +56,25 @@
         "monochrome": "Siyah beyaz"
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Durum",
+        "state": {
+          "idle": "Boşta",
+          "processing": "Yazdırıyor",
+          "stopped": "Durdu"
+        }
+      },
+      "last_job": {
+        "name": "Son iş"
+      }
+    },
+    "binary_sensor": {
+      "problem": {
+        "name": "Sorun"
+      }
+    }
   }
 }

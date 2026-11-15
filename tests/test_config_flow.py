@@ -31,7 +31,6 @@ def no_setup():
     with patch(
         "custom_components.home_print.async_setup_entry",
         return_value=True,
-        create=True,
     ) as m:
         yield m
 

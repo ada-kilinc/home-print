@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 def normalize_uuid(value: str) -> str:
@@ -63,3 +64,14 @@ class JobResult:
 
     job_id: int
     state: str
+
+
+@dataclass(frozen=True)
+class LastJob:
+    """The most recent job submitted through Home Assistant."""
+
+    file_name: str
+    job_id: int | None
+    state: str
+    user: str | None
+    time: datetime
