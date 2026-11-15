@@ -1,191 +1,109 @@
-# Plan 1: Evdeki yazıcıyla gerçek test
+# Plan 1: Evden uzakta, kağıda bakmadan test
 
-Bu listeyi sen kendi Home Assistant'ında ve DeskJet'inde adım adım uygulayacaksın.
+Evde değilsin, çıkan kağıdı göremiyorsun. O yüzden bu test sadece yazıcının ve Home Assistant'ın ağ üzerinden söylediklerine bakıyor.
 
-- Her adımın altında boş bir **Sonuç** satırı var. Dolduracağın yer orası.
-- Bir adım takılırsa dur, hatayı Sonuç'a yaz, sonraki adıma geç.
-- Bitince dosyayı kaydet ve en alttaki commit komutunu çalıştır.
+- Bu gece: hiçbir şey basılmaz. Yazıcıya sadece "bu işi basabilir miydin?" diye sorulur (Validate-Job). Yazıcı iş oluşturmaz.
+- Sabah istersen: `--print` ile tek sayfalık tek bir iş gönderirsin. Sonucu yine yazıcının kendi raporundan okursun.
+- Her şeyi MacBook'ta Terminal'den yaparsın.
 
-Başlamadan önce elinde şunlar olsun:
+## 1. Kurulum (bir kere)
 
-- Tek sayfalık bir test PDF'i (`test.pdf`).
-- Telefonda Tailscale açık, HA'ya Tailscale üzerinden ulaşabiliyorsun.
-- HP Smart uygulaması (mürekkep karşılaştırması için).
-
-## Adım 0: Yazıcıyı sorgula, fixture'ı kaydet
-
-Bunu repo'nun olduğu bilgisayarda yap. Bilgisayar Tailscale ile eve bağlı olmalı.
-
-- Yazıcının Tailscale ağındaki IP'sini bul (subnet router ile erişiyorsan evdeki yerel IP'si).
-- Repo kökünde çalıştır:
+- Python 3.10 ya da üstü lazım. Kontrol: `python3 --version`.
+- Ayrı bir sanal ortam kur:
 
 ```bash
-python scripts/probe_printer.py <yazıcı-ip> --save
+python3 -m venv ~/homeprint-venv && ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp
 ```
 
-- Varsayılanlar: port `631`, yol `/ipp/print`, TLS kapalı. Yazıcın ipps kullanıyorsa `--tls` ekle. Farklı yol için `--path`, farklı port için `--port` ver.
-- Çıktıda şunlara bak: `document-format-supported`, `sides-supported`, `print-color-mode-supported`, `marker-levels`.
-- `document-format-supported` içinde `application/pdf` var mı? Not al (aşağıda "Bilinen konular"a bak).
-- Komut `tests/fixtures/printer_<model>.json` dosyasını yazar. Dosya adını çıktıdaki "Saved full response to ..." satırında görürsün.
-- Fixture'ı commit'le:
+- `scripts/remote_check.py` dosyasını Mac'e al. Repo'yu `git pull` ile güncelle ya da GitHub'dan sadece bu dosyayı indir.
+- Komutların hepsi bu dosyanın olduğu klasörde çalışıyor varsayıyor. Değilse dosyanın tam yolunu yaz.
 
-```bash
-git add tests/fixtures
-git commit -m "test: gerçek DeskJet fixture'ı"
-```
+## 2. Tailscale'i aç
 
-**Sonuç:**
+- Mac'te Tailscale açık ve bağlı olsun.
+- Yazıcının evdeki yerel IP'sine (örnek `192.168.68.x`) ulaşmak için evdeki subnet router route'unun açık ve onaylı olması lazım. Yoksa yazıcıya erişilemez, script 1. kontrolde kalır.
+- Hızlı deneme: `nc -vz <yazıcı-ip> 631`. "succeeded" görürsen tamam.
 
-## Adım 1: Entegrasyonu HA'ya kur
+## 3. Yazıcının IP'sini bul
 
-- `custom_components/home_print` klasörünü HA'daki `config/custom_components/` içine kopyala.
-- Sonunda şu yol olmalı: `config/custom_components/home_print/manifest.json`.
-- Ya da HACS'ta özel depo olarak ekleyebilirsin.
-- HA'yı yeniden başlat (Ayarlar → Sistem → Yeniden başlat).
-- Günlükte `home_print` ile ilgili hata var mı? (Ayarlar → Sistem → Günlükler)
+Şunlardan biri yeter:
 
-**Sonuç:**
+- **HA:** Ayarlar → Cihazlar ve Hizmetler → Home Print (ya da IPP) → yazıcı cihazı. Cihaz sayfasındaki "Cihazı ziyaret et" bağlantısı `http://<ip>:631/` şeklinde, IP orada.
+- **Deco uygulaması:** Cihazlar/İstemciler listesinde HP DeskJet'e dokun, IP adresi yazıyor.
+- **Router/Deco web sayfası:** bağlı cihazlar listesi.
 
-## Adım 2: Yazıcıyı ekle
+## 4. Uzun ömürlü token al
 
-- Ayarlar → Cihazlar ve Hizmetler'e git.
-- DeskJet "Keşfedildi" olarak görünüyor mu? Görünüyorsa **Ekle**'ye bas ve onayla.
-- Görünmüyorsa elle ekle: **Entegrasyon ekle** → Home Print.
-- Formda şunları doldur: Adres (yazıcı IP'si), Port (`631`), Yol (`/ipp/print`), "TLS kullan (ipps)" ve "Sertifikayı doğrula".
-- Elle eklediğini ve nedenini (keşfedilmedi) Sonuç'a yaz.
-- "Yazıcıya bağlanılamadı" hatası çıkarsa adresi ve yazıcının açık olduğunu kontrol et.
-- Sertifika hatası alırsan "Bilinen konular"a bak.
-
-**Sonuç:** (Keşfedildi mi, elle mi eklendi?)
-
-## Adım 3: Sensörleri kontrol et
-
-Home Print cihaz sayfasını aç. Şunlar olmalı:
-
-- **Durum** sensörü: Boşta / Yazdırıyor / Durdu. Şu an doğru mu?
-- **Mürekkep** sensörleri: her kartuş için bir yüzde. HP Smart'taki yüzdelerle karşılaştır.
-- **Sorun** sensörü: yazıcıda hata yokken kapalı olmalı.
-- **Son iş** sensörü: henüz iş yok, boş görünebilir.
-
-| Sensör | HA'daki değer | HP Smart'taki değer |
-| --- | --- | --- |
-| Siyah mürekkep | | |
-| Renkli mürekkep | | |
-| Durum | | |
-| Sorun | | |
-
-**Sonuç:**
-
-## Adım 4: print_file servisiyle yazdır
-
-Önce dosyayı HA'nın okuyabildiği yere koy.
-
-- `test.pdf`'i HA'daki medya klasörüne (`/media`) kopyala. Örnek yol: `/media/test.pdf`.
-- Medya klasörünü HA zaten okuyabiliyor, ek ayar gerekmez. Dosyayı başka bir klasöre koyarsan o klasör HA'nın okuyabildiği bir yer olmalı (örneğin `allowlist_external_dirs` altına eklenmiş). Değilse servis "Home Assistant'ın ... yolunu okuma izni yok" der (`path_not_allowed`).
-
-Şimdi servisi çalıştır: Geliştirici Araçları → Eylemler → **Dosya yazdır** (`home_print.print_file`). YAML moduna geçip yapıştırabilirsin. `config_entry_id` için aşağıdaki "entry_id nasıl bulunur" kısmına bak, ya da arayüzden yazıcıyı seçebilirsin.
-
-### 4a: Düz baskı
-
-```yaml
-action: home_print.print_file
-data:
-  config_entry_id: <entry_id>
-  path: /media/test.pdf
-```
-
-- Sayfa çıktı mı? Doğru mu çıktı?
-
-**Sonuç:**
-
-### 4b: Çift taraf
-
-```yaml
-action: home_print.print_file
-data:
-  config_entry_id: <entry_id>
-  path: /media/test.pdf
-  sides: two-sided-long-edge
-```
-
-- Yazıcı çift yüz desteklemiyorsa `option_not_supported` hatası gelir. Bunu not al.
-
-**Sonuç:**
-
-### 4c: Siyah-beyaz
-
-```yaml
-action: home_print.print_file
-data:
-  config_entry_id: <entry_id>
-  path: /media/test.pdf
-  color_mode: monochrome
-```
-
-- Çıktı siyah-beyaz mı?
-
-**Sonuç:**
-
-### 4d: İkisi birlikte
-
-```yaml
-action: home_print.print_file
-data:
-  config_entry_id: <entry_id>
-  path: /media/test.pdf
-  sides: two-sided-long-edge
-  color_mode: monochrome
-  copies: 1
-```
-
-**Sonuç:**
-
-Servisin diğer alanları: `copies` (1-99), `sides` (`one-sided`, `two-sided-long-edge`, `two-sided-short-edge`), `color_mode` (`auto`, `color`, `monochrome`), `page_ranges` (örnek `1-3,5`).
-
-## Adım 5: Telefondan, Tailscale üzerinden yükle
-
-### Hazırlık
-
-**entry_id nasıl bulunur:**
-
-- Ayarlar → Cihazlar ve Hizmetler → Home Print kartına tıkla.
-- Adres çubuğundaki URL'ye bak: `.../config/integrations/integration/home_print#config_entry/<entry_id>` ya da giriş sayfasının URL'sinde `<entry_id>` uzun bir harf-rakam dizisidir.
-- Bulamazsan Geliştirici Araçları → Eylemler'de `home_print.print_file` seçip YAML moduna geç. Yazıcıyı seçince `config_entry_id` değeri YAML'da görünür.
-
-**Uzun ömürlü token nasıl alınır:**
-
-- HA'da sol alttan profiline tıkla (Profil).
-- **Güvenlik** sekmesine git.
+- HA'da sol alttan profiline tıkla.
+- **Güvenlik** sekmesine geç.
 - En altta "Uzun ömürlü erişim token'ları" → **Token oluştur**.
-- Ad ver (mesela `home-print-test`), oluştur ve token'ı hemen kopyala. Bir daha gösterilmez.
-- Token'ı kimseyle paylaşma, commit'leme. Testten sonra silebilirsin.
-
-### Komut
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-  -F file=@test.pdf \
-  https://<ha-adresi>/api/home_print/upload/<entry_id>
-```
-
-- `<ha-adresi>`: Tailscale üzerinden HA'ya girdiğin adres (örnek `ha.tailnet-adi.ts.net:8123`; HTTP kullanıyorsan `http://` yaz).
-- Sayfa aralığı, kopya ve yüz gibi seçenekleri ek alan olarak gönderebilirsin. İzin verilen alanlar: `copies`, `sides`, `color_mode`, `page_ranges`.
+- Ad ver (mesela `home-print-test`), oluştur, token'ı hemen kopyala. Bir daha gösterilmiyor.
+- Yönetici hesabıyla oluştur. Yönetici olmayan token'la 5b (config entry) kontrolü ATLANDI olur.
+- Token'ı kimseyle paylaşma, commit'leme. JSON çıktısına yazılmıyor. Testten sonra silebilirsin.
+- Shell geçmişinde kalmasın diye önce bir değişkene oku:
 
 ```bash
-curl -H "Authorization: Bearer <token>" \
-  -F file=@test.pdf \
-  -F sides=two-sided-long-edge \
-  -F color_mode=monochrome \
-  -F copies=1 \
-  https://<ha-adresi>/api/home_print/upload/<entry_id>
+read -s HA_TOKEN   # token'ı yapıştır, Enter
 ```
 
-- Başarılı olursa şu gelir: `{"job_id": 123}`, ve sayfa çıkar.
-- Telefonda curl için Termux ya da iSH kullanabilirsin.
+## 5. Bu geceki komut (baskı YOK)
 
-### Hata cevapları
+```bash
+~/homeprint-venv/bin/python remote_check.py \
+  --printer <yazıcı-ip> \
+  --ha http://<ha-tailscale-ip>:8123 \
+  --token "$HA_TOKEN" \
+  --json ~/Desktop/homeprint-gece.json
+```
 
-Hata olursa cevap `{"error": "<anahtar>", "message": "<Türkçe mesaj>"}` biçiminde gelir. Mesaj dili `Accept-Language` başlığına göre seçilir; yoksa HA dili kullanılır.
+- `<ha-tailscale-ip>`: HA'nın Tailscale adresi (`100.x.y.z`) ya da `ha.tailnet-adi.ts.net`. HTTPS kullanıyorsan `https://` yaz.
+- Yazıcı ipps kullanıyorsa `--tls` ekle. Farklı port/yol için `--port`, `--path`.
+- Tüm seçenekler: `~/homeprint-venv/bin/python remote_check.py --help`.
+
+Ne kontrol ediliyor:
+
+1. Yazıcının 631 portu 5 sn içinde açılıyor mu.
+2. Get-Printer-Attributes: model, durum, formatlar, çift yüz, renk, sayfa aralığı, kopya, mürekkep seviyeleri.
+3. eSCL tarayıcı var mı (sadece bilgi, Plan 4 için; asla KALDI olmaz).
+4. Validate-Job, 8 durum: PDF düz, çift yüz, siyah-beyaz, renkli, sayfa 1-1, JPEG, PNG, 2 kopya. Hiçbiri basılmaz.
+5. HA: API çalışıyor mu, Home Print kaydı `loaded` mı, sensörler ve mürekkep yüzdeleri, yükleme ucu token'sız isteği 401 ile, dosyasız isteği 400 ile reddediyor mu. Bunlar da hiçbir şey bastırmaz.
+6. Gerçek baskı: `--print` yoksa ATLANDI.
+
+Çıktıyı okumak:
+
+- Her kontrol bir satır: `✅ GEÇTİ`, `❌ KALDI` ya da `⏭ ATLANDI`, yanında kısa açıklama.
+- En altta özet satırı var. Hiç `❌` yoksa çıkış kodu 0, varsa 1.
+- `⏭ ATLANDI (yazıcı bu formatı desteklemiyor — Plan 3)`: hata değil, not al yeter (aşağıda "Bilinen konular").
+- `yazıcı Validate-Job uygulamıyor`: bazı yazıcılarda bu işlem yok. Hata değil, sadece 4. adım bu yazıcıda bir şey söylemiyor demek.
+
+## 6. Sabahki komut (TEK sayfa basar)
+
+Aynı komut, sonuna `--print` ekle, JSON adını değiştir:
+
+```bash
+~/homeprint-venv/bin/python remote_check.py \
+  --printer <yazıcı-ip> \
+  --ha http://<ha-tailscale-ip>:8123 \
+  --token "$HA_TOKEN" \
+  --print \
+  --json ~/Desktop/homeprint-sabah.json
+```
+
+- Basmadan önce `⚠️ DİKKAT` satırı çıkar. Soru sormaz, hemen gönderir.
+- Tek sayfalık küçük bir PDF gider, iş adı "Home Print uzaktan test".
+- Script her 3 sn'de işin durumunu sorar, en fazla 180 sn bekler.
+- Sadece yazıcı `completed` derse GEÇTİ. `aborted`, `canceled` ya da süre dolarsa KALDI.
+- KALDI olursa komutu hemen tekrar çalıştırma. İş yine de basılmış olabilir, önce çıktıdaki `job-state-reasons`'a bak.
+
+## 7. Claude'a ne yapıştıracaksın
+
+- `homeprint-gece.json` (sabah da `homeprint-sabah.json`) dosyasının tamamını yapıştır.
+- İçinde bütün sonuçlar ve yazıcının ham özellikleri var. Seri numarası, `printer-location` ve `printer-uuid` `<gizlendi>` ile değiştiriliyor. Token hiç yazılmıyor.
+- Terminal çıktısını da yapıştırırsan iyi olur, şart değil.
+
+## Hata cevapları (yükleme ucu)
+
+Telefondan ya da panelden `POST /api/home_print/upload/<entry_id>` isteği atınca hata olursa cevap `{"error": "<anahtar>", "message": "<Türkçe mesaj>"}` biçiminde gelir. Mesaj dili `Accept-Language` başlığına göre seçilir; yoksa HA dili kullanılır.
 
 | HTTP | `error` | Anlamı |
 | --- | --- | --- |
@@ -203,35 +121,10 @@ Hata olursa cevap `{"error": "<anahtar>", "message": "<Türkçe mesaj>"}` biçim
 | 502 | `printer_unavailable` | Yazıcıya ulaşılamıyor (kapalı, uykuda ya da ağda değil). |
 | 502 | `print_failed` | Yazıcıda beklenmedik hata. HA günlüğüne bak. |
 
-**Sonuç:** (HTTP kodu, gelen JSON, sayfa çıktı mı?)
-
-## Adım 6: Yazıcı uykudayken yazdır
-
-- Yazıcıyı uyku moduna geçmesi için bir süre boşta bırak (ya da kapat).
-- Önce Durum sensörüne bak, ne gösteriyor?
-- Adım 4a'daki servisi tekrar çalıştır.
-- Sonra Adım 5'teki curl'ü tekrar çalıştır.
-- Ne oldu?
-  - İş gitti ve yazıcı uyandı mı? Kaç saniye sürdü?
-  - Yoksa açık bir hata mı döndü? Hangisi: `printer_unavailable` (502) mi, başka bir şey mi?
-- Hata mesajı anlaşılır mıydı?
-
-**Sonuç:**
+Script'in 5d ve 5e kontrolleri bu tablonun 401 ve 400 satırlarını kullanıyor.
 
 ## Bilinen konular
 
-- **PDF desteklemeyen yazıcılar:** `document-format-supported` listesinde `application/pdf` olmayan yazıcılarda PDF yazdırınca `format_not_supported` ile **422** döner. Bu, Plan 3'te (dönüştürme) çözülecek. Adım 0'daki çıktıda PDF yoksa bu hatayı bekle; hata sayılmaz, buraya not et.
-- **Elle eklenen yazıcıda kendinden imzalı sertifika:** Yazıcıyı elle ve ipps (TLS) ile eklediysen ve sertifika kendinden imzalıysa bağlantı kurulamaz. Çözüm: ekleme formunda **"Sertifikayı doğrula"** seçeneğini kapat. Varsayılan olarak açıktır.
-
-## Özet ve commit
-
-- Bulduğun sorunları buraya kısaca yaz:
-
-**Genel sonuç:**
-
-- Sonra commit'le:
-
-```bash
-git add docs/testing/plan-1-manual.md
-git commit -m "test: plan 1 gerçek cihaz sonuçları"
-```
+- **PDF desteklemeyen yazıcılar:** `document-format-supported` listesinde `application/pdf` olmayan yazıcılarda PDF yazdırınca `format_not_supported` ile **422** döner. Bu, Plan 3'te (dönüştürme) çözülecek. Script'in 2. kontrolünde "PDF: YOK" görürsen bunu bekle; hata sayılmaz.
+- **Elle eklenen yazıcıda kendinden imzalı sertifika:** Yazıcıyı elle ve ipps (TLS) ile eklediysen ve sertifika kendinden imzalıysa HA bağlantı kuramaz. Çözüm: ekleme formunda **"Sertifikayı doğrula"** seçeneğini kapat. Varsayılan olarak açıktır. (Script yazıcı sertifikasını zaten doğrulamıyor, o yüzden script'te bu sorun görünmez.)
+- **Yazıcı uykudaysa:** 1. ya da 2. kontrol zaman aşımına düşebilir. Birkaç dakika sonra tekrar dene; ilk istek çoğu zaman yazıcıyı uyandırır.
