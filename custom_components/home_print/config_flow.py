@@ -86,7 +86,7 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_PORT: user_input.get(CONF_PORT, DEFAULT_PORT),
                 CONF_BASE_PATH: user_input.get(CONF_BASE_PATH, DEFAULT_PATH),
                 CONF_SSL: user_input.get(CONF_SSL, False),
-                CONF_VERIFY_SSL: user_input.get(CONF_VERIFY_SSL, False),
+                CONF_VERIFY_SSL: user_input.get(CONF_VERIFY_SSL, True),
             }
             try:
                 info = await self._probe(data)
@@ -111,7 +111,7 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
                 vol.Optional(CONF_BASE_PATH, default=DEFAULT_PATH): str,
                 vol.Optional(CONF_SSL, default=False): bool,
-                vol.Optional(CONF_VERIFY_SSL, default=False): bool,
+                vol.Optional(CONF_VERIFY_SSL, default=True): bool,
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
@@ -129,6 +129,8 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_PORT: port,
             CONF_BASE_PATH: base_path,
             CONF_SSL: discovery_info.type.startswith("_ipps."),
+            # Deliberately off: printers advertising ipps almost always use
+            # self-signed certs; verification is a per-printer setting.
             CONF_VERIFY_SSL: False,
         }
         txt_uuid = normalize_uuid(props.get("UUID") or "")
@@ -143,6 +145,7 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             info = await self._probe(data)
         except Exception:
+            _LOGGER.debug("Probe of discovered printer %s failed", host, exc_info=True)
             return self.async_abort(reason="cannot_connect")
 
         await self.async_set_unique_id(
@@ -183,6 +186,11 @@ class HomePrintOptionsFlow(OptionsFlow):
         if user_input is not None:
             if user_input.get(CONF_DEFAULT_COLOR_MODE) == COLOR_AUTO:
                 user_input = {**user_input, CONF_DEFAULT_COLOR_MODE: None}
+            user_input = {
+                **user_input,
+                CONF_MAX_FILE_MB: int(user_input[CONF_MAX_FILE_MB]),
+                CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+            }
             return self.async_create_entry(data=user_input)
 
         opts = self.config_entry.options

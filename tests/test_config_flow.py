@@ -71,7 +71,7 @@ async def test_user_flow_creates_entry(hass, mock_client):
         CONF_PORT: DEFAULT_PORT,
         CONF_BASE_PATH: DEFAULT_PATH,
         CONF_SSL: False,
-        CONF_VERIFY_SSL: False,
+        CONF_VERIFY_SSL: True,
     }
     assert result["result"].unique_id == UUID
 
@@ -162,6 +162,7 @@ async def test_zeroconf_ipps_sets_tls(hass, mock_client):
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["data"][CONF_SSL] is True
     assert result["data"][CONF_PORT] == 443
+    assert result["data"][CONF_VERIFY_SSL] is False
 
 
 async def test_zeroconf_without_txt_uuid_uses_printer_uuid(hass, mock_client):
@@ -217,8 +218,8 @@ async def test_options_flow_saves_values(hass, mock_client):
         {
             CONF_DEFAULT_SIDES: "two-sided-long-edge",
             CONF_DEFAULT_COLOR_MODE: "monochrome",
-            CONF_MAX_FILE_MB: 50,
-            CONF_SCAN_INTERVAL: 120,
+            CONF_MAX_FILE_MB: 50.0,
+            CONF_SCAN_INTERVAL: 120.0,
             CONF_ADMIN_ONLY: True,
         },
     )
@@ -230,6 +231,8 @@ async def test_options_flow_saves_values(hass, mock_client):
         CONF_SCAN_INTERVAL: 120,
         CONF_ADMIN_ONLY: True,
     }
+    assert isinstance(entry.options[CONF_MAX_FILE_MB], int)
+    assert isinstance(entry.options[CONF_SCAN_INTERVAL], int)
 
 
 async def test_options_flow_auto_color_stores_none(hass, mock_client):
