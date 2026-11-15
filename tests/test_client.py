@@ -19,11 +19,14 @@ from custom_components.home_print.client import (
 from custom_components.home_print.const import PRINT_TIMEOUT
 from custom_components.home_print.models import (
     JobResult,
+    JpegLimits,
+    MediaCaps,
     PrintOptions,
     normalize_uuid,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "printer_generic.json"
+DESKJET_FIXTURE = Path(__file__).parent / "fixtures" / "printer_hp_deskjet_4670.json"
 
 
 def _client(execute: AsyncMock) -> HomePrintClient:
@@ -61,6 +64,38 @@ async def test_get_printer_parses_fixture():
     assert levels["Cyan ink"] == 55
     assert info.markers[0].kind == "ink-cartridge"
     assert info.markers[0].color == "#000000"
+
+
+def test_parse_deskjet_4670_fixture():
+    info = parse_printer(json.loads(DESKJET_FIXTURE.read_text()))
+    assert info.make_model == "HP DeskJet 4670 series"
+    caps = info.capabilities
+    for fmt in ("image/pwg-raster", "image/urf", "image/jpeg"):
+        assert fmt in caps.document_formats
+    assert "application/pdf" not in caps.document_formats
+    assert caps.raster is not None
+    assert {"sgray_8", "srgb_8"} <= caps.raster.pwg_types
+    assert caps.raster.pwg_resolutions == (300,)
+    assert caps.raster.pwg_sheet_back == "rotated"
+    assert {"DM3", "W8-16", "SRGB24"} <= caps.raster.urf
+    assert caps.media == MediaCaps(
+        "iso_a4_210x297mm", 21000, 29700, (296, 296, 296, 296)
+    )
+    assert caps.jpeg == JpegLimits(8192, 8192, 12288)
+    assert [m.level for m in info.markers] == [20, 40]
+
+
+def test_parse_generic_fixture_still_works():
+    info = parse_printer(json.loads(FIXTURE.read_text()))
+    assert info.make_model == "Generic IPPE-4000 series"
+    assert "application/pdf" in info.capabilities.document_formats
+    assert info.capabilities.copies_max == 99
+
+
+def test_pwg_resolutions_accepts_list_of_lists():
+    data = json.loads(DESKJET_FIXTURE.read_text())
+    data["pwg-raster-document-resolution-supported"] = [[300, 300, 3], [600, 600, 3]]
+    assert parse_printer(data).capabilities.raster.pwg_resolutions == (300, 600)
 
 
 def test_marker_unknown_level_is_none():

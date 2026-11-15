@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check that pyipp, pypdfium2 and Pillow have prebuilt musl (Alpine) wheels,
+# Check that pyipp, pypdfium2, Pillow and numpy have prebuilt musl (Alpine) wheels,
 # which is what Home Assistant OS / the HA container images use.
 #
 # Preferred: try a real install inside python:<ver>-alpine via Docker.
@@ -10,7 +10,8 @@
 set -u
 
 PYVER="${1:-3.13}"
-PKGS=(pyipp pypdfium2 Pillow)
+# Keep in sync with manifest.json requirements.
+PKGS=(pyipp==0.17.0 pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2)
 status=0
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -34,7 +35,7 @@ for arch in x86_64 aarch64; do
     if python3 -m pip download --quiet --no-deps --only-binary=:all: \
         --platform "musllinux_1_2_${arch}" --python-version "$PYVER" \
         -d "$tmp/$arch" "$pkg" >"$tmp/log" 2>&1; then
-      echo "OK   $arch $pkg ($(ls "$tmp/$arch" | grep -i "^${pkg//-/_}" | head -1))"
+      echo "OK   $arch $pkg ($(ls "$tmp/$arch" | grep -i "^${pkg%%==*}" | head -1))"
     else
       echo "FAIL $arch $pkg"; status=1
     fi

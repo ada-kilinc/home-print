@@ -25,6 +25,35 @@ class Marker:
 
 
 @dataclass(frozen=True)
+class RasterCaps:
+    """Raster formats the printer accepts (PWG raster and Apple URF)."""
+
+    pwg_types: frozenset[str]
+    pwg_resolutions: tuple[int, ...]  # dpi, only entries with x == y
+    pwg_sheet_back: str | None
+    urf: frozenset[str]  # raw urf-supported keywords, e.g. "W8-16", "RS300"
+
+
+@dataclass(frozen=True)
+class MediaCaps:
+    """Default media: name, size and margins, all in 1/100 mm."""
+
+    default_name: str
+    width_hmm: int
+    height_hmm: int
+    margins_hmm: tuple[int, int, int, int]  # top, right, bottom, left
+
+
+@dataclass(frozen=True)
+class JpegLimits:
+    """Upper limits for JPEG documents; None when not reported."""
+
+    max_x: int | None
+    max_y: int | None
+    max_kb: int | None
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """What the printer says it can do."""
 
@@ -33,6 +62,9 @@ class Capabilities:
     color_modes: frozenset[str]
     copies_max: int
     page_ranges: bool
+    raster: RasterCaps | None = None
+    media: MediaCaps | None = None
+    jpeg: JpegLimits | None = None
 
 
 @dataclass(frozen=True)

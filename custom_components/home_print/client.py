@@ -22,9 +22,12 @@ from .const import PRINT_TIMEOUT
 from .models import (
     Capabilities,
     JobResult,
+    JpegLimits,
     Marker,
+    MediaCaps,
     PrinterInfo,
     PrintOptions,
+    RasterCaps,
     normalize_uuid,
 )
 
@@ -50,6 +53,15 @@ REQUESTED_ATTRIBUTES = [
     "print-color-mode-supported",
     "copies-supported",
     "page-ranges-supported",
+    "pwg-raster-document-type-supported",
+    "pwg-raster-document-resolution-supported",
+    "pwg-raster-document-sheet-back",
+    "urf-supported",
+    "media-default",
+    "media-col-default",
+    "jpeg-x-dimension-supported",
+    "jpeg-y-dimension-supported",
+    "jpeg-k-octets-supported",
 ]
 
 _PRINTER_STATES = {3: "idle", 4: "processing", 5: "stopped"}
@@ -144,6 +156,83 @@ def _marker_level(value: Any) -> int | None:
     return None
 
 
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _resolutions(value: Any) -> tuple[int, ...]:
+    """Square dpi values from a flat ``[x, y, units]`` or a list of those."""
+    items = _as_list(value)
+    if items and all(isinstance(i, int) for i in items):
+        items = [items]
+    result: list[int] = []
+    for item in items:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) >= 2
+            and isinstance(item[0], int)
+            and item[0] == item[1]
+            and item[0] not in result
+        ):
+            result.append(item[0])
+    return tuple(result)
+
+
+def _raster_caps(data: dict[str, Any]) -> RasterCaps | None:
+    keys = (
+        "pwg-raster-document-type-supported",
+        "pwg-raster-document-resolution-supported",
+        "urf-supported",
+    )
+    if not any(k in data for k in keys):
+        return None
+    sheet_back = data.get("pwg-raster-document-sheet-back")
+    return RasterCaps(
+        pwg_types=frozenset(_as_list(data.get(keys[0]))),
+        pwg_resolutions=_resolutions(data.get(keys[1])),
+        pwg_sheet_back=sheet_back if isinstance(sheet_back, str) else None,
+        urf=frozenset(_as_list(data.get(keys[2]))),
+    )
+
+
+def _media_caps(data: dict[str, Any]) -> MediaCaps | None:
+    col = data.get("media-col-default")
+    if not isinstance(col, dict) or not isinstance(col.get("media-size"), dict):
+        return None
+    size = col["media-size"]
+    width, height = (
+        _int_or_none(size.get("x-dimension")),
+        _int_or_none(size.get("y-dimension")),
+    )
+    if width is None or height is None:
+        return None
+    margins = tuple(
+        _int_or_none(col.get(f"media-{side}-margin")) or 0
+        for side in ("top", "right", "bottom", "left")
+    )
+    return MediaCaps(
+        default_name=str(data.get("media-default") or col.get("media-size-name") or ""),
+        width_hmm=width,
+        height_hmm=height,
+        margins_hmm=margins,  # type: ignore[arg-type]
+    )
+
+
+def _jpeg_limits(data: dict[str, Any]) -> JpegLimits | None:
+    keys = (
+        "jpeg-x-dimension-supported",
+        "jpeg-y-dimension-supported",
+        "jpeg-k-octets-supported",
+    )
+    if not any(k in data for k in keys):
+        return None
+    maxima = []
+    for key in keys:
+        values = [v for v in _as_list(data.get(key)) if _int_or_none(v) is not None]
+        maxima.append(max(values) if values else None)
+    return JpegLimits(*maxima)
+
+
 def parse_printer(data: dict[str, Any]) -> PrinterInfo:
     """Build PrinterInfo from one pyipp-parsed ``printers`` entry."""
     names = _as_list(data.get("marker-names"))
@@ -172,6 +261,9 @@ def parse_printer(data: dict[str, Any]) -> PrinterInfo:
         color_modes=frozenset(_as_list(data.get("print-color-mode-supported"))),
         copies_max=int(copies[-1]) if copies else 1,
         page_ranges=bool(data.get("page-ranges-supported", False)),
+        raster=_raster_caps(data),
+        media=_media_caps(data),
+        jpeg=_jpeg_limits(data),
     )
     return PrinterInfo(
         uuid=normalize_uuid(str(data.get("printer-uuid", ""))),
