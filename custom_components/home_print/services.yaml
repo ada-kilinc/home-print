@@ -1,0 +1,39 @@
+print_file:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: home_print
+    path:
+      required: true
+      example: /media/documents/report.pdf
+      selector:
+        text:
+    copies:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 99
+          mode: box
+    sides:
+      selector:
+        select:
+          translation_key: sides
+          options:
+            - one-sided
+            - two-sided-long-edge
+            - two-sided-short-edge
+    color_mode:
+      selector:
+        select:
+          translation_key: color_mode
+          options:
+            - auto
+            - color
+            - monochrome
+    page_ranges:
+      example: "1-3,5"
+      selector:
+        text:

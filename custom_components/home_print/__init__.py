@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .client import HomePrintClient
 from .const import (
@@ -16,10 +18,15 @@ from .const import (
     CONF_PORT,
     CONF_SSL,
     CONF_VERIFY_SSL,
+    DOMAIN,
 )
 from .coordinator import HomePrintCoordinator
+from .http import HomePrintUploadView
+from .services import async_setup_services
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 @dataclass
@@ -31,6 +38,13 @@ class HomePrintData:
 
 
 type HomePrintConfigEntry = ConfigEntry[HomePrintData]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the service and the upload view once for all entries."""
+    async_setup_services(hass)
+    hass.http.register_view(HomePrintUploadView())
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> bool:

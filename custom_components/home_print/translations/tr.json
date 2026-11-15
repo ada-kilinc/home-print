@@ -76,5 +76,84 @@
         "name": "Sorun"
       }
     }
+  },
+  "services": {
+    "print_file": {
+      "name": "Dosya yazdır",
+      "description": "Home Assistant'ın okuyabildiği bir klasördeki PDF, JPEG ya da PNG dosyasını yazdırır.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Yazıcı",
+          "description": "Hangi yazıcıdan çıkacağı."
+        },
+        "path": {
+          "name": "Dosya yolu",
+          "description": "Dosyanın tam yolu. allowlist_external_dirs içindeki bir klasörde olmalı."
+        },
+        "copies": {
+          "name": "Kopya",
+          "description": "Kaç kopya basılacağı."
+        },
+        "sides": {
+          "name": "Baskı yüzü",
+          "description": "Tek ya da çift yüz. Boş bırakırsan varsayılan ayar kullanılır."
+        },
+        "color_mode": {
+          "name": "Renk modu",
+          "description": "Renkli ya da siyah beyaz. Boş bırakırsan varsayılan ayar kullanılır."
+        },
+        "page_ranges": {
+          "name": "Sayfalar",
+          "description": "Basılacak sayfalar, mesela 1-3,5. Boş bırakırsan hepsi basılır."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "file_too_large": {
+      "message": "Dosya çok büyük. En fazla {max} MB gönderebilirsin."
+    },
+    "unsupported_file_type": {
+      "message": "Bu dosya türü yazdırılamıyor. PDF, JPEG ya da PNG gönder."
+    },
+    "format_not_supported": {
+      "message": "Yazıcı {format} dosyalarını kabul etmiyor."
+    },
+    "option_not_supported": {
+      "message": "Yazıcı {option} ayarını desteklemiyor."
+    },
+    "printer_rejected": {
+      "message": "Yazıcı işi kabul etmedi ({status})."
+    },
+    "printer_unavailable": {
+      "message": "Yazıcıya ulaşılamıyor. Açık ve ağa bağlı mı, bir bak."
+    },
+    "print_failed": {
+      "message": "Yazıcıda beklenmedik bir hata çıktı, yazdırılamadı."
+    },
+    "invalid_option": {
+      "message": "{option} değeri geçersiz."
+    },
+    "invalid_request": {
+      "message": "Yükleme isteği geçersiz."
+    },
+    "missing_file": {
+      "message": "Dosya gelmedi."
+    },
+    "admin_required": {
+      "message": "Bu yazıcıdan sadece yöneticiler yazdırabilir."
+    },
+    "entry_not_found": {
+      "message": "Bu yazıcı bulunamadı."
+    },
+    "entry_not_loaded": {
+      "message": "Bu yazıcı henüz hazır değil."
+    },
+    "path_not_allowed": {
+      "message": "Home Assistant'ın {path} yolunu okuma izni yok."
+    },
+    "file_not_found": {
+      "message": "Dosya bulunamadı: {path}"
+    }
   }
 }
