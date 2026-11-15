@@ -1,0 +1,14 @@
+# Home Print — Yol haritası
+
+Spec: `docs/superpowers/specs/2026-11-15-home-print-design.md`
+
+Spec birbirinden bağımsız test edilebilen birkaç alt sistemi kapsıyor. Bu yüzden iş, her biri kendi başına çalışan yazılım üreten ayrı planlara bölündü. Her plan bir öncekinin bittiğini varsayar. Bir sonraki plan, öncekinin gerçekte nasıl çıktığı görüldükten sonra yazılır.
+
+| # | Plan | Sonunda elde olan | Spec bölümleri |
+|---|---|---|---|
+| 1 | Çekirdek entegrasyon: yazıcı ekleme, sensörler, doğrudan IPP yazdırma | Ayarlar'dan yazıcı eklenir, durum ve mürekkep görünür, `home_print.print_file` ve yükleme ucu PDF/JPEG yazdırır | 5, 7.1, 7.2, 8, 9, 12 |
+| 2 | Kart: Yazdır sekmesi | Ana sayfa kartından telefonla yazdırma | 7.3 |
+| 3 | Dönüştürme | Raster yazıcılar, sayfa aralığı, fotoğrafı sayfaya sığdırma | 13 |
+| 4 | Tarama: eSCL, arşiv, kartın Tara sekmesi | Tarama, ön izleme, indirme, "Son taramalar" listesi, `home_print.scan` | 7.5 |
+| 5 | Home Print Server: CUPS + SANE köprüsü + OCR | Eski/USB cihazlar ve aranabilir PDF; HA eklentisi ve bağımsız Docker imajı | 7.4, 7.5 (SANE/OCR) |
+| 6 | Yayın | İsim çakışma kontrolü, README (tr+en, tek tık düğmeleri), CI (hassfest, HACS, eklenti derlemesi), ilk sürüm | 10, 11, 12 |
