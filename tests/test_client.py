@@ -1,0 +1,232 @@
+"""Tests for the IPP client."""
+
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pyipp import IPPConnectionError, IPPError
+from pyipp.enums import IppOperation
+
+from custom_components.home_print.client import (
+    CannotConnect,
+    HomePrintClient,
+    PrinterRejected,
+    UnsupportedOption,
+    parse_printer,
+)
+from custom_components.home_print.models import (
+    JobResult,
+    PrintOptions,
+    normalize_uuid,
+)
+
+FIXTURE = Path(__file__).parent / "fixtures" / "printer_generic.json"
+
+
+def _client(execute: AsyncMock) -> HomePrintClient:
+    client = HomePrintClient(
+        host="printer.local",
+        port=631,
+        base_path="/ipp/print",
+        tls=False,
+        verify_ssl=False,
+        session=MagicMock(),
+    )
+    client._ipp.execute = execute
+    return client
+
+
+def _printer_response() -> dict:
+    return {"status-code": 0, "printers": [json.loads(FIXTURE.read_text())]}
+
+
+async def test_get_printer_parses_fixture():
+    client = _client(AsyncMock(return_value=_printer_response()))
+    info = await client.get_printer()
+    assert info.make_model == "Generic IPPE-4000 series"
+    assert info.uuid == "0a1b2c3d-4e5f-6789-abcd-0123456789ef"
+    assert info.serial == "ABC123456789"
+    assert info.state == "idle"
+    assert info.state_reasons == ("none",)
+    assert "application/pdf" in info.capabilities.document_formats
+    assert info.capabilities.copies_max == 99
+    assert info.capabilities.page_ranges is True
+    assert "monochrome" in info.capabilities.color_modes
+    levels = {m.name: m.level for m in info.markers}
+    assert levels["Black ink"] == 80
+    assert levels["Cyan ink"] == 55
+    assert info.markers[0].kind == "ink-cartridge"
+    assert info.markers[0].color == "#000000"
+
+
+def test_marker_unknown_level_is_none():
+    info = parse_printer(json.loads(FIXTURE.read_text()))
+    yellow = next(m for m in info.markers if m.name == "Yellow ink")
+    assert yellow.level is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"), [(3, "idle"), (4, "processing"), (5, "stopped")]
+)
+def test_state_mapping(raw, state):
+    data = json.loads(FIXTURE.read_text()) | {"printer-state": raw}
+    assert parse_printer(data).state == state
+
+
+def test_normalize_uuid():
+    assert normalize_uuid("urn:uuid:ABC-DEF") == "abc-def"
+    assert normalize_uuid("  URN:UUID:ABC-DEF ") == "abc-def"
+    assert normalize_uuid("ABC-DEF") == "abc-def"
+
+
+async def test_print_job_sends_attributes():
+    execute = AsyncMock(
+        side_effect=[
+            _printer_response(),
+            {"status-code": 0, "jobs": [{"job-id": 42, "job-state": 3}]},
+        ]
+    )
+    client = _client(execute)
+    result = await client.print_job(
+        b"%PDF-1.4",
+        document_format="application/pdf",
+        job_name="Test",
+        user_name="ada",
+        options=PrintOptions(
+            copies=2,
+            sides="two-sided-long-edge",
+            color_mode="color",
+            page_ranges="1-3,5",
+        ),
+    )
+    assert result == JobResult(job_id=42, state="pending")
+    operation, message = execute.await_args_list[-1].args
+    assert operation == IppOperation.PRINT_JOB
+    op_attrs = message["operation-attributes-tag"]
+    assert op_attrs["document-format"] == "application/pdf"
+    assert op_attrs["job-name"] == "Test"
+    assert op_attrs["requesting-user-name"] == "ada"
+    job_attrs = message["job-attributes-tag"]
+    assert job_attrs["copies"] == 2
+    assert job_attrs["sides"] == "two-sided-long-edge"
+    assert job_attrs["print-color-mode"] == "color"
+    assert [(str(r), r.encode()) for r in job_attrs["page-ranges"]] == [
+        ("1-3", b"\x00\x00\x00\x01\x00\x00\x00\x03"),
+        ("5", b"\x00\x00\x00\x05\x00\x00\x00\x05"),
+    ]
+    assert message["data"] == b"%PDF-1.4"
+
+
+async def test_print_job_omits_unset_color_mode_and_page_ranges():
+    execute = AsyncMock(
+        side_effect=[
+            _printer_response(),
+            {"status-code": 0, "jobs": [{"job-id": 7, "job-state": 5}]},
+        ]
+    )
+    client = _client(execute)
+    result = await client.print_job(
+        b"x",
+        document_format="application/pdf",
+        job_name="j",
+        user_name="u",
+        options=PrintOptions(),
+    )
+    assert result == JobResult(job_id=7, state="processing")
+    job_attrs = execute.await_args_list[-1].args[1]["job-attributes-tag"]
+    assert "print-color-mode" not in job_attrs
+    assert "page-ranges" not in job_attrs
+
+
+@pytest.mark.parametrize(
+    ("options", "name"),
+    [
+        (PrintOptions(page_ranges="1-2"), "page_ranges"),
+        (PrintOptions(sides="bogus"), "sides"),
+        (PrintOptions(color_mode="sepia"), "color_mode"),
+        (PrintOptions(copies=100), "copies"),
+    ],
+)
+async def test_print_job_skips_unsupported_option(options, name):
+    response = _printer_response()
+    if name == "page_ranges":
+        response["printers"][0]["page-ranges-supported"] = False
+    execute = AsyncMock(return_value=response)
+    client = _client(execute)
+    with pytest.raises(UnsupportedOption) as exc:
+        await client.print_job(
+            b"x",
+            document_format="application/pdf",
+            job_name="j",
+            user_name="u",
+            options=options,
+        )
+    assert exc.value.name == name
+    assert execute.await_count == 1  # only Get-Printer-Attributes, nothing sent
+
+
+async def test_connection_error_raises_cannot_connect():
+    client = _client(AsyncMock(side_effect=IPPConnectionError("boom")))
+    with pytest.raises(CannotConnect):
+        await client.get_printer()
+
+
+async def test_ipp_error_status_raises_rejected():
+    execute = AsyncMock(
+        side_effect=[
+            _printer_response(),
+            IPPError("Unexpected printer status code", {"status-code": 0x040A}),
+        ]
+    )
+    client = _client(execute)
+    with pytest.raises(PrinterRejected) as exc:
+        await client.print_job(
+            b"x",
+            document_format="application/pdf",
+            job_name="j",
+            user_name="u",
+            options=PrintOptions(),
+        )
+    assert exc.value.status == "client-error-document-format-not-supported"
+
+
+def test_print_job_message_serializes_all_attributes():
+    """Real pyipp serializer must keep sides/color-mode/page-ranges."""
+    from pyipp.serializer import encode_dict
+
+    from custom_components.home_print.client import _parse_page_ranges
+
+    raw = encode_dict(
+        {
+            "version": (2, 0),
+            "operation": IppOperation.PRINT_JOB,
+            "request-id": 1,
+            "operation-attributes-tag": {"job-name": "j"},
+            "job-attributes-tag": {
+                "copies": 1,
+                "sides": "one-sided",
+                "print-color-mode": "color",
+                "page-ranges": _parse_page_ranges("1-3,5"),
+            },
+            "data": b"DATA",
+        }
+    )
+    assert b"sides" in raw
+    assert b"print-color-mode" in raw
+    assert b"page-ranges" in raw
+    assert b"\x00\x00\x00\x01\x00\x00\x00\x03" in raw
+    assert raw.endswith(b"\x03DATA")
+
+
+async def test_mock_client_fixture(mock_client):
+    info = await mock_client.get_printer()
+    assert info.state == "idle"
+    job = await mock_client.print_job(
+        b"x",
+        document_format="application/pdf",
+        job_name="j",
+        user_name="u",
+        options=PrintOptions(),
+    )
+    assert job == JobResult(job_id=42, state="pending")

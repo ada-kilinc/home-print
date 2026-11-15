@@ -1,0 +1,26 @@
+{
+  "printer-uuid": "urn:uuid:0A1B2C3D-4E5F-6789-ABCD-0123456789EF",
+  "printer-name": "Generic IPP Everywhere Inkjet",
+  "printer-make-and-model": "Generic IPPE-4000 series",
+  "printer-device-id": "MFG:Generic;MDL:IPPE-4000 series;CMD:PCL,URF,PWG;SN:ABC123456789;CLS:PRINTER;",
+  "printer-state": 3,
+  "printer-state-reasons": "none",
+  "printer-uri-supported": ["ipp://printer.local:631/ipp/print"],
+  "marker-names": ["Black ink", "Cyan ink", "Magenta ink", "Yellow ink", "Maintenance box"],
+  "marker-colors": ["#000000", "#00FFFF", "#FF00FF", "#FFFF00", "none"],
+  "marker-levels": [80, 55, 30, -3, 90],
+  "marker-types": ["ink-cartridge", "ink-cartridge", "ink-cartridge", "ink-cartridge", "waste-ink"],
+  "marker-low-levels": [10, 10, 10, 10, 0],
+  "marker-high-levels": [100, 100, 100, 100, 100],
+  "document-format-supported": [
+    "application/octet-stream",
+    "application/pdf",
+    "image/jpeg",
+    "image/urf",
+    "image/pwg-raster"
+  ],
+  "sides-supported": ["one-sided", "two-sided-long-edge", "two-sided-short-edge"],
+  "print-color-mode-supported": ["auto", "color", "monochrome"],
+  "copies-supported": [1, 99],
+  "page-ranges-supported": true
+}
