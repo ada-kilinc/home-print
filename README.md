@@ -38,6 +38,12 @@ show_ink: true
 
 Per printer (**Configure**): default duplex and colour mode, maximum file size (default 25 MB), polling interval, and "only admins can print".
 
+## Contributing
+
+This started as a small weekend project to print at home from a phone, and it would be great to see it grow. If you have a printer that behaves differently, an idea for a feature, or a fix (big or tiny), please open an issue or send a pull request. You don't need to ask first. Typos, translations and "this didn't work on my printer" reports are just as welcome as code.
+
+If you're adding a feature, a short note in the PR about what you tested on (printer model, HA version) helps a lot. The test commands are below.
+
 ## Development
 
 ```bash
@@ -64,3 +70,7 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 **Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
 
 Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor. Tarama özelliği sonraki sürümde gelecek.
+
+### Katkı
+
+Bu proje evdeki yazıcıya telefondan yazdırmak için küçük bir hafta sonu işi olarak başladı. Büyüdüğünü görmek beni çok mutlu eder. Yazıcın farklı davranıyorsa, aklında bir özellik varsa ya da büyük küçük bir düzeltme yaptıysan issue açmaktan ya da pull request göndermekten çekinme. Önceden sormana gerek yok. Yazım hatası, çeviri ya da "benim yazıcımda çalışmadı" bildirimi de kod kadar değerli.
