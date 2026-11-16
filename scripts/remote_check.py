@@ -2,16 +2,22 @@
 """Home Print uzaktan kontrol: kağıda bakmadan yazıcıyı ve HA'yı test eder.
 
 Kullanım:
-    python3 remote_check.py --printer HOST [--port 631] [--path /ipp/print]
+    python3 scripts/remote_check.py --printer HOST [--port 631] [--path /ipp/print]
         [--tls] [--ha URL --token TOKEN] [--print] [--json OUT.json]
 
 Varsayılan olarak HİÇ baskı yapmaz. Validate-Job ile yazıcıya "bu işi
-basabilir miydin?" diye sorar; yazıcı iş oluşturmaz. Gerçek baskı sadece
-``--print`` ile, tek sayfalık tek bir iş olarak gönderilir.
+basabilir miydin?" diye sorar; yazıcı iş oluşturmaz. Örnek bir PDF'i
+bilgisayarda dönüştürüp sayfalarını sayar, yazıcıya göndermez. Gerçek baskı
+sadece ``--print`` ile: 2 iş, en fazla 2 kağıt (JPEG tek sayfa + çift yüzlü
+dönüştürülmüş PDF).
 
-Bağımlılıklar sadece ``pyipp==0.17.0`` ve ``aiohttp``. Home Assistant'ı ya da
-``custom_components.home_print``'i import etmez; gereken küçük parçalar
-``custom_components/home_print/client.py``'den kopyalandı.
+Bağımlılıklar: ``pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0
+numpy==2.3.2``. Repo içinden çalıştırılır (``scripts/`` ile
+``custom_components/`` yan yana): dönüştürme kodu (``models.py``,
+``ipp_parse.py``, ``convert/``) dosya yolundan, ``home_print_standalone`` adlı
+sahte bir paket olarak yüklenir. Home Assistant'ı ve integration'ın
+``__init__.py``'sini hiç çalıştırmaz. Dönüştürme yüklenemezse (dosyalar yok ya
+da paket eksik) ilgili kontroller ATLANDI olur, JPEG baskısı yine çalışır.
 """
 
 from __future__ import annotations
@@ -19,11 +25,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import importlib
+import importlib.machinery
+import importlib.util
+import io
 import json
 import re
 import socket
 import struct
 import sys
+import time
 import zlib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -59,10 +70,95 @@ PRINT_TIMEOUT = 120
 POLL_INTERVAL = 3
 POLL_LIMIT = 180
 HA_TIMEOUT = 10
+IDLE_WAIT = 60
 JOB_NAME = "Home Print uzaktan test"
+JOB_NAME_1 = "Home Print test 1/2 — JPEG"
+JOB_NAME_2 = "Home Print test 2/2 — PDF çift taraf"
 USER_NAME = "HomePrint"
 HIDDEN = "<gizlendi>"
 FORMAT_SKIP = "yazıcı bu formatı desteklemiyor — Plan 3"
+PDF_FMT = "application/pdf"
+JPEG_FMT = "image/jpeg"
+PWG_FMT = "image/pwg-raster"
+URF_FMT = "image/urf"
+LONG_EDGE = "two-sided-long-edge"
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PKG_DIR = REPO_ROOT / "custom_components" / "home_print"
+STANDALONE = "home_print_standalone"
+CONVERT_MISSING = "convert modülleri bulunamadı"
+PIP_HINT = (
+    "pip install pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2"
+)
+_NEEDED_FILES = (
+    "models.py",
+    "ipp_parse.py",
+    "convert/__init__.py",
+    "convert/errors.py",
+    "convert/render.py",
+    "convert/pwg.py",
+    "convert/urf.py",
+    "convert/pipeline.py",
+)
+
+
+# --- conversion code, loaded from the repo without Home Assistant -------------
+
+
+@dataclass
+class Convert:
+    """The integration's pure modules, loaded as ``home_print_standalone``."""
+
+    models: Any
+    ipp_parse: Any
+    pipeline: Any
+
+    def capabilities(self, attrs: dict[str, Any]) -> Any:
+        """Same parsing as the integration (``ipp_parse.parse_printer``)."""
+        return self.ipp_parse.parse_printer(attrs).capabilities
+
+    def options(self, **kwargs: Any) -> Any:
+        return self.models.PrintOptions(**kwargs)
+
+
+def _purge_standalone() -> None:
+    for name in list(sys.modules):
+        if name == STANDALONE or name.startswith(STANDALONE + "."):
+            del sys.modules[name]
+
+
+def load_convert(pkg_dir: Path | None = None) -> tuple[Convert | None, str]:
+    """Load models/ipp_parse/convert from ``pkg_dir`` as a synthetic package.
+
+    The package module is created by hand (no loader), so
+    ``custom_components/home_print/__init__.py`` — which imports Home
+    Assistant — never runs, while ``from ..models import X`` inside
+    ``convert/`` still resolves. Returns ``(None, reason)`` on any problem.
+    """
+    pkg_dir = Path(PKG_DIR if pkg_dir is None else pkg_dir)
+    missing = [name for name in _NEEDED_FILES if not (pkg_dir / name).is_file()]
+    if missing:
+        return None, (
+            f"{CONVERT_MISSING} ({pkg_dir}); betiği repo içinden çalıştır "
+            "(scripts/ ile custom_components/ yan yana)"
+        )
+    _purge_standalone()
+    spec = importlib.machinery.ModuleSpec(STANDALONE, None, is_package=True)
+    spec.submodule_search_locations = [str(pkg_dir)]
+    sys.modules[STANDALONE] = importlib.util.module_from_spec(spec)
+    try:
+        models = importlib.import_module(f"{STANDALONE}.models")
+        ipp_parse = importlib.import_module(f"{STANDALONE}.ipp_parse")
+        pipeline = importlib.import_module(f"{STANDALONE}.convert.pipeline")
+    except ModuleNotFoundError as err:
+        _purge_standalone()
+        if (err.name or "").startswith(STANDALONE):
+            return None, f"{CONVERT_MISSING} ({err.name})"
+        return None, f"{err.name} yüklü değil; şunu çalıştır: {PIP_HINT}"
+    except Exception as err:  # noqa: BLE001 - report, never crash
+        _purge_standalone()
+        return None, f"convert modülleri yüklenemedi: {type(err).__name__}: {err}"
+    return Convert(models, ipp_parse, pipeline), ""
 
 
 # --- test documents (no Pillow needed) ---------------------------------------
@@ -130,6 +226,201 @@ JPEG = base64.b64decode(
 PDF = _make_pdf()
 PNG = _make_png()
 DOCUMENTS = {"application/pdf": PDF, "image/jpeg": JPEG, "image/png": PNG}
+
+
+# --- sample pages for the real prints (Pillow) ----------------------------------
+
+_FONT_FILES = (
+    "Arial Unicode.ttf",
+    "Arial.ttf",
+    "Helvetica.ttc",
+    "DejaVuSans.ttf",
+    "LiberationSans-Regular.ttf",
+)
+_A4_150DPI = (1240, 1754)
+_MISSING_CHAR = "\U0010fffd"
+
+
+def _font(size: int) -> Any:
+    from PIL import ImageFont
+
+    for name in _FONT_FILES:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # pragma: no cover - Pillow without FreeType
+        return ImageFont.load_default()
+
+
+def _glyph(font: Any, char: str) -> tuple[Any, bytes]:
+    from PIL import Image, ImageDraw
+
+    box = font.getbbox(char)
+    image = Image.new("L", (max(box[2], 1) + 2, max(box[3], 1) + 2), 0)
+    ImageDraw.Draw(image).text((0, 0), char, font=font, fill=255)
+    return image.size, image.tobytes()
+
+
+def _shown(font: Any, text: str, fallback: str) -> str:
+    """``text`` if the font has every glyph, else the ASCII ``fallback``."""
+    try:
+        missing = _glyph(font, _MISSING_CHAR)
+        if any(_glyph(font, c) == missing for c in set(text) - {" "}):
+            return fallback
+    except Exception:  # noqa: BLE001 - bitmap fonts raise on non-latin-1
+        return fallback
+    return text
+
+
+def sample_page(lines: list[tuple[str, str, int]]) -> Any:
+    """A4 page at 150 dpi: ``↑ ÜST`` on top, then big centered lines.
+
+    ``lines`` is (text, ASCII fallback, font size) per line.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = _A4_150DPI
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((40, 40, width - 41, height - 41), outline="black", width=6)
+    rows = [("↑ ÜST", "^ UST", 130), *lines]
+    y = 120
+    for index, (text, fallback, size) in enumerate(rows):
+        font = _font(size)
+        shown = _shown(font, text, fallback)
+        box = draw.textbbox((0, 0), shown, font=font)
+        draw.text(((width - (box[2] - box[0])) // 2, y), shown, font=font, fill="black")
+        y += (box[3] - box[1]) + (420 if index == 0 else 80)
+    return image
+
+
+def sample_jpeg() -> bytes:
+    """The page for print 1/2; the tiny white JPEG if Pillow is missing."""
+    try:
+        page = sample_page(
+            [("Home Print test", "Home Print test", 120), ("1/2", "1/2", 260)]
+        )
+    except ImportError:
+        return JPEG
+    out = io.BytesIO()
+    page.save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+
+def sample_pdf(pages: list[list[tuple[str, str, int]]]) -> bytes:
+    """A PDF with one :func:`sample_page` per entry (needs Pillow)."""
+    images = [sample_page(lines) for lines in pages]
+    out = io.BytesIO()
+    images[0].save(
+        out, "PDF", resolution=150.0, save_all=True, append_images=images[1:]
+    )
+    return out.getvalue()
+
+
+def duplex_test_pdf() -> bytes:
+    """The two pages of print 2/2: front and back of one sheet."""
+    return sample_pdf(
+        [
+            [
+                ("Home Print test", "Home Print test", 120),
+                ("2/2 — ön yüz", "2/2 - ON YUZ", 150),
+            ],
+            [
+                ("Home Print test", "Home Print test", 120),
+                ("2/2 — arka yüz", "2/2 - ARKA YUZ", 150),
+            ],
+        ]
+    )
+
+
+def conversion_test_pdf(count: int = 3) -> bytes:
+    """``count`` pages for the no-print conversion check."""
+    return sample_pdf(
+        [
+            [
+                ("Dönüştürme testi", "Donusturme testi", 110),
+                (f"{n}/{count}", f"{n}/{count}", 260),
+            ]
+            for n in range(1, count + 1)
+        ]
+    )
+
+
+# --- count pages in converted output -------------------------------------------
+
+_PWG_SYNC = b"RaS2"
+_PWG_HEADER = 1796
+_URF_MAGIC = b"UNIRAST\0"
+_URF_HEADER = 32
+
+
+def _skip_bitmap(
+    data: bytes, pos: int, width: int, height: int, bpp: int, *, urf: bool
+) -> int:
+    """Walk one compressed page (PWG 5102.4 4.4 / URF), return the end offset."""
+    y = 0
+    while y < height:
+        repeat = data[pos] + 1
+        pos += 1
+        x = 0
+        while x < width:
+            code = data[pos]
+            pos += 1
+            if code == 128:
+                if not urf:
+                    raise ValueError("PWG'de tanımsız 128 kodu")
+                x = width  # URF: rest of the line is white
+            elif code < 128:
+                x += code + 1
+                pos += bpp
+            else:
+                x += 257 - code
+                pos += (257 - code) * bpp
+        if x > width:
+            raise ValueError(f"satır {y} taşıyor")
+        y += repeat
+    if y != height or pos > len(data):
+        raise ValueError("sayfa verisi eksik ya da taşıyor")
+    return pos
+
+
+def count_raster_pages(data: bytes, document_format: str) -> int:
+    """Decode-count the pages of a PWG raster or URF stream."""
+    pages = 0
+    try:
+        if document_format == PWG_FMT:
+            if data[:4] != _PWG_SYNC:
+                raise ValueError("RaS2 senkron kelimesi yok")
+            pos = 4
+            while pos < len(data):
+                width, height = struct.unpack_from(">II", data, pos + 372)
+                (bits,) = struct.unpack_from(">I", data, pos + 388)
+                pos = _skip_bitmap(
+                    data, pos + _PWG_HEADER, width, height, bits // 8, urf=False
+                )
+                pages += 1
+            return pages
+        if document_format == URF_FMT:
+            if data[:8] != _URF_MAGIC:
+                raise ValueError("UNIRAST başlığı yok")
+            (declared,) = struct.unpack_from(">I", data, 8)
+            pos = 12
+            while pos < len(data):
+                bits = data[pos]
+                width, height = struct.unpack_from(">II", data, pos + 12)
+                pos = _skip_bitmap(
+                    data, pos + _URF_HEADER, width, height, bits // 8, urf=True
+                )
+                pages += 1
+            if declared != pages:
+                raise ValueError(f"başlık {declared} sayfa diyor, {pages} bulundu")
+            return pages
+    except (IndexError, struct.error) as err:
+        raise ValueError(f"veri kesik ({err})") from err
+    raise ValueError(f"{document_format} çözülemiyor")
 
 
 # --- small IPP helpers ---------------------------------------------------------
@@ -416,6 +707,7 @@ def describe_printer(attrs: dict[str, Any]) -> list[str]:
         f"model: {attrs.get('printer-make-and-model', '?')}",
         f"durum: {_PRINTER_STATES.get(state, state)}; nedenler: "
         f"{show('printer-state-reasons')}",
+        f"printer-is-accepting-jobs: {show('printer-is-accepting-jobs')}",
         f"formatlar: {show('document-format-supported')}",
         "PDF: {application/pdf}, JPEG: {image/jpeg}, PNG: {image/png}".format(**has),
         f"sides-supported: {show('sides-supported')}",
@@ -428,7 +720,7 @@ def describe_printer(attrs: dict[str, Any]) -> list[str]:
         f"{show('pwg-raster-document-resolution-supported')}",
     ]
     if "application/pdf" not in formats:
-        lines.append("PDF listede yok: Plan 3'teki dönüştürme gerekecek")
+        lines.append("PDF listede yok: dönüştürülüp gönderilecek (4m-4p, 6, 7b)")
     return lines
 
 
@@ -462,35 +754,57 @@ async def check_escl(host: str, tls: bool) -> list[Result]:
 
 
 def build_validate_message(
-    document_format: str, job_attrs: dict[str, Any]
+    document_format: str, job_attrs: dict[str, Any], job_name: str = JOB_NAME
 ) -> dict[str, Any]:
     """Validate-Job request. RFC 8011 4.2.3: no document data is sent."""
     return {
         "operation-attributes-tag": {
             "requesting-user-name": USER_NAME,
-            "job-name": JOB_NAME,
+            "job-name": job_name,
             "document-format": document_format,
         },
         "job-attributes-tag": dict(job_attrs),
     }
 
 
-def _cases(attrs: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any], str]]:
-    """(num, title, format, job attributes, skip reason or "")."""
-    sides = _as_list(attrs.get("sides-supported"))
-    colors = _as_list(attrs.get("print-color-mode-supported"))
+Case = tuple[str, str, str, dict[str, Any], str]
+
+
+def _sides_skip(attrs: dict[str, Any]) -> str:
+    if LONG_EDGE in _as_list(attrs.get("sides-supported")):
+        return ""
+    return "sides-supported içinde two-sided-long-edge yok"
+
+
+def _color_skip(attrs: dict[str, Any]) -> str:
+    if "color" in _as_list(attrs.get("print-color-mode-supported")):
+        return ""
+    return "print-color-mode-supported içinde color yok"
+
+
+def _copies_skip(attrs: dict[str, Any]) -> str:
     copies = _as_list(attrs.get("copies-supported"))
-    pdf = "application/pdf"
-    return [
+    if copies and isinstance(copies[-1], int) and copies[-1] < 2:
+        return "copies-supported en fazla 1"
+    return ""
+
+
+def _cases(
+    attrs: dict[str, Any],
+    conv: Convert | None = None,
+    conv_reason: str = "dönüştürme yüklenmedi",
+) -> list[Case]:
+    """(num, title, format, job attributes, skip reason or "")."""
+    pdf = PDF_FMT
+    jpeg = JPEG_FMT
+    cases: list[Case] = [
         ("4a", "Validate-Job PDF varsayılan", pdf, {}, ""),
         (
             "4b",
             "Validate-Job PDF çift yüz",
             pdf,
-            {"sides": "two-sided-long-edge"},
-            ""
-            if "two-sided-long-edge" in sides
-            else "sides-supported içinde two-sided-long-edge yok",
+            {"sides": LONG_EDGE},
+            _sides_skip(attrs),
         ),
         (
             "4c",
@@ -504,7 +818,7 @@ def _cases(attrs: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any], s
             "Validate-Job PDF renkli",
             pdf,
             {"print-color-mode": "color"},
-            "" if "color" in colors else "print-color-mode-supported içinde color yok",
+            _color_skip(attrs),
         ),
         (
             "4e",
@@ -513,24 +827,62 @@ def _cases(attrs: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any], s
             {"page-ranges": [IppRange(1, 1)]},
             "" if attrs.get("page-ranges-supported") is True else "page-ranges yok",
         ),
-        ("4f", "Validate-Job JPEG", "image/jpeg", {}, ""),
+        ("4f", "Validate-Job JPEG", jpeg, {}, ""),
         ("4g", "Validate-Job PNG", "image/png", {}, ""),
+        ("4h", "Validate-Job PDF 2 kopya", pdf, {"copies": 2}, _copies_skip(attrs)),
         (
-            "4h",
-            "Validate-Job PDF 2 kopya",
-            pdf,
-            {"copies": 2},
-            "copies-supported en fazla 1"
-            if copies and isinstance(copies[-1], int) and copies[-1] < 2
-            else "",
+            "4i",
+            "Validate-Job JPEG çift yüz",
+            jpeg,
+            {"sides": LONG_EDGE},
+            _sides_skip(attrs),
         ),
+        (
+            "4j",
+            "Validate-Job JPEG siyah-beyaz",
+            jpeg,
+            {"print-color-mode": "monochrome"},
+            "",
+        ),
+        (
+            "4k",
+            "Validate-Job JPEG renkli",
+            jpeg,
+            {"print-color-mode": "color"},
+            _color_skip(attrs),
+        ),
+        ("4l", "Validate-Job JPEG 2 kopya", jpeg, {"copies": 2}, _copies_skip(attrs)),
     ]
+    converted = [
+        ("4m", "varsayılan", {}, "", False),
+        ("4n", "çift yüz", {"sides": LONG_EDGE}, _sides_skip(attrs), False),
+        ("4o", "siyah-beyaz", {"print-color-mode": "monochrome"}, "", True),
+        ("4p", "renkli", {"print-color-mode": "color"}, _color_skip(attrs), False),
+    ]
+    caps = conv.capabilities(attrs) if conv is not None else None
+    for num, label, job_attrs, skip, gray in converted:
+        title = f"Validate-Job dönüştürülmüş PDF {label}"
+        target = None
+        if conv is None:
+            skip = skip or conv_reason
+        else:
+            target = conv.pipeline.choose_target(pdf, caps, gray=gray)
+            if target is None:
+                skip = skip or "PDF için dönüştürme yolu yok (PDF/PWG/URF yok)"
+            elif target == pdf:
+                skip = skip or "yazıcı PDF'i doğrudan alıyor, dönüştürme gerekmiyor"
+            else:
+                title = f"Validate-Job {target} (PDF'ten) {label}"
+        cases.append((num, title, target or pdf, job_attrs, skip))
+    return cases
 
 
 async def check_printer_jobs(
     args: argparse.Namespace,
     attrs: dict[str, Any] | None = None,
     session: aiohttp.ClientSession | None = None,
+    conv: Convert | None = None,
+    conv_reason: str = "dönüştürme yüklenmedi",
 ) -> list[Result]:
     own = session is None
     session = session or aiohttp.ClientSession()
@@ -539,17 +891,34 @@ async def check_printer_jobs(
             _, attrs = await get_printer_attributes(args, session)
             if attrs is None:
                 return [Result("4", "Validate-Job", SKIP, "yazıcı özellikleri yok")]
-        return await _validate_all(make_ipp(args, session, IPP_TIMEOUT), attrs)
+        return await _validate_all(
+            make_ipp(args, session, IPP_TIMEOUT),
+            _cases(attrs, conv, conv_reason),
+            attrs,
+        )
     finally:
         if own:
             await session.close()
 
 
-async def _validate_all(ipp: IPP, attrs: dict[str, Any]) -> list[Result]:
+def _validate_outcome(response: dict[str, Any]) -> tuple[str, str]:
+    """(status, "keyword (desteklenmeyen: ...)") of a Validate-Job answer."""
+    status, name = interpret_status(response.get("status-code", -1))
+    unsupported = sorted(
+        {k for group in response.get("unsupported-attributes") or [] for k in group}
+    )
+    if unsupported:
+        name += f" (desteklenmeyen: {', '.join(unsupported)})"
+    return status, name
+
+
+async def _validate_all(
+    ipp: IPP, cases: list[Case], attrs: dict[str, Any]
+) -> list[Result]:
     formats = _as_list(attrs.get("document-format-supported"))
     ops = _as_list(attrs.get("operations-supported"))
     results = []
-    for num, title, fmt, job_attrs, skip in _cases(attrs):
+    for num, title, fmt, job_attrs, skip in cases:
         if ops and IppOperation.VALIDATE_JOB not in ops:
             results.append(Result(num, title, SKIP, "yazıcı Validate-Job bildirmiyor"))
             continue
@@ -563,13 +932,8 @@ async def _validate_all(ipp: IPP, attrs: dict[str, Any]) -> list[Result]:
         except IppCallError as err:
             results.append(Result(num, title, FAIL, str(err)))
             continue
-        status, name = interpret_status(response.get("status-code", -1))
-        unsupported = sorted(
-            {k for group in response.get("unsupported-attributes") or [] for k in group}
-        )
-        detail = name
-        if unsupported:
-            detail += f" (desteklenmeyen: {', '.join(unsupported)})"
+        status, detail = _validate_outcome(response)
+        name = status_name(response.get("status-code", -1))
         if status == SKIP:
             detail = f"yazıcı Validate-Job uygulamıyor ({name})"
         elif fmt not in formats:
@@ -763,22 +1127,188 @@ async def _check_upload(
     return results
 
 
-# --- 6. real print ------------------------------------------------------------------
+# --- 6. conversion (no print) --------------------------------------------------
 
 
-async def print_test_page(
-    args: argparse.Namespace, attrs: dict[str, Any], session: aiohttp.ClientSession
+async def check_conversion(
+    attrs: dict[str, Any], conv: Convert | None, conv_reason: str
 ) -> Result:
-    title = "Gerçek baskı (tek sayfa)"
-    formats = _as_list(attrs.get("document-format-supported"))
-    fmt = next((f for f in DOCUMENTS if f in formats), None)
-    if fmt is None:
-        return Result("6", title, SKIP, "yazıcı PDF/JPEG/PNG kabul etmiyor — Plan 3")
-    print(
-        f"⚠️  DİKKAT: --print verildi. Yazıcıya TEK sayfalık gerçek bir iş "
-        f"gönderiliyor ({fmt}, '{JOB_NAME}').",
-        flush=True,
+    """Convert a 3-page sample PDF like the integration would, count pages.
+
+    Monochrome and long-edge duplex (when supported), so an odd page count
+    gets a blank back page: 3 pages -> 4 in the output.
+    """
+    title = "Dönüştürme denemesi (3 sayfa PDF, baskısız)"
+    if conv is None:
+        return Result("6", title, SKIP, conv_reason)
+    caps = conv.capabilities(attrs)
+    duplex = LONG_EDGE in caps.sides
+    options = conv.options(
+        sides=LONG_EDGE if duplex else "one-sided", color_mode="monochrome"
     )
+    target = conv.pipeline.choose_target(PDF_FMT, caps, gray=True)
+    if target is None:
+        return Result("6", title, FAIL, "PDF için dönüştürme yolu yok (PDF/PWG/URF)")
+    if target == PDF_FMT:
+        return Result(
+            "6", title, SKIP, "yazıcı PDF'i doğrudan alıyor, dönüştürme gerekmiyor"
+        )
+    try:
+        data = conversion_test_pdf(3)
+        started = time.perf_counter()
+        prepared = await asyncio.to_thread(
+            conv.pipeline.prepare, data, PDF_FMT, caps, options
+        )
+        elapsed = time.perf_counter() - started
+    except Exception as err:  # noqa: BLE001 - report, never crash
+        return Result(
+            "6", title, FAIL, f"prepare hata verdi: {type(err).__name__}: {err}"
+        )
+    try:
+        pages = count_raster_pages(prepared.data, prepared.document_format)
+    except ValueError as err:
+        return Result("6", title, FAIL, f"{prepared.document_format} çözülemedi: {err}")
+    expected = 3 + (1 if duplex else 0)
+    detail = (
+        f"{prepared.document_format}, {len(prepared.data) / 1024:.0f} KB, "
+        f"{elapsed:.1f} sn, {pages} sayfa (beklenen {expected}"
+        f"{', 3 + boş arka yüz' if duplex else ''})"
+    )
+    ok = pages == expected and prepared.page_count == 3
+    return Result("6", title, PASS if ok else FAIL, detail)
+
+
+# --- 7. real prints (only with --print) --------------------------------------------
+
+
+@dataclass
+class PlannedJob:
+    num: str
+    title: str
+    job_name: str
+    document_format: str
+    data: bytes
+    job_attrs: dict[str, Any]
+    sheets: int
+    expect_impressions: int | None = None
+
+
+def _plan_jpeg_job(attrs: dict[str, Any], conv: Convert | None) -> PlannedJob | Result:
+    num, title = "7a", "Gerçek baskı 1/2: JPEG tek sayfa"
+    data = sample_jpeg()
+    if conv is not None:
+        caps = conv.capabilities(attrs)
+        try:
+            prepared = conv.pipeline.prepare(data, JPEG_FMT, caps, conv.options())
+        except Exception as err:  # noqa: BLE001 - NoConversionRoute etc.
+            return Result(num, title, SKIP, f"JPEG hazırlanamadı: {type(err).__name__}")
+        fmt, data = prepared.document_format, prepared.data
+    else:
+        formats = _as_list(attrs.get("document-format-supported"))
+        if formats and JPEG_FMT not in formats:
+            return Result(num, title, SKIP, "yazıcı JPEG almıyor, dönüştürme de yok")
+        fmt = JPEG_FMT
+    return PlannedJob(num, title, JOB_NAME_1, fmt, data, {}, sheets=1)
+
+
+def _plan_duplex_job(
+    attrs: dict[str, Any], conv: Convert | None, conv_reason: str
+) -> PlannedJob | Result:
+    num, title = "7b", "Gerçek baskı 2/2: PDF çift yüz, siyah-beyaz"
+    if conv is None:
+        return Result(num, title, SKIP, conv_reason)
+    caps = conv.capabilities(attrs)
+    duplex = LONG_EDGE in caps.sides
+    mono = "monochrome" in caps.color_modes
+    options = conv.options(
+        sides=LONG_EDGE if duplex else "one-sided",
+        color_mode="monochrome" if mono else None,
+    )
+    try:
+        prepared = conv.pipeline.prepare(duplex_test_pdf(), PDF_FMT, caps, options)
+    except Exception as err:  # noqa: BLE001 - NoConversionRoute etc.
+        return Result(
+            num, title, SKIP, f"PDF hazırlanamadı: {type(err).__name__}: {err}"
+        )
+    job_attrs: dict[str, Any] = {}
+    if duplex:
+        job_attrs["sides"] = LONG_EDGE
+    if mono:
+        job_attrs["print-color-mode"] = "monochrome"
+    title = (
+        f"Gerçek baskı 2/2: PDF → {prepared.document_format}, "
+        f"{'çift yüz' if duplex else 'tek yüz (çift yüz yok)'}"
+        f"{', siyah-beyaz' if mono else ''}"
+    )
+    return PlannedJob(
+        num,
+        title,
+        JOB_NAME_2,
+        prepared.document_format,
+        prepared.data,
+        job_attrs,
+        sheets=1 if duplex else 2,
+        expect_impressions=2,
+    )
+
+
+async def _printer_not_ready(ipp: IPP) -> str:
+    """ "" when idle and accepting jobs; waits up to IDLE_WAIT while busy."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + IDLE_WAIT
+    while True:
+        try:
+            response = await ipp_call(
+                ipp,
+                IppOperation.GET_PRINTER_ATTRIBUTES,
+                {
+                    "operation-attributes-tag": {
+                        "requested-attributes": [
+                            "printer-state",
+                            "printer-state-reasons",
+                            "printer-is-accepting-jobs",
+                        ]
+                    }
+                },
+            )
+        except IppCallError as err:
+            return f"yazıcı durumu okunamadı ({err})"
+        printer = next(iter(response.get("printers") or []), None)
+        if printer is None:
+            return "yazıcı durumu okunamadı (boş cevap)"
+        if printer.get("printer-is-accepting-jobs") is False:
+            return "yazıcı iş kabul etmiyor (printer-is-accepting-jobs = false)"
+        state = printer.get("printer-state", 3)
+        if state == 3:
+            return ""
+        if state != 4 or loop.time() >= deadline:
+            reasons = ", ".join(
+                map(str, _as_list(printer.get("printer-state-reasons")))
+            )
+            waited = f", {IDLE_WAIT} sn beklendi" if state == 4 else ""
+            return (
+                f"yazıcı boşta değil: {_PRINTER_STATES.get(state, state)}; "
+                f"nedenler: {reasons or '-'}{waited}"
+            )
+        await asyncio.sleep(POLL_INTERVAL)
+
+
+async def _validate_planned(ipp: IPP, job: PlannedJob) -> tuple[str, str]:
+    """(status, detail) of Validate-Job with exactly the job's attributes."""
+    try:
+        response = await ipp_call(
+            ipp,
+            IppOperation.VALIDATE_JOB,
+            build_validate_message(job.document_format, job.job_attrs, job.job_name),
+        )
+    except IppCallError as err:
+        return FAIL, str(err)
+    return _validate_outcome(response)
+
+
+async def _send_and_wait(
+    args: argparse.Namespace, session: aiohttp.ClientSession, job: PlannedJob
+) -> Result:
     try:
         response = await ipp_call(
             make_ipp(args, session, PRINT_TIMEOUT),
@@ -786,31 +1316,36 @@ async def print_test_page(
             {
                 "operation-attributes-tag": {
                     "requesting-user-name": USER_NAME,
-                    "job-name": JOB_NAME,
-                    "document-format": fmt,
+                    "job-name": job.job_name,
+                    "document-format": job.document_format,
                 },
-                "data": DOCUMENTS[fmt],
+                "job-attributes-tag": dict(job.job_attrs),
+                "data": job.data,
             },
         )
     except IppCallError as err:
         return Result(
-            "6",
-            title,
+            job.num,
+            job.title,
             FAIL,
             f"Print-Job: {err}. İş yine de gitmiş olabilir; tekrar çalıştırmadan "
             "önce yazıcının durumuna bak",
         )
     status, name = interpret_status(response.get("status-code", -1))
-    job = next(iter(response.get("jobs") or []), {})
-    if status != PASS or "job-id" not in job:
-        return Result("6", title, FAIL, f"Print-Job reddedildi: {name}")
-    job_id = int(job["job-id"])
-    print(f"      • iş numarası {job_id}, bitmesi bekleniyor (en fazla 180 sn)")
+    sent = next(iter(response.get("jobs") or []), {})
+    if status != PASS or "job-id" not in sent:
+        return Result(job.num, job.title, FAIL, f"Print-Job reddedildi: {name}")
+    job_id = int(sent["job-id"])
+    print(
+        f"      • {job.num}: iş numarası {job_id}, bitmesi bekleniyor "
+        f"(en fazla {POLL_LIMIT} sn)",
+        flush=True,
+    )
 
     ipp = make_ipp(args, session, IPP_TIMEOUT)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + POLL_LIMIT
-    last: dict[str, Any] = job
+    last: dict[str, Any] = sent
     while True:
         try:
             resp = await ipp_call(
@@ -836,15 +1371,80 @@ async def print_test_page(
             break
         await asyncio.sleep(POLL_INTERVAL)
 
+    impressions = last.get("job-impressions-completed", "?")
     detail = (
         f"iş {job_id}: {_JOB_STATES.get(state, state)}; nedenler: "
         f"{', '.join(map(str, _as_list(last.get('job-state-reasons')))) or '-'}; "
-        f"impressions: {last.get('job-impressions-completed', '?')}, "
+        f"impressions: {impressions}, "
         f"sheets: {last.get('job-media-sheets-completed', '?')}"
     )
+    if job.expect_impressions is not None:
+        detail += f" (beklenen impressions {job.expect_impressions}"
+        if isinstance(impressions, int) and impressions != job.expect_impressions:
+            detail += ", FARKLI"
+        detail += ")"
     if state not in _JOB_DONE:
         detail += f" ({POLL_LIMIT} sn içinde bitmedi)"
-    return Result("6", title, PASS if state == 9 else FAIL, detail)
+    return Result(job.num, job.title, PASS if state == 9 else FAIL, detail)
+
+
+async def run_print_tests(
+    args: argparse.Namespace,
+    attrs: dict[str, Any],
+    session: aiohttp.ClientSession,
+    conv: Convert | None,
+    conv_reason: str,
+    report: dict[str, Any],
+) -> None:
+    """All real prints in one go: at most 2 jobs, at most 2 sheets."""
+    planned = [
+        _plan_jpeg_job(attrs, conv),
+        _plan_duplex_job(attrs, conv, conv_reason),
+    ]
+    jobs = [j for j in planned if isinstance(j, PlannedJob)]
+    sheets = sum(j.sheets for j in jobs)
+    print(
+        f"⚠️  DİKKAT: --print verildi. {len(jobs)} iş, en fazla {sheets} kağıt "
+        "gerçekten basılacak:",
+        flush=True,
+    )
+    for job in jobs:
+        print(
+            f"      • {job.num}: '{job.job_name}' ({job.document_format}, "
+            f"{len(job.data) / 1024:.0f} KB, {job.sheets} kağıt)",
+            flush=True,
+        )
+    ipp = make_ipp(args, session, IPP_TIMEOUT)
+    ops = _as_list(attrs.get("operations-supported"))
+    for job in planned:
+        if isinstance(job, Result):
+            emit(report, job)
+            continue
+        reason = await _printer_not_ready(ipp)
+        if reason:
+            emit(report, Result(job.num, job.title, SKIP, f"gönderilmedi: {reason}"))
+            continue
+        note = ""
+        if ops and IppOperation.VALIDATE_JOB not in ops:
+            note = " (yazıcı Validate-Job bildirmiyor, kontrolsüz gönderildi)"
+        else:
+            status, detail = await _validate_planned(ipp, job)
+            if status == FAIL:
+                emit(
+                    report,
+                    Result(
+                        job.num,
+                        job.title,
+                        SKIP,
+                        f"gönderilmedi: Validate-Job kabul etmedi ({detail})",
+                    ),
+                )
+                continue
+            if status == SKIP:
+                note = f" (Validate-Job uygulanmıyor: {detail})"
+        result = await _send_and_wait(args, session, job)
+        result.detail += note
+        emit(report, result)
 
 
 # --- main --------------------------------------------------------------------------
@@ -854,6 +1454,7 @@ async def run(args: argparse.Namespace) -> int:
     report: dict[str, Any] = {"results": [], "printer_attributes": None, "ha": {}}
     attrs: dict[str, Any] | None = None
     unreachable = "yazıcıya erişilemedi"
+    conv, conv_reason = load_convert()
 
     tcp = await check_tcp(args.printer, args.port)
     emit(report, tcp)
@@ -866,7 +1467,10 @@ async def run(args: argparse.Namespace) -> int:
         emit(report, *await check_escl(args.printer, args.tls))
         if attrs is not None:
             report["printer_attributes"] = scrub(attrs)
-            emit(report, *await check_printer_jobs(args, attrs, session))
+            emit(
+                report,
+                *await check_printer_jobs(args, attrs, session, conv, conv_reason),
+            )
         else:
             emit(report, Result("4", "Validate-Job", SKIP, unreachable))
 
@@ -875,12 +1479,17 @@ async def run(args: argparse.Namespace) -> int:
         else:
             emit(report, Result("5", "Home Assistant", SKIP, "--ha ve --token yok"))
 
-        if not args.print:
-            emit(report, Result("6", "Gerçek baskı", SKIP, "--print verilmedi"))
-        elif attrs is None:
-            emit(report, Result("6", "Gerçek baskı", SKIP, unreachable))
+        if attrs is None:
+            emit(report, Result("6", "Dönüştürme denemesi", SKIP, unreachable))
         else:
-            emit(report, await print_test_page(args, attrs, session))
+            emit(report, await check_conversion(attrs, conv, conv_reason))
+
+        if not args.print:
+            emit(report, Result("7", "Gerçek baskı", SKIP, "--print verilmedi"))
+        elif attrs is None:
+            emit(report, Result("7", "Gerçek baskı", SKIP, unreachable))
+        else:
+            await run_print_tests(args, attrs, session, conv, conv_reason, report)
 
     counts = {s: sum(r.status == s for r in report["results"]) for s in LABELS}
     print(
@@ -941,7 +1550,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--print",
         action="store_true",
-        help="GERÇEKTEN tek sayfa bas (yoksa hiç baskı yapılmaz)",
+        help="GERÇEKTEN bas: 2 iş, en fazla 2 kağıt (yoksa hiç baskı yapılmaz)",
     )
     p.add_argument(
         "--json", metavar="OUT.json", help="sonuçları JSON dosyasına yaz (gizlenmiş)"

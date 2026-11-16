@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import struct
@@ -88,6 +89,14 @@ PRINTER = {
 }
 
 
+# Real Get-Printer-Attributes answer of Ada's printer (pyipp-parsed form):
+# no PDF/PNG, takes JPEG, PWG raster and URF.
+DESKJET = json.loads(
+    (Path(__file__).parent / "fixtures" / "printer_hp_deskjet_4670.json").read_text()
+)
+_PARSED = b"<parsed printer attributes>"
+
+
 class FakeIPP:
     """Records every request sent through ``IPP.raw`` / ``IPP.execute``."""
 
@@ -95,8 +104,14 @@ class FakeIPP:
         self.ops: list[IppOperation] = []
         self.messages: list[dict[str, Any]] = []
         self.printer = printer
+        self.parsed = False  # True: hand ``printer`` to the script as parsed
         self.validate_status = validate_status
         self.by_format = by_format or {}
+        self.next_job_id = 7
+
+    def use_deskjet(self) -> None:
+        self.printer = copy.deepcopy(DESKJET)
+        self.parsed = True
 
     async def raw(self, ipp_self, operation, message):
         self.ops.append(operation)
@@ -104,28 +119,69 @@ class FakeIPP:
         # make sure the real serializer can encode what the script built
         encode_dict(ipp_self._message(operation, message))
         if operation == IppOperation.GET_PRINTER_ATTRIBUTES:
+            if self.parsed:  # collections etc. that ipp_response can't encode
+                return _PARSED
             return ipp_response(0, printer=self.printer)
         if operation == IppOperation.VALIDATE_JOB:
             fmt = message["operation-attributes-tag"]["document-format"]
             return ipp_response(self.by_format.get(fmt, self.validate_status))
         if operation == IppOperation.PRINT_JOB:
-            return ipp_response(0, job={"job-id": 7, "job-state": 3})
+            job_id = self.next_job_id
+            self.next_job_id += 1
+            return ipp_response(0, job={"job-id": job_id, "job-state": 3})
         if operation == IppOperation.GET_JOB_ATTRIBUTES:
-            return ipp_response(0, job={"job-id": 7, "job-state": 9})
+            job_id = message["operation-attributes-tag"]["job-id"]
+            return ipp_response(
+                0,
+                job={
+                    "job-id": job_id,
+                    "job-state": 9,
+                    "job-impressions-completed": 2 if job_id == 8 else 1,
+                    "job-media-sheets-completed": 1,
+                },
+            )
         raise AssertionError(operation)
+
+    def sent(self, operation):
+        return [
+            m for op, m in zip(self.ops, self.messages, strict=True) if op == operation
+        ]
+
+    def validated(self):
+        return [
+            (m["operation-attributes-tag"]["document-format"], m["job-attributes-tag"])
+            for m in self.sent(IppOperation.VALIDATE_JOB)
+        ]
+
+
+def _by_num(out: str) -> dict[str, str]:
+    """Result lines of the script's output keyed by check number."""
+    lines = {}
+    for line in out.splitlines():
+        if line.startswith(tuple(rc.LABELS.values())):
+            lines[line.split(".")[0].split()[-1]] = line
+    return lines
 
 
 @pytest.fixture
 def fake_ipp():
     fake = FakeIPP()
+    real_parse = rc.parse_ipp
 
     async def raw(self, operation, message):
         return await fake.raw(self, operation, message)
+
+    def parse(data):
+        if data == _PARSED:
+            return {"status-code": 0, "printers": [copy.deepcopy(fake.printer)]}
+        return real_parse(data)
 
     execute = AsyncMock(side_effect=AssertionError("execute not expected"))
     with (
         patch.object(IPP, "raw", raw),
         patch.object(IPP, "execute", execute),
+        patch.object(rc, "parse_ipp", parse),
+        patch.object(rc, "POLL_INTERVAL", 0),
         patch.object(
             rc,
             "check_tcp",
@@ -170,12 +226,148 @@ async def test_no_print_job_without_print_flag(fake_ipp, capsys):
     assert code == 0
 
 
-async def test_print_flag_sends_exactly_one_job(fake_ipp, capsys):
-    with patch.object(rc, "POLL_INTERVAL", 0):
-        code = await rc.run(rc.parse_args(["--printer", "10.0.0.5", "--print"]))
-    assert fake_ipp.ops.count(IppOperation.PRINT_JOB) == 1
+async def test_print_flag_sends_exactly_two_jobs(fake_ipp, capsys):
+    code = await rc.run(rc.parse_args(["--printer", "10.0.0.5", "--print"]))
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert len(jobs) == 2
+    formats = [j["operation-attributes-tag"]["document-format"] for j in jobs]
+    assert formats == ["image/jpeg", "application/pdf"]  # PDF printer: as is
     assert code == 0
     assert "completed" in capsys.readouterr().out
+
+
+async def test_deskjet_no_print_flag_sends_no_job(fake_ipp):
+    fake_ipp.use_deskjet()
+    code = await rc.run(rc.parse_args(["--printer", "10.0.0.5"]))
+    assert IppOperation.PRINT_JOB not in fake_ipp.ops
+    fake_ipp.execute.assert_not_called()
+    assert code == 0
+
+
+async def test_deskjet_print_sends_jpeg_then_converted_duplex_pdf(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    code = await rc.run(rc.parse_args(["--printer", "10.0.0.5", "--print"]))
+    out = capsys.readouterr().out
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert len(jobs) == 2
+    first, second = jobs
+    op1, op2 = first["operation-attributes-tag"], second["operation-attributes-tag"]
+    assert op1["document-format"] == "image/jpeg"
+    assert op1["job-name"] == "Home Print test 1/2 — JPEG"
+    assert first["data"][:2] == b"\xff\xd8"
+    assert op2["document-format"] == "image/pwg-raster"
+    assert op2["job-name"] == "Home Print test 2/2 — PDF çift taraf"
+    attrs2 = second["job-attributes-tag"]
+    assert attrs2["sides"] == "two-sided-long-edge"
+    assert attrs2["print-color-mode"] == "monochrome"
+    assert second["data"][:4] == b"RaS2"
+    assert "page-ranges" not in attrs2
+    # validated with the same attributes right before sending
+    assert ("image/pwg-raster", attrs2) in fake_ipp.validated()
+    assert "2 iş" in out and "en fazla 2 kağıt" in out
+    assert out.index("2 iş") < out.index("7a.")
+    results = _by_num(out)
+    assert "✅ GEÇTİ" in results["7a"]
+    assert "✅ GEÇTİ" in results["7b"]
+    assert "impressions: 2" in results["7b"]
+    assert code == 0
+
+
+async def test_deskjet_jpeg_validate_variants(fake_ipp):
+    fake_ipp.use_deskjet()
+    await rc.run(rc.parse_args(["--printer", "10.0.0.5"]))
+    sent = fake_ipp.validated()
+    assert ("image/jpeg", {}) in sent
+    assert ("image/jpeg", {"sides": "two-sided-long-edge"}) in sent
+    assert ("image/jpeg", {"print-color-mode": "monochrome"}) in sent
+    assert ("image/jpeg", {"print-color-mode": "color"}) in sent
+    assert ("image/jpeg", {"copies": 2}) in sent
+
+
+async def test_deskjet_converted_format_validate_cases(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    await rc.run(rc.parse_args(["--printer", "10.0.0.5"]))
+    sent = fake_ipp.validated()
+    pwg = "image/pwg-raster"
+    assert (pwg, {}) in sent
+    assert (pwg, {"sides": "two-sided-long-edge"}) in sent
+    assert (pwg, {"print-color-mode": "monochrome"}) in sent
+    assert (pwg, {"print-color-mode": "color"}) in sent
+    assert all("data" not in m for m in fake_ipp.sent(IppOperation.VALIDATE_JOB))
+    assert "image/pwg-raster" in capsys.readouterr().out
+
+
+async def test_deskjet_conversion_check_counts_four_pages(fake_ipp, tmp_path):
+    fake_ipp.use_deskjet()
+    out = tmp_path / "out.json"
+    await rc.run(rc.parse_args(["--printer", "h", "--json", str(out)]))
+    results = {r["num"]: r for r in json.loads(out.read_text())["results"]}
+    check = results["6"]
+    assert check["status"] == rc.PASS, check
+    assert "4 sayfa" in check["detail"]
+    assert "image/pwg-raster" in check["detail"]
+
+
+async def test_convert_modules_missing_skips_but_jpeg_still_prints(
+    fake_ipp, tmp_path, capsys
+):
+    fake_ipp.use_deskjet()
+    with patch.object(rc, "PKG_DIR", tmp_path / "yok"):
+        code = await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    out = capsys.readouterr().out
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert len(jobs) == 1
+    assert jobs[0]["operation-attributes-tag"]["document-format"] == "image/jpeg"
+    lines = _by_num(out)
+    assert lines["6"].startswith("⏭ ATLANDI")
+    assert "convert modülleri bulunamadı" in lines["6"]
+    assert lines["7b"].startswith("⏭ ATLANDI")
+    assert lines["7a"].startswith("✅ GEÇTİ")
+    assert not any(f == "image/pwg-raster" for f, _ in fake_ipp.validated())
+    assert code == 0
+
+
+def test_load_convert_does_not_run_package_init():
+    conv, reason = rc.load_convert()
+    assert conv is not None, reason
+    package = sys.modules[rc.STANDALONE]
+    assert not hasattr(package, "async_setup_entry")
+    caps = conv.capabilities(DESKJET)
+    assert conv.pipeline.choose_target("application/pdf", caps) == "image/pwg-raster"
+
+
+def test_load_convert_missing_dir(tmp_path):
+    conv, reason = rc.load_convert(tmp_path)
+    assert conv is None
+    assert "convert modülleri bulunamadı" in reason
+
+
+async def test_stopped_printer_gets_no_print_job(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    fake_ipp.printer["printer-state"] = 5
+    await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    assert IppOperation.PRINT_JOB not in fake_ipp.ops
+    out = capsys.readouterr().out
+    assert "⏭ ATLANDI  7a." in out
+    assert "⏭ ATLANDI  7b." in out
+
+
+async def test_not_accepting_jobs_gets_no_print_job(fake_ipp):
+    fake_ipp.use_deskjet()
+    fake_ipp.printer["printer-is-accepting-jobs"] = False
+    await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    assert IppOperation.PRINT_JOB not in fake_ipp.ops
+
+
+async def test_failed_validate_skips_that_print_job(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    fake_ipp.by_format = {"image/pwg-raster": 0x040B}
+    await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert [j["operation-attributes-tag"]["document-format"] for j in jobs] == [
+        "image/jpeg"
+    ]
+    assert "⏭ ATLANDI  7b." in capsys.readouterr().out
 
 
 # --- Validate-Job request ----------------------------------------------------
@@ -357,3 +549,11 @@ async def test_unreachable_printer_fails_check_1_and_skips_ipp(capsys):
     assert out.splitlines()[0].startswith("❌ KALDI")
     assert "reddetti" in out.splitlines()[0]
     assert "⏭ ATLANDI  2." in out
+
+
+def test_load_convert_missing_dependency_names_it():
+    with patch.dict(sys.modules, {"pypdfium2": None}):
+        conv, reason = rc.load_convert()
+        assert rc.STANDALONE not in sys.modules  # half-loaded package removed
+    assert conv is None
+    assert "pypdfium2 yüklü değil" in reason

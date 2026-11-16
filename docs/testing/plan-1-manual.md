@@ -2,21 +2,31 @@
 
 Evde değilsin, çıkan kağıdı göremiyorsun. O yüzden bu test sadece yazıcının ve Home Assistant'ın ağ üzerinden söylediklerine bakıyor.
 
-- Bu gece: hiçbir şey basılmaz. Yazıcıya sadece "bu işi basabilir miydin?" diye sorulur (Validate-Job). Yazıcı iş oluşturmaz.
-- Sabah istersen: `--print` ile tek sayfalık tek bir iş gönderirsin. Sonucu yine yazıcının kendi raporundan okursun.
+- Bu gece: hiçbir şey basılmaz. Yazıcıya sadece "bu işi basabilir miydin?" diye sorulur (Validate-Job), yazıcı iş oluşturmaz. Örnek bir PDF de Mac'te dönüştürülüp sayfaları sayılır, yazıcıya gitmez.
+- Sabah: `--print` ile bütün baskı testleri tek seferde yapılır. 2 iş, en fazla 2 kağıt. Sonucu yine yazıcının kendi raporundan okursun.
 - Her şeyi MacBook'ta Terminal'den yaparsın.
 
 ## 1. Kurulum (bir kere)
 
 - Python 3.10 ya da üstü lazım. Kontrol: `python3 --version`.
-- Ayrı bir sanal ortam kur:
+- Repo'yu Mac'e al. Script tek başına yetmez, dönüştürme kodunu repo'dan okuyor (`scripts/` ile `custom_components/` yan yana durmalı).
+  - Şimdilik: Claude sohbette repo'nun zip'ini gönderecek. İndir, `~/home-print` klasörüne aç:
 
 ```bash
-python3 -m venv ~/homeprint-venv && ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp
+mkdir -p ~/home-print && unzip ~/Downloads/home-print.zip -d ~/home-print
+ls ~/home-print/scripts/remote_check.py   # bu dosya görünmeli
 ```
 
-- `scripts/remote_check.py` dosyasını Mac'e al. Repo'yu `git pull` ile güncelle ya da GitHub'dan sadece bu dosyayı indir.
-- Komutların hepsi bu dosyanın olduğu klasörde çalışıyor varsayıyor. Değilse dosyanın tam yolunu yaz.
+  - Zip içinde tek bir üst klasör varsa (`home-print-plan3/` gibi) `ls` ile bak, aşağıdaki komutlarda yolu ona göre yaz.
+  - GitHub deposu açılınca: `git clone https://github.com/adakilinc/home-print.git ~/home-print`, sonraki güncellemeler için `git pull`.
+- Ayrı bir sanal ortam kur. Paket sürümleri integration'ın manifest'iyle aynı:
+
+```bash
+python3 -m venv ~/homeprint-venv && ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2
+```
+
+- Komutları repo klasöründe çalıştır: `cd ~/home-print`.
+- Paketlerden biri eksikse script çökmez. 4m-4p, 6 ve 7b `⏭ ATLANDI` olur, yanında hangi paketin eksik olduğu yazar.
 
 ## 2. Tailscale'i aç
 
@@ -49,7 +59,8 @@ read -s HA_TOKEN   # token'ı yapıştır, Enter
 ## 5. Bu geceki komut (baskı YOK)
 
 ```bash
-~/homeprint-venv/bin/python remote_check.py \
+cd ~/home-print
+~/homeprint-venv/bin/python scripts/remote_check.py \
   --printer <yazıcı-ip> \
   --ha http://<ha-tailscale-ip>:8123 \
   --token "$HA_TOKEN" \
@@ -58,30 +69,37 @@ read -s HA_TOKEN   # token'ı yapıştır, Enter
 
 - `<ha-tailscale-ip>`: HA'nın Tailscale adresi (`100.x.y.z`) ya da `ha.tailnet-adi.ts.net`. HTTPS kullanıyorsan `https://` yaz.
 - Yazıcı ipps kullanıyorsa `--tls` ekle. Farklı port/yol için `--port`, `--path`.
-- Tüm seçenekler: `~/homeprint-venv/bin/python remote_check.py --help`.
+- Tüm seçenekler: `~/homeprint-venv/bin/python scripts/remote_check.py --help`.
 
 Ne kontrol ediliyor:
 
 1. Yazıcının 631 portu 5 sn içinde açılıyor mu.
-2. Get-Printer-Attributes: model, durum, formatlar, çift yüz, renk, sayfa aralığı, kopya, mürekkep seviyeleri.
+2. Get-Printer-Attributes: model, durum, iş kabul ediyor mu, formatlar, çift yüz, renk, sayfa aralığı, kopya, mürekkep seviyeleri.
 3. eSCL tarayıcı var mı (sadece bilgi, Plan 4 için; asla KALDI olmaz).
-4. Validate-Job, 8 durum: PDF düz, çift yüz, siyah-beyaz, renkli, sayfa 1-1, JPEG, PNG, 2 kopya. Hiçbiri basılmaz.
+4. Validate-Job, hiçbiri basılmaz:
+   - 4a-4h: PDF düz, çift yüz, siyah-beyaz, renkli, sayfa 1-1, JPEG, PNG, PDF 2 kopya.
+   - 4i-4l: JPEG çift yüz, siyah-beyaz, renkli, 2 kopya.
+   - 4m-4p: PDF'in dönüştürüleceği format (senin DeskJet'te `image/pwg-raster`): düz, çift yüz, siyah-beyaz, renkli. Belge gönderilmez, sadece format ve ayar kabulü sorulur.
 5. HA: API çalışıyor mu, Home Print kaydı `loaded` mı, sensörler ve mürekkep yüzdeleri, yükleme ucu token'sız isteği 401 ile, dosyasız isteği 400 ile reddediyor mu. Bunlar da hiçbir şey bastırmaz.
-6. Gerçek baskı: `--print` yoksa ATLANDI.
+6. Dönüştürme denemesi: 3 sayfalık örnek PDF Mac'te dönüştürülür (siyah-beyaz, çift yüz). Boyut ve süre yazılır, çıktı çözülüp sayfalar sayılır. Çift yüzde tek sayıda sayfanın arkasına boş sayfa eklendiği için 4 sayfa beklenir. Yazıcıya hiçbir şey gitmez.
+7. Gerçek baskı: `--print` yoksa ATLANDI.
 
 Çıktıyı okumak:
 
 - Her kontrol bir satır: `✅ GEÇTİ`, `❌ KALDI` ya da `⏭ ATLANDI`, yanında kısa açıklama.
 - En altta özet satırı var. Hiç `❌` yoksa çıkış kodu 0, varsa 1.
-- `⏭ ATLANDI (yazıcı bu formatı desteklemiyor — Plan 3)`: hata değil, not al yeter (aşağıda "Bilinen konular").
+- Bu gece en önemlileri 4f, 4i-4p ve 6. Sabahki işler bunlarla aynı formatı ve ayarları kullanıyor.
+- 4a-4e, 4g, 4h `⏭ ATLANDI (yazıcı bu formatı desteklemiyor — Plan 3)` olabilir: DeskJet PDF ve PNG almıyor. Hata değil, bu yüzden dönüştürme var.
 - `yazıcı Validate-Job uygulamıyor`: bazı yazıcılarda bu işlem yok. Hata değil, sadece 4. adım bu yazıcıda bir şey söylemiyor demek.
+- 6'da `❌` görürsen sabah `--print` kullanma, önce JSON'u Claude'a gönder.
 
-## 6. Sabahki komut (TEK sayfa basar)
+## 6. Sabahki komut (2 iş, en fazla 2 kağıt)
 
 Aynı komut, sonuna `--print` ekle, JSON adını değiştir:
 
 ```bash
-~/homeprint-venv/bin/python remote_check.py \
+cd ~/home-print
+~/homeprint-venv/bin/python scripts/remote_check.py \
   --printer <yazıcı-ip> \
   --ha http://<ha-tailscale-ip>:8123 \
   --token "$HA_TOKEN" \
@@ -89,15 +107,22 @@ Aynı komut, sonuna `--print` ekle, JSON adını değiştir:
   --json ~/Desktop/homeprint-sabah.json
 ```
 
-- Basmadan önce `⚠️ DİKKAT` satırı çıkar. Soru sormaz, hemen gönderir.
-- Tek sayfalık küçük bir PDF gider, iş adı "Home Print uzaktan test".
-- Script her 3 sn'de işin durumunu sorar, en fazla 180 sn bekler.
+- Gece yapılan bütün kontroller yine baştan yapılır, baskılar en sonda gelir.
+- Basmadan önce `⚠️ DİKKAT: ... 2 iş, en fazla 2 kağıt` satırı çıkar. Soru sormaz, hemen gönderir.
+- İşler sırayla gider:
+  - 7a: JPEG tek sayfa, iş adı "Home Print test 1/2 — JPEG".
+  - 7b: 2 sayfalık örnek PDF, dönüştürülmüş (DeskJet'te `image/pwg-raster`), çift yüz (uzun kenar), siyah-beyaz, tek kağıt. İş adı "Home Print test 2/2 — PDF çift taraf".
+- Her işten önce yazıcının boşta olduğuna ve iş kabul ettiğine bakılır. Meşgulse en fazla 60 sn beklenir. Durmuşsa, iş kabul etmiyorsa ya da Validate-Job o işin ayarlarını reddederse iş hiç gönderilmez, `⏭ ATLANDI` olur.
+- Script her 3 sn'de işin durumunu sorar, iş başına en fazla 180 sn bekler.
 - Sadece yazıcı `completed` derse GEÇTİ. `aborted`, `canceled` ya da süre dolarsa KALDI.
+- 7b'de `impressions: 2` görmen lazım: kağıdın iki yüzüne de basıldı demek. Farklıysa satırda `FARKLI` yazar.
+- Çift yüz desteklenmiyorsa 7b tek yüz basar ve 2 kağıt harcar. Uyarı satırındaki kağıt sayısı buna göre yazılır.
 - KALDI olursa komutu hemen tekrar çalıştırma. İş yine de basılmış olabilir, önce çıktıdaki `job-state-reasons`'a bak.
+- Evde biri varsa kağıtlara bakabilir ama gerekmiyor: her sayfada büyük harfle test numarası ve üstte "↑ ÜST" oku var.
 
-## 7. Claude'a ne yapıştıracaksın
+## 7. Claude'a ne göndereceksin
 
-- `homeprint-gece.json` (sabah da `homeprint-sabah.json`) dosyasının tamamını yapıştır.
+- `homeprint-gece.json` dosyasını (sabah da `homeprint-sabah.json`) sohbete ekle ya da içeriğini yapıştır.
 - İçinde bütün sonuçlar ve yazıcının ham özellikleri var. Seri numarası, `printer-location` ve `printer-uuid` `<gizlendi>` ile değiştiriliyor. Token hiç yazılmıyor.
 - Terminal çıktısını da yapıştırırsan iyi olur, şart değil.
 
@@ -125,6 +150,6 @@ Script'in 5d ve 5e kontrolleri bu tablonun 401 ve 400 satırlarını kullanıyor
 
 ## Bilinen konular
 
-- **PDF desteklemeyen yazıcılar:** `document-format-supported` listesinde `application/pdf` olmayan yazıcılarda PDF yazdırınca `format_not_supported` ile **422** döner. Bu, Plan 3'te (dönüştürme) çözülecek. Script'in 2. kontrolünde "PDF: YOK" görürsen bunu bekle; hata sayılmaz.
+- **PDF desteklemeyen yazıcılar:** `document-format-supported` listesinde `application/pdf` yoksa PDF, PWG raster ya da URF'ye dönüştürülerek gönderilir (Plan 3). Script'in 2. kontrolünde "PDF: YOK" görürsen bunu bekle; hata sayılmaz. 4m-4p ve 6 dönüştürmenin çalıştığını gösterir.
 - **Elle eklenen yazıcıda kendinden imzalı sertifika:** Yazıcıyı elle ve ipps (TLS) ile eklediysen ve sertifika kendinden imzalıysa HA bağlantı kuramaz. Çözüm: ekleme formunda **"Sertifikayı doğrula"** seçeneğini kapat. Varsayılan olarak açıktır. (Script yazıcı sertifikasını zaten doğrulamıyor, o yüzden script'te bu sorun görünmez.)
 - **Yazıcı uykudaysa:** 1. ya da 2. kontrol zaman aşımına düşebilir. Birkaç dakika sonra tekrar dene; ilk istek çoğu zaman yazıcıyı uyandırır.
