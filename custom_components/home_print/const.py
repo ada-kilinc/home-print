@@ -21,6 +21,7 @@ PRINT_TIMEOUT = 300
 PRINT_TIMEOUT_PER_PAGE = 15
 
 EVENT_JOB = "home_print_job"
+EVENT_SCAN = "home_print_scan"
 
 CONF_BASE_PATH = "base_path"
 CONF_MAX_FILE_MB = "max_file_mb"
@@ -31,6 +32,14 @@ CONF_DEFAULT_COLOR_MODE = "default_color_mode"
 CONF_HISTORY_DAYS = "history_days"
 DEFAULT_HISTORY_DAYS = 7
 MAX_HISTORY_DAYS = 90
+# Days a scan (and its record) is kept in the media folder; 0 keeps it forever.
+CONF_SCAN_DAYS = "scan_days"
+DEFAULT_SCAN_DAYS = 30
+MAX_SCAN_DAYS = 3650
+# Total size of archived scans in MB; oldest go first when exceeded; 0 = no cap.
+CONF_SCAN_MAX_MB = "scan_max_mb"
+DEFAULT_SCAN_MAX_MB = 2000
+CONF_SCANNER_URL = "scanner_url"
 
 __all__ = [
     "CONF_ADMIN_ONLY",
@@ -41,17 +50,24 @@ __all__ = [
     "CONF_HOST",
     "CONF_MAX_FILE_MB",
     "CONF_PORT",
+    "CONF_SCANNER_URL",
+    "CONF_SCAN_DAYS",
     "CONF_SCAN_INTERVAL",
+    "CONF_SCAN_MAX_MB",
     "CONF_SSL",
     "CONF_VERIFY_SSL",
     "DEFAULT_HISTORY_DAYS",
     "DEFAULT_MAX_FILE_MB",
     "DEFAULT_PATH",
     "DEFAULT_PORT",
+    "DEFAULT_SCAN_DAYS",
     "DEFAULT_SCAN_INTERVAL",
+    "DEFAULT_SCAN_MAX_MB",
     "DOMAIN",
     "EVENT_JOB",
+    "EVENT_SCAN",
     "MAX_HISTORY_DAYS",
+    "MAX_SCAN_DAYS",
     "PRINT_TIMEOUT",
     "PRINT_TIMEOUT_PER_PAGE",
 ]
