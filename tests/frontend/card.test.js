@@ -1957,6 +1957,65 @@ describe("scan", () => {
     expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(polls);
   });
 
+  it("cancel button stops a running scan", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStates: [scanState({ pages: 0 })] });
+    const card = await mount(hass);
+    await openPanel(card);
+    expect(visible(card, "scan-cancel")).toBe(false);
+    role(card, "scan-start").click();
+    await flush();
+    expect(visible(card, "scan-cancel")).toBe(true);
+    expect(text(card, "scan-cancel")).toBe("İptal");
+    role(card, "scan-cancel").click();
+    role(card, "scan-cancel").click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scan/cancel")).toEqual([
+      { type: "home_print/scan/cancel", entry_id: "deskjet", scan_id: "s1" },
+    ]);
+    expect(text(card, "scan-message")).toBe("Tarama iptal edildi.");
+    expect(visible(card, "scan-cancel")).toBe(false);
+    expect(role(card, "scan-start").disabled).toBe(false);
+    const polls = wsCalls(hass, "home_print/scan/state").length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(polls);
+    const helpers = HomePrintCard.helpers;
+    expect(helpers.scanErrorText("en", "canceled")).toBe("Scan canceled.");
+  });
+
+  it("failed cancel keeps following the scan", async () => {
+    const record = scanRecord();
+    const hass = makeHass({
+      printers: [scanPrinter()],
+      scanStates: [scanState({ state: "done", pages: 1, record })],
+      scanCancel: { error: "unknown_error" },
+    });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    role(card, "scan-cancel").click();
+    await flush();
+    expect(role(card, "scan-cancel").disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card, "scan-message")).toBe("Tarama hazır ✓");
+  });
+
+  it("poll limit counts from the last progress", async () => {
+    const states = [];
+    // 12 minutes of slowly growing pages, then 10 minutes without change.
+    for (let i = 1; i <= 12; i++) states.push(...Array(40).fill(scanState({ pages: i })));
+    states.push(scanState({ pages: 12 }));
+    const hass = makeHass({ printers: [scanPrinter()], scanStates: states });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(12 * 60 * 1000);
+    expect(text(card, "scan-message")).toBe("Taranıyor… (13. sayfa)");
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 3000);
+    expect(text(card, "scan-message")).toBe("Tarama çok uzun sürdü, yazıcıya bak.");
+  });
+
   it("busy error shown", async () => {
     const hass = makeHass({ printers: [scanPrinter()], scanStart: { error: "scanner_busy" } });
     const card = await mount(hass);

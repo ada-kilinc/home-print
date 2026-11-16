@@ -9,7 +9,7 @@
  *
  * A printer with a scanner also gets a Scan button under Print: it opens a
  * panel that starts `home_print/scan/start`, polls `home_print/scan/state`
- * and shows the result (preview, rename, download, add page, delete). The
+ * (stopped with `home_print/scan/cancel`) and shows the result (preview, rename, download, add page, delete). The
  * history popup then has a second tab listing `home_print/scans`.
  */
 
@@ -38,6 +38,7 @@ const PREVIEW_RESIGN_MS = 240 * 1000;
 const PREVIEW_MARGIN = "800px 0px";
 const DOWNLOAD_SIGN_SECONDS = 60;
 const SCAN_POLL_MS = 1500;
+// The card stops following a scan that shows no progress for this long.
 const SCAN_POLL_LIMIT_MS = 10 * 60 * 1000;
 // A destructive button asks once ("Sure?") and forgets after this long.
 const CONFIRM_MS = 4 * 1000;
@@ -54,6 +55,7 @@ const SCAN_ERRORS = [
   "no_scanner",
   "unauthorized",
   "scan_failed",
+  "canceled",
 ];
 // Poll answers that mean the scan can no longer be followed.
 const FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
@@ -222,6 +224,7 @@ const STRINGS = {
     scan_format_jpeg: "JPEG",
     scan_dpi: "{n} dpi",
     scan_start: "Taramayı başlat",
+    scan_cancel: "İptal",
     scan_scanning: "Taranıyor…",
     scan_scanning_page: "Taranıyor… ({n}. sayfa)",
     scan_saving: "Kaydediliyor…",
@@ -254,6 +257,7 @@ const STRINGS = {
     scan_error_no_scanner: "Bu yazıcıda tarayıcı yok.",
     scan_error_unauthorized: "Bu yazıcıda yalnızca yöneticiler tarayabilir.",
     scan_error_scan_failed: "Tarama yapılamadı. Birazdan tekrar dene.",
+    scan_error_canceled: "Tarama iptal edildi.",
   },
   en: {
     editor_printer: "Printer",
@@ -353,6 +357,7 @@ const STRINGS = {
     scan_format_jpeg: "JPEG",
     scan_dpi: "{n} dpi",
     scan_start: "Start scan",
+    scan_cancel: "Cancel",
     scan_scanning: "Scanning…",
     scan_scanning_page: "Scanning… (page {n})",
     scan_saving: "Saving…",
@@ -385,6 +390,7 @@ const STRINGS = {
     scan_error_no_scanner: "This printer has no scanner.",
     scan_error_unauthorized: "Only administrators can scan on this printer.",
     scan_error_scan_failed: "The scan failed. Try again shortly.",
+    scan_error_canceled: "Scan canceled.",
   },
 };
 
@@ -1046,6 +1052,9 @@ const TEMPLATE = `
           </label>
         </div>
         <button type="button" class="print" data-role="scan-start" data-t="scan_start"></button>
+        <button type="button" class="file-button" data-role="scan-cancel" hidden>
+          <span data-t="scan_cancel"></span>
+        </button>
         <div class="message" data-role="scan-message" aria-live="polite"></div>
         <div class="scan-result" data-role="scan-result" hidden>
           <div class="scan-page" data-role="scan-page"></div>
@@ -1176,6 +1185,7 @@ class HomePrintCard extends HTMLElement {
     this._role("scan-toggle").addEventListener("click", () => this._onScanToggle());
     this._role("scan-source").addEventListener("change", () => this._update());
     this._role("scan-start").addEventListener("click", () => this._onScanStart());
+    this._role("scan-cancel").addEventListener("click", () => this._onScanCancel());
     this._role("scan-add").addEventListener("click", () => this._onScanAdd());
     this._role("scan-download").addEventListener("click", () => this._onScanDownload());
     const scanDelete = this._role("scan-delete");
@@ -2093,7 +2103,8 @@ class HomePrintCard extends HTMLElement {
 
   async _startScan(entryId, request, appendPages = null) {
     const lang = pickLanguage(this._hass);
-    const scan = { entryId, scanId: null, started: Date.now(), appendPages };
+    const now = Date.now();
+    const scan = { entryId, scanId: null, started: now, progressAt: now, appendPages };
     this._scan = scan;
     this._disarmAll();
     // A new document replaces the result shown; an added page keeps it.
@@ -2134,6 +2145,7 @@ class HomePrintCard extends HTMLElement {
       entryId: printer.entry_id,
       scanId: id,
       started: Date.now(),
+      progressAt: Date.now(),
       appendPages: null,
       resumed: true,
     };
@@ -2155,7 +2167,9 @@ class HomePrintCard extends HTMLElement {
     const scan = this._scan;
     if (!scan?.scanId || !this._hass) return;
     const lang = pickLanguage(this._hass);
-    if (Date.now() - scan.started >= SCAN_POLL_LIMIT_MS) {
+    // Limit the time without progress, not the whole scan: a long ADF batch
+    // keeps changing its page count.
+    if (Date.now() - scan.progressAt >= SCAN_POLL_LIMIT_MS) {
       this._endScan(t(lang, "scan_timeout"), "error");
       return;
     }
@@ -2184,6 +2198,11 @@ class HomePrintCard extends HTMLElement {
 
   _onScanState(scan, state) {
     const lang = pickLanguage(this._hass);
+    const progress = `${state?.state}:${state?.pages}`;
+    if (progress !== scan.progressKey) {
+      scan.progressKey = progress;
+      scan.progressAt = Date.now();
+    }
     switch (state?.state) {
       case "done": {
         const record = state.record;
@@ -2201,7 +2220,10 @@ class HomePrintCard extends HTMLElement {
         return;
       }
       case "error":
-        this._endScan(scanErrorText(lang, state.error), "error");
+        this._endScan(
+          scanErrorText(lang, state.error),
+          state.error === "canceled" ? "info" : "error",
+        );
         return;
       case "saving":
         this._scanMessage = { text: t(lang, "scan_saving"), kind: "info" };
@@ -2215,6 +2237,37 @@ class HomePrintCard extends HTMLElement {
     }
     this._update();
     if (this.isConnected) this._scheduleScanPoll();
+  }
+
+  // Stop the running scan; the server closes the scanner's job.
+  async _onScanCancel() {
+    const scan = this._scan;
+    if (!scan?.scanId || scan.canceling || !this._hass) return;
+    scan.canceling = true;
+    this._update();
+    let state;
+    try {
+      state = (
+        await this._hass.callWS({
+          type: "home_print/scan/cancel",
+          entry_id: scan.entryId,
+          scan_id: scan.scanId,
+        })
+      )?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
+        this._endScan(t(pickLanguage(this._hass), "scan_lost"), "error");
+        return;
+      }
+      // Polling carries on and reports how the scan ends.
+      scan.canceling = false;
+      this._update();
+      return;
+    }
+    if (this._scan !== scan) return;
+    scan.canceling = false;
+    this._onScanState(scan, state);
   }
 
   _endScan(text, kind) {
@@ -2543,6 +2596,9 @@ class HomePrintCard extends HTMLElement {
     const busy = this._scanBusy();
     const offline = scanner.available === false;
     this._role("scan-start").disabled = busy || !editable || offline;
+    const cancel = this._role("scan-cancel");
+    cancel.hidden = !busy || !editable;
+    cancel.disabled = !this._scan?.scanId || Boolean(this._scan?.canceling);
     for (const name of SCAN_SELECTS) this._role(name).disabled = busy;
     const message = this._role("scan-message");
     let shown = this._scanMessage;

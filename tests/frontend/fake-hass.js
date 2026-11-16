@@ -128,6 +128,8 @@ export function scanState(overrides = {}) {
  * scans/rename). `scanStart` is the scan/start answer (a state, or an object
  * with `error` to reject); `scanStates` is a queue of scan/state answers like
  * `jobs`. `scanDeleteError` and `renameError` make those calls reject.
+ * `scanCancel` is the scan/cancel answer (a state, or an object with `error`
+ * to reject); by default the scan comes back canceled.
  */
 export function makeHass({
   printers = [deskjetPrinter()],
@@ -145,6 +147,7 @@ export function makeHass({
   scanStates = [],
   scanDeleteError = null,
   renameError = null,
+  scanCancel = null,
 } = {}) {
   const jobQueue = [...jobs];
   const scanQueue = [...scanStates];
@@ -186,6 +189,12 @@ export function makeHass({
         if (!next) throw { code: "not_found", message: "not found" };
         if (next.code) throw { code: next.code, message: next.code };
         return { scan: next };
+      }
+      if (msg.type === "home_print/scan/cancel") {
+        if (scanCancel?.error) throw { code: scanCancel.error, message: scanCancel.error };
+        return {
+          scan: scanCancel ?? scanState({ scan_id: msg.scan_id, state: "error", error: "canceled" }),
+        };
       }
       if (msg.type === "home_print/scans") {
         return { entries: scanStore.map((record) => ({ ...record })) };
