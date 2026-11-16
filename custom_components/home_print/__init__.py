@@ -22,6 +22,7 @@ from .const import (
 )
 from .coordinator import HomePrintCoordinator
 from .frontend import async_register_frontend
+from .history import PrintHistory
 from .http import HomePrintUploadView
 from .services import async_setup_services
 from .websocket import async_setup_websocket
@@ -37,6 +38,7 @@ class HomePrintData:
 
     client: HomePrintClient
     coordinator: HomePrintCoordinator
+    history: PrintHistory
 
 
 type HomePrintConfigEntry = ConfigEntry[HomePrintData]
@@ -65,7 +67,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
     coordinator = HomePrintCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
 
-    entry.runtime_data = HomePrintData(client=client, coordinator=coordinator)
+    history = PrintHistory(hass, entry)
+    await history.async_load()
+
+    entry.runtime_data = HomePrintData(
+        client=client, coordinator=coordinator, history=history
+    )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
@@ -73,7 +80,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
 
 async def async_unload_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        # A reload must not lose records still waiting for the delayed save.
+        await entry.runtime_data.history.async_flush()
+    return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> None:
+    """Delete the entry's history file."""
+    await PrintHistory(hass, entry).async_remove()
 
 
 async def _async_options_updated(

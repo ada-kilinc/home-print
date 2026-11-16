@@ -250,6 +250,9 @@ def async_report_result(
 ) -> None:
     """Fire EVENT_JOB and update the last job. Never includes file contents."""
     user_name = _user_name(user)
+    converted_to = (
+        prepared.document_format if prepared and not prepared.send_page_ranges else None
+    )
     hass.bus.async_fire(
         EVENT_JOB,
         {
@@ -260,13 +263,18 @@ def async_report_result(
             "job_id": result.job_id if result else None,
             "result": "sent" if error is None else "error",
             "error": error.key if error else None,
-            "converted_to": (
-                prepared.document_format
-                if prepared and not prepared.send_page_ranges
-                else None
-            ),
+            "converted_to": converted_to,
             "pages": prepared.page_count if prepared else None,
         },
+    )
+    entry.runtime_data.history.add(
+        file_name=file_name,
+        user=user_name,
+        job_id=result.job_id if result else None,
+        state="sent" if error is None else "error",
+        pages=prepared.page_count if prepared else None,
+        converted_to=converted_to,
+        error=error.key if error else None,
     )
     entry.runtime_data.coordinator.async_set_last_job(
         LastJob(

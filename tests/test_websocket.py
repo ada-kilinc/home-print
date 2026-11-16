@@ -299,3 +299,137 @@ async def test_job_negative_id_invalid_format(hass, mock_client, hass_ws_client)
     code = await _job_error(hass, hass_ws_client, entry.entry_id, job_id=-1)
     assert code == "invalid_format"
     mock_client.get_job.assert_not_awaited()
+
+
+async def _history_call(hass, hass_ws_client, msg_type, token=None, **fields):
+    ws = await hass_ws_client(hass, token) if token else await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": f"home_print/{msg_type}", **fields})
+    return await ws.receive_json()
+
+
+def _add_history(entry, name, job_id=None):
+    return entry.runtime_data.history.add(
+        file_name=name,
+        user="Ada",
+        job_id=job_id,
+        state="sent",
+        pages=None,
+        converted_to=None,
+        error=None,
+    )
+
+
+async def test_history_lists_newest_first(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    _add_history(entry, "one.pdf")
+    _add_history(entry, "two.pdf")
+    msg = await _history_call(hass, hass_ws_client, "history", entry_id=entry.entry_id)
+    assert msg["success"], msg
+    assert [e["file_name"] for e in msg["result"]["entries"]] == [
+        "two.pdf",
+        "one.pdf",
+    ]
+
+
+async def test_history_unknown_entry_not_found(hass, mock_client, hass_ws_client):
+    await setup_entry(hass)
+    msg = await _history_call(hass, hass_ws_client, "history", entry_id="nope")
+    assert msg["error"]["code"] == "not_found"
+    msg = await _history_call(
+        hass, hass_ws_client, "history/delete", entry_id="nope", history_id="x"
+    )
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_history_delete(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    record = _add_history(entry, "one.pdf")
+    msg = await _history_call(
+        hass,
+        hass_ws_client,
+        "history/delete",
+        entry_id=entry.entry_id,
+        history_id=record["id"],
+    )
+    assert msg["success"], msg
+    assert msg["result"] == {"deleted": True}
+    assert entry.runtime_data.history.entries() == []
+    msg = await _history_call(
+        hass,
+        hass_ws_client,
+        "history/delete",
+        entry_id=entry.entry_id,
+        history_id=record["id"],
+    )
+    assert msg["result"] == {"deleted": False}
+
+
+async def test_history_admin_only_read_ok_delete_unauthorized(
+    hass, mock_client, hass_ws_client, hass_read_only_access_token
+):
+    entry = await setup_entry(hass, make_entry(**{CONF_ADMIN_ONLY: True}))
+    record = _add_history(entry, "one.pdf")
+    msg = await _history_call(
+        hass,
+        hass_ws_client,
+        "history",
+        hass_read_only_access_token,
+        entry_id=entry.entry_id,
+    )
+    assert msg["success"], msg
+    assert len(msg["result"]["entries"]) == 1
+    msg = await _history_call(
+        hass,
+        hass_ws_client,
+        "history/delete",
+        hass_read_only_access_token,
+        entry_id=entry.entry_id,
+        history_id=record["id"],
+    )
+    assert not msg["success"]
+    assert msg["error"]["code"] == "unauthorized"
+    assert len(entry.runtime_data.history.entries()) == 1
+
+
+async def test_job_finished_updates_history(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    record = _add_history(entry, "one.pdf", job_id=42)
+    mock_client.get_job = AsyncMock(
+        return_value=JobStatus(
+            job_id=42, state="completed", reasons=(), impressions=1, sheets=None
+        )
+    )
+    ws = await hass_ws_client(hass)
+    await ws.send_json(
+        {"id": 1, "type": "home_print/job", "entry_id": entry.entry_id, "job_id": 42}
+    )
+    assert (await ws.receive_json())["success"]
+    [stored] = entry.runtime_data.history.entries()
+    assert stored["id"] == record["id"]
+    assert stored["state"] == "completed"
+
+
+async def test_job_processing_keeps_history_state(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    _add_history(entry, "one.pdf", job_id=42)
+    mock_client.get_job = AsyncMock(
+        return_value=JobStatus(
+            job_id=42, state="processing", reasons=(), impressions=None, sheets=None
+        )
+    )
+    ws = await hass_ws_client(hass)
+    await ws.send_json(
+        {"id": 1, "type": "home_print/job", "entry_id": entry.entry_id, "job_id": 42}
+    )
+    assert (await ws.receive_json())["success"]
+    assert entry.runtime_data.history.entries()[0]["state"] == "sent"
+
+
+async def test_job_gone_keeps_history_state(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    _add_history(entry, "one.pdf", job_id=42)
+    mock_client.get_job = AsyncMock(
+        side_effect=PrinterRejected("client-error-not-found")
+    )
+    await _job_error(hass, hass_ws_client, entry.entry_id, job_id=42)
+    assert entry.runtime_data.history.entries()[0]["state"] == "sent"

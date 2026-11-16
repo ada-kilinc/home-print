@@ -19,11 +19,16 @@ if TYPE_CHECKING:
     from . import HomePrintConfigEntry
 
 
+_FINAL_JOB_STATES = ("completed", "aborted", "canceled")
+
+
 @callback
 def async_setup_websocket(hass: HomeAssistant) -> None:
     """Register the card's WebSocket commands."""
     websocket_api.async_register_command(hass, ws_printers)
     websocket_api.async_register_command(hass, ws_job)
+    websocket_api.async_register_command(hass, ws_history)
+    websocket_api.async_register_command(hass, ws_history_delete)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list[HomePrintConfigEntry]:
@@ -185,6 +190,8 @@ async def ws_job(
     except HomePrintError as err:
         connection.send_error(msg["id"], "printer_error", str(err))
         return
+    if job.state in _FINAL_JOB_STATES:
+        entry.runtime_data.history.update_state(job.job_id, job.state)
     connection.send_result(
         msg["id"],
         {
@@ -196,4 +203,54 @@ async def ws_job(
                 "sheets": job.sheets,
             }
         },
+    )
+
+
+def _history_entry(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> HomePrintConfigEntry | None:
+    entry = next(
+        (e for e in _loaded_entries(hass) if e.entry_id == msg["entry_id"]), None
+    )
+    if entry is None:
+        connection.send_error(
+            msg["id"], websocket_api.ERR_NOT_FOUND, "Printer not found"
+        )
+    return entry
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "home_print/history", vol.Required("entry_id"): str}
+)
+@callback
+def ws_history(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Return the printer's print history, newest first."""
+    if (entry := _history_entry(hass, connection, msg)) is None:
+        return
+    connection.send_result(msg["id"], {"entries": entry.runtime_data.history.entries()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/history/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("history_id"): str,
+    }
+)
+@callback
+def ws_history_delete(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Delete one history record."""
+    if (entry := _history_entry(hass, connection, msg)) is None:
+        return
+    if not _can_print(entry, connection):
+        connection.send_error(
+            msg["id"], websocket_api.ERR_UNAUTHORIZED, "Administrator required"
+        )
+        return
+    connection.send_result(
+        msg["id"], {"deleted": entry.runtime_data.history.delete(msg["history_id"])}
     )

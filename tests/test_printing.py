@@ -633,3 +633,39 @@ def test_new_error_messages_are_translated(lang):
     assert set(messages) == set(strings)
     assert "{limit}" in messages["output_too_large"]["message"]
     assert "{limit}" in messages["image_too_large"]["message"]
+
+
+async def test_async_print_success_adds_history(hass, mock_client, hass_admin_user):
+    entry = await setup_entry(hass)
+    await async_print(
+        hass,
+        entry,
+        PDF,
+        file_name="report.pdf",
+        options=PrintOptions(),
+        user=hass_admin_user,
+    )
+    [record] = entry.runtime_data.history.entries()
+    assert record["file_name"] == "report.pdf"
+    assert record["user"] == hass_admin_user.name
+    assert record["job_id"] == 42
+    assert record["state"] == "sent"
+    assert record["error"] is None
+
+
+async def test_async_print_error_adds_history(hass, mock_client):
+    entry = await setup_entry(hass)
+    with pytest.raises(UnsupportedFileType):
+        await async_print(
+            hass,
+            entry,
+            b"nope",
+            file_name="a.txt",
+            options=PrintOptions(),
+            user=None,
+        )
+    [record] = entry.runtime_data.history.entries()
+    assert record["state"] == "error"
+    assert record["error"] == "unsupported_file_type"
+    assert record["job_id"] is None
+    assert record["user"] == "Home Assistant"
