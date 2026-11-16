@@ -247,8 +247,14 @@ def async_report_result(
     result: JobResult | None = None,
     error: PrintError | None = None,
     prepared: pipeline.PreparedJob | None = None,
+    data: bytes | None = None,
 ) -> None:
-    """Fire EVENT_JOB and update the last job. Never includes file contents."""
+    """Fire EVENT_JOB, update the last job and add a history record.
+
+    ``data`` is the original file of a job that was sent; the history keeps
+    it (written in the background) when files are kept. The event never
+    includes file contents.
+    """
     user_name = _user_name(user)
     converted_to = (
         prepared.document_format if prepared and not prepared.send_page_ranges else None
@@ -275,6 +281,8 @@ def async_report_result(
         pages=prepared.page_count if prepared else None,
         converted_to=converted_to,
         error=error.key if error else None,
+        data=data if error is None else None,
+        mime=sniff_format(data) if data is not None and error is None else None,
     )
     entry.runtime_data.coordinator.async_set_last_job(
         LastJob(
@@ -311,7 +319,13 @@ async def async_print(
         async_report_result(hass, entry, file_name=file_name, user=user, error=error)
         raise error from err
     async_report_result(
-        hass, entry, file_name=file_name, user=user, result=result, prepared=prepared
+        hass,
+        entry,
+        file_name=file_name,
+        user=user,
+        result=result,
+        prepared=prepared,
+        data=data,
     )
     return result
 

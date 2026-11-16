@@ -222,14 +222,18 @@ def _history_entry(
 @websocket_api.websocket_command(
     {vol.Required("type"): "home_print/history", vol.Required("entry_id"): str}
 )
-@callback
-def ws_history(
+@websocket_api.async_response
+async def ws_history(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Return the printer's print history, newest first."""
+    """Return the printer's print history, newest first.
+
+    Unknown page counts are read from kept files (in the executor) and cached.
+    """
     if (entry := _history_entry(hass, connection, msg)) is None:
         return
-    connection.send_result(msg["id"], {"entries": entry.runtime_data.history.entries()})
+    entries = await entry.runtime_data.history.async_entries()
+    connection.send_result(msg["id"], {"entries": entries})
 
 
 @websocket_api.websocket_command(
@@ -239,11 +243,11 @@ def ws_history(
         vol.Required("history_id"): str,
     }
 )
-@callback
-def ws_history_delete(
+@websocket_api.async_response
+async def ws_history_delete(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Delete one history record."""
+    """Delete one history record and its kept file."""
     if (entry := _history_entry(hass, connection, msg)) is None:
         return
     if not _can_print(entry, connection):
@@ -251,6 +255,5 @@ def ws_history_delete(
             msg["id"], websocket_api.ERR_UNAUTHORIZED, "Administrator required"
         )
         return
-    connection.send_result(
-        msg["id"], {"deleted": entry.runtime_data.history.delete(msg["history_id"])}
-    )
+    deleted = await entry.runtime_data.history.async_delete(msg["history_id"])
+    connection.send_result(msg["id"], {"deleted": deleted})

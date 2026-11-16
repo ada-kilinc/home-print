@@ -669,3 +669,30 @@ async def test_async_print_error_adds_history(hass, mock_client):
     assert record["error"] == "unsupported_file_type"
     assert record["job_id"] is None
     assert record["user"] == "Home Assistant"
+
+
+async def test_async_print_keeps_original_file(hass, mock_client):
+    entry = await setup_entry(hass)
+    data = blank_pdf(2)
+    await async_print(
+        hass, entry, data, file_name="r.pdf", options=PrintOptions(), user=None
+    )
+    await hass.async_block_till_done()
+    [record] = entry.runtime_data.history.entries()
+    assert record["file"] is True
+    assert record["mime"] == "application/pdf"
+    assert record["size"] == len(data)
+    assert entry.runtime_data.history.file_path(record["id"]).read_bytes() == data
+
+
+async def test_async_print_error_keeps_no_file(hass, mock_client):
+    entry = await setup_entry(hass)
+    mock_client.print_job.side_effect = CannotConnect("down")
+    with pytest.raises(PrintError):
+        await async_print(
+            hass, entry, PDF, file_name="r.pdf", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    [record] = entry.runtime_data.history.entries()
+    assert record["state"] == "error"
+    assert record["file"] is False

@@ -17,6 +17,7 @@ from custom_components.home_print.const import CONF_ADMIN_ONLY, CONF_MAX_FILE_MB
 from custom_components.home_print.models import JobStatus
 
 from .common import make_entry, setup_entry
+from .convert.samples import blank_pdf
 
 DESKJET = parse_printer(
     json.loads(
@@ -307,7 +308,7 @@ async def _history_call(hass, hass_ws_client, msg_type, token=None, **fields):
     return await ws.receive_json()
 
 
-def _add_history(entry, name, job_id=None):
+def _add_history(entry, name, job_id=None, data=None):
     return entry.runtime_data.history.add(
         file_name=name,
         user="Ada",
@@ -316,7 +317,41 @@ def _add_history(entry, name, job_id=None):
         pages=None,
         converted_to=None,
         error=None,
+        data=data,
+        mime="application/pdf" if data else None,
     )
+
+
+async def test_history_counts_pages_from_kept_file(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    _add_history(entry, "two.pdf", data=blank_pdf(2))
+    _add_history(entry, "none.pdf")
+    await hass.async_block_till_done()
+    msg = await _history_call(hass, hass_ws_client, "history", entry_id=entry.entry_id)
+    assert msg["success"], msg
+    first, second = msg["result"]["entries"]
+    assert first["file_name"] == "none.pdf"
+    assert (first["pages"], first["file"]) == (None, False)
+    assert (second["pages"], second["file"]) == (2, True)
+    assert second["size"] > 0
+    assert second["mime"] == "application/pdf"
+
+
+async def test_history_delete_removes_file(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    record = _add_history(entry, "one.pdf", data=blank_pdf(1))
+    await hass.async_block_till_done()
+    path = entry.runtime_data.history.file_path(record["id"])
+    assert path.exists()
+    msg = await _history_call(
+        hass,
+        hass_ws_client,
+        "history/delete",
+        entry_id=entry.entry_id,
+        history_id=record["id"],
+    )
+    assert msg["result"] == {"deleted": True}
+    assert not path.exists()
 
 
 async def test_history_lists_newest_first(hass, mock_client, hass_ws_client):

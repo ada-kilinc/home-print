@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .client import HomePrintClient
@@ -24,12 +26,16 @@ from .coordinator import HomePrintCoordinator
 from .frontend import async_register_frontend
 from .history import PrintHistory
 from .http import HomePrintUploadView
+from .preview import HomePrintPreviewView
 from .services import async_setup_services
 from .websocket import async_setup_websocket
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+# Expired records and kept files are removed at least this often.
+HISTORY_CLEANUP_INTERVAL = timedelta(hours=6)
 
 
 @dataclass
@@ -49,6 +55,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_setup_services(hass)
     async_setup_websocket(hass)
     hass.http.register_view(HomePrintUploadView())
+    hass.http.register_view(HomePrintPreviewView())
     await async_register_frontend(hass)
     return True
 
@@ -69,12 +76,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
 
     history = PrintHistory(hass, entry)
     await history.async_load()
+    await history.async_cleanup()
 
     entry.runtime_data = HomePrintData(
         client=client, coordinator=coordinator, history=history
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    entry.async_on_unload(
+        async_track_time_interval(hass, history.async_cleanup, HISTORY_CLEANUP_INTERVAL)
+    )
     return True
 
 
@@ -88,12 +99,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> None:
-    """Delete the entry's history file."""
+    """Delete the entry's history file and its kept files."""
     await PrintHistory(hass, entry).async_remove()
 
 
 async def _async_options_updated(
     hass: HomeAssistant, entry: HomePrintConfigEntry
 ) -> None:
-    """Reload so a changed scan interval takes effect."""
+    """Reload so changed options (scan interval, kept days) take effect."""
     await hass.config_entries.async_reload(entry.entry_id)

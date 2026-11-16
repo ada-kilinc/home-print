@@ -463,6 +463,94 @@ def fit_jpeg(data: bytes, limits: JpegLimits | None) -> bytes:
         )
 
 
+# --- previews -----------------------------------------------------------------
+
+PREVIEW_DPI = 100
+PREVIEW_MAX_WIDTH = 1200
+PREVIEW_QUALITY = 80
+_POINTS_PER_INCH = 72
+
+
+def preview_jpeg(
+    data: bytes,
+    page: int,
+    *,
+    dpi: int = PREVIEW_DPI,
+    max_width: int = PREVIEW_MAX_WIDTH,
+    quality: int = PREVIEW_QUALITY,
+) -> bytes:
+    """One page as a JPEG for on-screen preview (not a print sheet).
+
+    PDF pages render at ``dpi``, images keep their size; both shrink to at
+    most ``max_width`` pixels wide. A page outside the document raises
+    ``InvalidDocument("no_pages")``.
+    """
+    if page < 1:
+        raise InvalidDocument("no_pages")
+    if _is_pdf(data):
+        image = _preview_pdf_page(data, page, dpi, max_width)
+    else:
+        if page != 1:
+            raise InvalidDocument("no_pages")
+        image = _preview_image(data, max_width)
+    return _encode_jpeg(image, quality)
+
+
+def _preview_pdf_page(data: bytes, page: int, dpi: int, max_width: int) -> Image.Image:
+    with _PDFIUM_LOCK:
+        pdf = _open_pdf(data)
+        try:
+            if page > len(pdf):
+                raise InvalidDocument("no_pages")
+            try:
+                pdf_page = pdf[page - 1]
+            except pdfium.PdfiumError as err:
+                raise InvalidDocument("corrupt") from err
+            try:
+                width, _ = pdf_page.get_size()
+                if width <= 0:
+                    raise InvalidDocument("corrupt")
+                scale = min(dpi / _POINTS_PER_INCH, max_width / width)
+                try:
+                    bitmap = pdf_page.render(
+                        scale=scale,
+                        rev_byteorder=True,
+                        fill_color=(255, 255, 255, 255),
+                    )
+                except pdfium.PdfiumError as err:
+                    raise InvalidDocument("corrupt") from err
+                try:
+                    image = bitmap.to_pil().copy()
+                finally:
+                    bitmap.close()
+            finally:
+                pdf_page.close()
+        finally:
+            pdf.close()
+    if image.width > max_width:  # PDFium rounds sizes up
+        image = image.crop((0, 0, max_width, image.height))
+    return image.convert("RGB")
+
+
+def _preview_image(data: bytes, max_width: int) -> Image.Image:
+    image = _open_image(data, ["PNG", "JPEG"])
+    box = (max_width, max(1, MAX_IMAGE_PIXELS // max_width))
+    try:
+        if image.format == "JPEG":
+            image.draft("RGB", box)
+        flat = _flatten(image, box)
+    except (OSError, ValueError, SyntaxError) as err:
+        raise InvalidDocument("corrupt") from err
+    finally:
+        image.close()
+    if flat.width > max_width:  # EXIF rotation turned it after the shrink
+        flat = flat.resize(
+            _fit_size(flat.width, flat.height, max_width, box[1]),
+            Image.Resampling.LANCZOS,
+        )
+    return flat
+
+
 # --- page ranges --------------------------------------------------------------
 
 _RANGE = re.compile(r"^(\d*)-(\d*)$")

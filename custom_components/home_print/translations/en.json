@@ -36,7 +36,8 @@
           "default_color_mode": "Default color mode",
           "max_file_mb": "Max file size (MB)",
           "scan_interval": "Status refresh interval (seconds)",
-          "admin_only": "Only admins can print"
+          "admin_only": "Only admins can print",
+          "history_days": "Keep files (days)"
         }
       }
     }

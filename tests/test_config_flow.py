@@ -1,6 +1,8 @@
 """Config flow and options flow tests."""
 
+import json
 from ipaddress import ip_address
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +18,7 @@ from custom_components.home_print.const import (
     CONF_BASE_PATH,
     CONF_DEFAULT_COLOR_MODE,
     CONF_DEFAULT_SIDES,
+    CONF_HISTORY_DAYS,
     CONF_MAX_FILE_MB,
     CONF_SCAN_INTERVAL,
     DEFAULT_PATH,
@@ -220,6 +223,7 @@ async def test_options_flow_saves_values(hass, mock_client):
             CONF_MAX_FILE_MB: 50.0,
             CONF_SCAN_INTERVAL: 120.0,
             CONF_ADMIN_ONLY: True,
+            CONF_HISTORY_DAYS: 30.0,
         },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -229,9 +233,37 @@ async def test_options_flow_saves_values(hass, mock_client):
         CONF_MAX_FILE_MB: 50,
         CONF_SCAN_INTERVAL: 120,
         CONF_ADMIN_ONLY: True,
+        CONF_HISTORY_DAYS: 30,
     }
     assert isinstance(entry.options[CONF_MAX_FILE_MB], int)
     assert isinstance(entry.options[CONF_SCAN_INTERVAL], int)
+    assert isinstance(entry.options[CONF_HISTORY_DAYS], int)
+
+
+async def test_options_flow_history_days_default_and_range(hass, mock_client):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=UUID, data={CONF_HOST: "x"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = result["data_schema"].schema
+    [key] = [k for k in schema if k == CONF_HISTORY_DAYS]
+    assert key.default() == 7
+    config = schema[key].config
+    assert (config["min"], config["max"]) == (0, 90)
+
+
+def test_history_days_labels():
+    root = Path(__file__).parent.parent / "custom_components/home_print"
+    labels = {
+        name: json.loads((root / name).read_text())["options"]["step"]["init"]["data"][
+            CONF_HISTORY_DAYS
+        ]
+        for name in ("strings.json", "translations/en.json", "translations/tr.json")
+    }
+    assert labels == {
+        "strings.json": "Keep files (days)",
+        "translations/en.json": "Keep files (days)",
+        "translations/tr.json": "Dosyaları sakla (gün)",
+    }
 
 
 async def test_options_flow_auto_color_stores_none(hass, mock_client):

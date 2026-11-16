@@ -31,13 +31,16 @@ from .const import (
     CONF_BASE_PATH,
     CONF_DEFAULT_COLOR_MODE,
     CONF_DEFAULT_SIDES,
+    CONF_HISTORY_DAYS,
     CONF_MAX_FILE_MB,
     CONF_SCAN_INTERVAL,
+    DEFAULT_HISTORY_DAYS,
     DEFAULT_MAX_FILE_MB,
     DEFAULT_PATH,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_HISTORY_DAYS,
 )
 from .models import PrinterInfo, normalize_uuid
 
@@ -204,6 +207,7 @@ class HomePrintOptionsFlow(OptionsFlow):
                 **user_input,
                 CONF_MAX_FILE_MB: int(user_input[CONF_MAX_FILE_MB]),
                 CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                CONF_HISTORY_DAYS: int(user_input[CONF_HISTORY_DAYS]),
             }
             return self.async_create_entry(data=user_input)
 
@@ -247,6 +251,14 @@ class HomePrintOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_ADMIN_ONLY, default=opts.get(CONF_ADMIN_ONLY, False)
                 ): BooleanSelector(),
+                vol.Required(
+                    CONF_HISTORY_DAYS,
+                    default=opts.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=MAX_HISTORY_DAYS, step=1, mode=NumberSelectorMode.BOX
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

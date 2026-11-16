@@ -75,3 +75,11 @@ def mock_client():
                 patch(f"{module}.HomePrintClient", return_value=instance)
             )
         yield instance
+
+
+@pytest.fixture(autouse=True)
+def tmp_config_dir(request, tmp_path):
+    """Keep stored print files out of the shared test config folder."""
+    if "hass" in request.fixturenames:
+        request.getfixturevalue("hass").config.config_dir = str(tmp_path)
+    yield

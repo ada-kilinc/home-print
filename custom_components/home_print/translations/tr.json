@@ -36,7 +36,8 @@
           "default_color_mode": "Varsayılan renk modu",
           "max_file_mb": "En büyük dosya boyutu (MB)",
           "scan_interval": "Durum yenileme aralığı (saniye)",
-          "admin_only": "Sadece yöneticiler yazdırabilsin"
+          "admin_only": "Sadece yöneticiler yazdırabilsin",
+          "history_days": "Dosyaları sakla (gün)"
         }
       }
     }
