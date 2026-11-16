@@ -111,6 +111,9 @@ class FakeIPP:
         self.by_format = by_format or {}
         self.unsupported_by_format: dict[str, dict[str, Any]] = {}
         self.next_job_id = 7
+        self.duplex_jobs: set[int] = set()
+        # job-media-sheets-completed per finished job; None: not reported
+        self.sheets_reported: int | None = 1
 
     def use_deskjet(self) -> None:
         self.printer = copy.deepcopy(DESKJET)
@@ -134,18 +137,19 @@ class FakeIPP:
         if operation == IppOperation.PRINT_JOB:
             job_id = self.next_job_id
             self.next_job_id += 1
+            if message["job-attributes-tag"].get("sides", "one-sided") != "one-sided":
+                self.duplex_jobs.add(job_id)
             return ipp_response(0, job={"job-id": job_id, "job-state": 3})
         if operation == IppOperation.GET_JOB_ATTRIBUTES:
             job_id = message["operation-attributes-tag"]["job-id"]
-            return ipp_response(
-                0,
-                job={
-                    "job-id": job_id,
-                    "job-state": 9,
-                    "job-impressions-completed": 2 if job_id == 8 else 1,
-                    "job-media-sheets-completed": 1,
-                },
-            )
+            job = {
+                "job-id": job_id,
+                "job-state": 9,
+                "job-impressions-completed": 2 if job_id in self.duplex_jobs else 1,
+            }
+            if self.sheets_reported is not None:
+                job["job-media-sheets-completed"] = self.sheets_reported
+            return ipp_response(0, job=job)
         raise AssertionError(operation)
 
     def sent(self, operation):
@@ -237,7 +241,8 @@ async def test_print_flag_sends_exactly_two_jobs(fake_ipp, capsys):
     jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
     assert len(jobs) == 2
     formats = [j["operation-attributes-tag"]["document-format"] for j in jobs]
-    assert formats == ["image/jpeg", "application/pdf"]  # PDF printer: as is
+    # Duplex PDF first: the JPEG only goes once its sheet count is known.
+    assert formats == ["application/pdf", "image/jpeg"]  # PDF printer: as is
     assert code == 0
     assert "completed" in capsys.readouterr().out
 
@@ -250,7 +255,7 @@ async def test_deskjet_no_print_flag_sends_no_job(fake_ipp):
     assert code == 0
 
 
-async def test_deskjet_print_sends_jpeg_then_converted_duplex_pdf(fake_ipp, capsys):
+async def test_deskjet_print_sends_converted_duplex_pdf_then_jpeg(fake_ipp, capsys):
     fake_ipp.use_deskjet()
     code = await rc.run(rc.parse_args(["--printer", "10.0.0.5", "--print"]))
     out = capsys.readouterr().out
@@ -258,22 +263,22 @@ async def test_deskjet_print_sends_jpeg_then_converted_duplex_pdf(fake_ipp, caps
     assert len(jobs) == 2
     first, second = jobs
     op1, op2 = first["operation-attributes-tag"], second["operation-attributes-tag"]
-    assert op1["document-format"] == "image/jpeg"
-    assert op1["job-name"] == "Home Print test 1/2 — JPEG"
-    assert first["data"][:2] == b"\xff\xd8"
-    assert op2["document-format"] == "image/pwg-raster"
-    assert op2["job-name"] == "Home Print test 2/2 — PDF çift taraf"
-    attrs2 = second["job-attributes-tag"]
-    assert attrs2["sides"] == "two-sided-long-edge"
-    assert attrs2["print-color-mode"] == "monochrome"
-    assert first["job-attributes-tag"]["copies"] == 1
-    assert attrs2["copies"] == 1
-    assert second["data"][:4] == b"RaS2"
-    assert "page-ranges" not in attrs2
+    assert op1["document-format"] == "image/pwg-raster"
+    assert op1["job-name"] == "Home Print test 1/2 — PDF çift taraf"
+    attrs1 = first["job-attributes-tag"]
+    assert attrs1["sides"] == "two-sided-long-edge"
+    assert attrs1["print-color-mode"] == "monochrome"
+    assert attrs1["copies"] == 1
+    assert first["data"][:4] == b"RaS2"
+    assert "page-ranges" not in attrs1
+    assert op2["document-format"] == "image/jpeg"
+    assert op2["job-name"] == "Home Print test 2/2 — JPEG"
+    assert second["data"][:2] == b"\xff\xd8"
+    assert second["job-attributes-tag"]["copies"] == 1
     # validated with the same attributes right before sending
-    assert ("image/pwg-raster", attrs2) in fake_ipp.validated()
+    assert ("image/pwg-raster", attrs1) in fake_ipp.validated()
     assert "2 iş" in out and "en fazla 2 kağıt" in out
-    assert out.index("2 iş") < out.index("7a.")
+    assert out.index("2 iş") < out.index("7b.") < out.index("7a.")
     results = _by_num(out)
     assert "✅ GEÇTİ" in results["7a"]
     assert "✅ GEÇTİ" in results["7b"]
@@ -567,13 +572,13 @@ def test_load_convert_missing_dependency_names_it():
     assert "pypdfium2 yüklü değil" in reason
 
 
-def _second_job_pages(fake_ipp) -> int:
+def _duplex_job_pages(fake_ipp) -> int:
     jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
     assert len(jobs) == 2
-    second = jobs[1]
-    assert "sides" not in second["job-attributes-tag"]
-    assert second["operation-attributes-tag"]["document-format"] == "image/pwg-raster"
-    return rc.count_raster_pages(second["data"], "image/pwg-raster")
+    pdf_job = jobs[0]  # 7b goes first
+    assert "sides" not in pdf_job["job-attributes-tag"]
+    assert pdf_job["operation-attributes-tag"]["document-format"] == "image/pwg-raster"
+    return rc.count_raster_pages(pdf_job["data"], "image/pwg-raster")
 
 
 async def test_no_duplex_advertised_prints_front_page_only(fake_ipp, capsys):
@@ -581,7 +586,7 @@ async def test_no_duplex_advertised_prints_front_page_only(fake_ipp, capsys):
     fake_ipp.printer["sides-supported"] = ["one-sided"]
     code = await rc.run(rc.parse_args(["--printer", "h", "--print"]))
     out = capsys.readouterr().out
-    assert _second_job_pages(fake_ipp) == 1  # 1 sheet, never 2
+    assert _duplex_job_pages(fake_ipp) == 1  # 1 sheet, never 2
     assert "en fazla 2 kağıt" in out
     assert "sadece ön yüz" in _by_num(out)["7b"]
     assert code == 0
@@ -593,7 +598,7 @@ async def test_sides_ignored_by_validate_prints_front_page_only(fake_ipp, capsys
     fake_ipp.unsupported_by_format = {"image/pwg-raster": {"sides": LONG_EDGE}}
     await rc.run(rc.parse_args(["--printer", "h", "--print"]))
     out = capsys.readouterr().out
-    assert _second_job_pages(fake_ipp) == 1
+    assert _duplex_job_pages(fake_ipp) == 1
     line = _by_num(out)["7b"]
     assert line.startswith("✅ GEÇTİ")
     assert "sadece ön yüz" in line
@@ -636,3 +641,60 @@ def test_missing_pyipp_gives_clean_turkish_error():
     assert "Traceback" not in proc.stderr
     assert "pyipp yüklü değil" in proc.stderr
     assert "pip install" in proc.stderr
+
+
+# --- the 2-sheet guarantee (M5) ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("sheets", "why"),
+    [
+        (2, "2 kağıt kullandı"),  # printer said OK to duplex, printed simplex
+        (None, "kaç kağıt kullandığı bilinmiyor"),  # duplex: 2 impressions = ?
+    ],
+)
+async def test_jpeg_skipped_unless_duplex_job_used_one_sheet(
+    fake_ipp, capsys, sheets, why
+):
+    fake_ipp.use_deskjet()
+    fake_ipp.sheets_reported = sheets
+    code = await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    out = capsys.readouterr().out
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert [j["operation-attributes-tag"]["document-format"] for j in jobs] == [
+        "image/pwg-raster"
+    ]
+    line = _by_num(out)["7a"]
+    assert line.startswith("⏭ ATLANDI")
+    assert why in line
+    assert "en fazla 2 kağıt" in line
+    assert code == 0
+
+
+async def test_front_only_job_without_sheet_count_uses_impressions(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    fake_ipp.printer["sides-supported"] = ["one-sided"]
+    fake_ipp.sheets_reported = None  # 1 impression on a one-sided job: 1 sheet
+    await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    formats = [
+        j["operation-attributes-tag"]["document-format"]
+        for j in fake_ipp.sent(IppOperation.PRINT_JOB)
+    ]
+    assert formats == ["image/pwg-raster", "image/jpeg"]
+    assert _by_num(capsys.readouterr().out)["7a"].startswith("✅ GEÇTİ")
+
+
+def test_sheets_used():
+    duplex = rc.PlannedJob("7b", "t", "n", "f", b"", {"sides": LONG_EDGE}, sheets=1)
+    simplex = rc.PlannedJob("7b", "t", "n", "f", b"", {"copies": 1}, sheets=1)
+    done = {"job-state": 9}
+    assert rc.sheets_used(duplex, {**done, "job-media-sheets-completed": 1}) == 1
+    assert rc.sheets_used(duplex, {**done, "job-media-sheets-completed": 2}) == 2
+    assert rc.sheets_used(duplex, {**done, "job-impressions-completed": 1}) == 1
+    # 2 impressions may be 1 duplex sheet or 2 simplex ones: unknown.
+    assert rc.sheets_used(duplex, {**done, "job-impressions-completed": 2}) is None
+    assert rc.sheets_used(simplex, {**done, "job-impressions-completed": 1}) == 1
+    assert rc.sheets_used(simplex, done) is None  # unknown
+    # Not finished: it may still print more.
+    running = {"job-state": 5, "job-media-sheets-completed": 0}
+    assert rc.sheets_used(duplex, running) is None

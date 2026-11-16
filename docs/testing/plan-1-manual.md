@@ -110,15 +110,16 @@ cd ~/home-print
 
 - Gece yapılan bütün kontroller yine baştan yapılır, baskılar en sonda gelir.
 - Basmadan önce `⚠️ DİKKAT: ... 2 iş, en fazla 2 kağıt` satırı çıkar. Soru sormaz, hemen gönderir.
-- İşler sırayla gider:
-  - 7a: JPEG tek sayfa, iş adı "Home Print test 1/2 — JPEG".
-  - 7b: 2 sayfalık örnek PDF, dönüştürülmüş (DeskJet'te `image/pwg-raster`), çift yüz (uzun kenar), siyah-beyaz, tek kağıt. İş adı "Home Print test 2/2 — PDF çift taraf".
+- İşler bu sırayla gider (çıktıda önce 7b, sonra 7a görürsün):
+  - 7b: 2 sayfalık örnek PDF, dönüştürülmüş (DeskJet'te `image/pwg-raster`), çift yüz (uzun kenar), siyah-beyaz, tek kağıt. İş adı "Home Print test 1/2 — PDF çift taraf".
+  - 7a: JPEG tek sayfa, iş adı "Home Print test 2/2 — JPEG". Sadece 7b'nin 1 kağıt kullandığı kesinse gider.
   - İki işte de `copies: 1` açıkça gönderilir.
 - Her işten önce yazıcının boşta olduğuna ve iş kabul ettiğine bakılır. Meşgulse en fazla 60 sn beklenir. Durmuşsa, iş kabul etmiyorsa ya da Validate-Job o işin ayarlarını reddederse iş hiç gönderilmez, `⏭ ATLANDI` olur.
 - Script her 3 sn'de işin durumunu sorar, iş başına en fazla 180 sn bekler.
 - Sadece yazıcı `completed` derse GEÇTİ. `aborted`, `canceled` ya da süre dolarsa KALDI.
 - 7b'de `impressions: 2` görmen lazım: kağıdın iki yüzüne de basıldı demek. Farklıysa satırda `FARKLI` yazar.
 - Toplam asla 2 kağıdı geçmez. Yazıcı çift yüz bildirmiyorsa ya da Validate-Job `sides`'ı yok saydığını söylerse 7b sadece ön yüzü basar (1 kağıt). Satırda `sadece ön yüz, 1 kağıt` ve nedeni yazar, beklenen impressions 1 olur.
+- 7b bitince script kaç kağıt kullandığına bakar (`job-media-sheets-completed`; yazıcı bunu vermezse tek yüzlü işte impressions). 1 kağıtsa 7a gider. 2 kağıt çıktıysa (yazıcı çift yüzü sessizce tek yüze çevirdiyse) ya da sayı belli değilse 7a gönderilmez, `⏭ ATLANDI` olur ve satırda nedeni yazar.
 - KALDI olursa komutu hemen tekrar çalıştırma. İş yine de basılmış olabilir, önce çıktıdaki `job-state-reasons`'a bak.
 - Evde biri varsa kağıtlara bakabilir ama gerekmiyor: her sayfada büyük harfle test numarası ve üstte "↑ ÜST" oku var.
 

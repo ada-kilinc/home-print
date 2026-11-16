@@ -8,8 +8,8 @@ Kullanım:
 Varsayılan olarak HİÇ baskı yapmaz. Validate-Job ile yazıcıya "bu işi
 basabilir miydin?" diye sorar; yazıcı iş oluşturmaz. Örnek bir PDF'i
 bilgisayarda dönüştürüp sayfalarını sayar, yazıcıya göndermez. Gerçek baskı
-sadece ``--print`` ile: 2 iş, en fazla 2 kağıt (JPEG tek sayfa + çift yüzlü
-dönüştürülmüş PDF).
+sadece ``--print`` ile: 2 iş, en fazla 2 kağıt (önce çift yüzlü dönüştürülmüş
+PDF, sonra JPEG tek sayfa; JPEG sadece PDF'in 1 kağıt kullandığı kesinse gider).
 
 Bağımlılıklar: ``pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0
 numpy==2.3.2``. Repo içinden çalıştırılır (``scripts/`` ile
@@ -81,8 +81,9 @@ POLL_LIMIT = 180
 HA_TIMEOUT = 10
 IDLE_WAIT = 60
 JOB_NAME = "Home Print uzaktan test"
-JOB_NAME_1 = "Home Print test 1/2 — JPEG"
-JOB_NAME_2 = "Home Print test 2/2 — PDF çift taraf"
+# Sent in this order: the duplex PDF (7b) first, then the JPEG (7a).
+JOB_NAME_1 = "Home Print test 1/2 — PDF çift taraf"
+JOB_NAME_2 = "Home Print test 2/2 — JPEG"
 USER_NAME = "HomePrint"
 HIDDEN = "<gizlendi>"
 FORMAT_SKIP = "yazıcı bu formatı desteklemiyor — Plan 3"
@@ -315,10 +316,10 @@ def sample_page(lines: list[tuple[str, str, int]]) -> Any:
 
 
 def sample_jpeg() -> bytes:
-    """The page for print 1/2; the tiny white JPEG if Pillow is missing."""
+    """The page for print 2/2; the tiny white JPEG if Pillow is missing."""
     try:
         page = sample_page(
-            [("Home Print test", "Home Print test", 120), ("1/2", "1/2", 260)]
+            [("Home Print test", "Home Print test", 120), ("2/2", "2/2", 260)]
         )
     except ImportError:
         return JPEG
@@ -338,15 +339,15 @@ def sample_pdf(pages: list[list[tuple[str, str, int]]]) -> bytes:
 
 
 def duplex_test_pdf(*, front_only: bool = False) -> bytes:
-    """The pages of print 2/2: front and back of one sheet (or just front)."""
+    """The pages of print 1/2: front and back of one sheet (or just front)."""
     pages = [
         [
             ("Home Print test", "Home Print test", 120),
-            ("2/2 — ön yüz", "2/2 - ON YUZ", 150),
+            ("1/2 — ön yüz", "1/2 - ON YUZ", 150),
         ],
         [
             ("Home Print test", "Home Print test", 120),
-            ("2/2 — arka yüz", "2/2 - ARKA YUZ", 150),
+            ("1/2 — arka yüz", "1/2 - ARKA YUZ", 150),
         ],
     ]
     return sample_pdf(pages[:1] if front_only else pages)
@@ -1214,7 +1215,7 @@ class PlannedJob:
 
 
 def _plan_jpeg_job(attrs: dict[str, Any], conv: Convert | None) -> PlannedJob | Result:
-    num, title = "7a", "Gerçek baskı 1/2: JPEG tek sayfa"
+    num, title = "7a", "Gerçek baskı 2/2: JPEG tek sayfa"
     data = sample_jpeg()
     caps = conv.safe_capabilities(attrs)[0] if conv is not None else None
     if conv is not None and caps is not None:
@@ -1228,7 +1229,7 @@ def _plan_jpeg_job(attrs: dict[str, Any], conv: Convert | None) -> PlannedJob | 
         if formats and JPEG_FMT not in formats:
             return Result(num, title, SKIP, "yazıcı JPEG almıyor, dönüştürme de yok")
         fmt = JPEG_FMT
-    return PlannedJob(num, title, JOB_NAME_1, fmt, data, {"copies": 1}, sheets=1)
+    return PlannedJob(num, title, JOB_NAME_2, fmt, data, {"copies": 1}, sheets=1)
 
 
 def _plan_duplex_job(
@@ -1238,12 +1239,14 @@ def _plan_duplex_job(
     *,
     front_only_reason: str = "",
 ) -> PlannedJob | Result:
-    """Print 2/2: both pages on one sheet, or only the front page.
+    """Print 1/2: both pages on one sheet, or only the front page.
 
     Without long-edge duplex (not advertised, or the printer ignores
-    ``sides``) only page 1 is sent, so 2/2 never takes more than 1 sheet.
+    ``sides``) only page 1 is sent, so 1/2 should take 1 sheet. A printer
+    could still print it one-sided, so it goes first and the JPEG waits for
+    its sheet count (:func:`sheets_used`).
     """
-    num, title = "7b", "Gerçek baskı 2/2: PDF çift yüz, siyah-beyaz"
+    num, title = "7b", "Gerçek baskı 1/2: PDF çift yüz, siyah-beyaz"
     if conv is None:
         return Result(num, title, SKIP, conv_reason)
     caps, caps_error = conv.safe_capabilities(attrs)
@@ -1273,13 +1276,13 @@ def _plan_duplex_job(
         "çift yüz" if duplex else f"sadece ön yüz, 1 kağıt ({front_only_reason})"
     )
     title = (
-        f"Gerçek baskı 2/2: PDF → {prepared.document_format}, {side_text}"
+        f"Gerçek baskı 1/2: PDF → {prepared.document_format}, {side_text}"
         f"{', siyah-beyaz' if mono else ''}"
     )
     return PlannedJob(
         num,
         title,
-        JOB_NAME_2,
+        JOB_NAME_1,
         prepared.document_format,
         prepared.data,
         job_attrs,
@@ -1346,9 +1349,44 @@ async def _validate_planned(ipp: IPP, job: PlannedJob) -> tuple[str, str, set[st
     return status, detail, unsupported
 
 
+def sheets_used(job: PlannedJob, last: dict[str, Any]) -> int | None:
+    """Sheets a finished job took, or ``None`` when that is not certain.
+
+    ``job-media-sheets-completed`` when the printer reports it. Otherwise
+    impressions: one-sided, one impression is one sheet; two-sided, more
+    than one impression may be one sheet or several (a printer that quietly
+    printed one-sided), so it is unknown. A job that has not finished may
+    still print more: unknown too.
+    """
+
+    def count(key: str) -> int | None:
+        value = last.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    if int(last.get("job-state", 3)) not in _JOB_DONE:
+        return None
+    sheets = count("job-media-sheets-completed")
+    if sheets is not None:
+        return sheets
+    impressions = count("job-impressions-completed")
+    if impressions is None:
+        return None
+    duplex = job.job_attrs.get("sides", "one-sided") != "one-sided"
+    if duplex and impressions > 1:
+        return None
+    return impressions
+
+
 async def _send_and_wait(
     args: argparse.Namespace, session: aiohttp.ClientSession, job: PlannedJob
-) -> Result:
+) -> tuple[Result, int | None]:
+    """Send the job and follow it; also returns :func:`sheets_used`.
+
+    ``None`` sheets: not certain (also when the job may have been sent but
+    its answer was lost).
+    """
     try:
         response = await ipp_call(
             make_ipp(args, session, PRINT_TIMEOUT),
@@ -1370,11 +1408,12 @@ async def _send_and_wait(
             FAIL,
             f"Print-Job: {err}. İş yine de gitmiş olabilir; tekrar çalıştırmadan "
             "önce yazıcının durumuna bak",
-        )
+        ), None
     status, name = interpret_status(response.get("status-code", -1))
     sent = next(iter(response.get("jobs") or []), {})
     if status != PASS or "job-id" not in sent:
-        return Result(job.num, job.title, FAIL, f"Print-Job reddedildi: {name}")
+        rejected = Result(job.num, job.title, FAIL, f"Print-Job reddedildi: {name}")
+        return rejected, (0 if status != PASS else None)
     job_id = int(sent["job-id"])
     print(
         f"      • {job.num}: iş numarası {job_id}, bitmesi bekleniyor "
@@ -1425,7 +1464,8 @@ async def _send_and_wait(
         detail += ")"
     if state not in _JOB_DONE:
         detail += f" ({POLL_LIMIT} sn içinde bitmedi)"
-    return Result(job.num, job.title, PASS if state == 9 else FAIL, detail)
+    result = Result(job.num, job.title, PASS if state == 9 else FAIL, detail)
+    return result, sheets_used(job, last)
 
 
 async def run_print_tests(
@@ -1436,10 +1476,14 @@ async def run_print_tests(
     conv_reason: str,
     report: dict[str, Any],
 ) -> None:
-    """All real prints in one go: at most 2 jobs, at most MAX_SHEETS sheets."""
+    """All real prints in one go: at most 2 jobs, at most MAX_SHEETS sheets.
+
+    The duplex PDF (7b) goes first. The JPEG (7a) follows only if 7b surely
+    took at most one sheet; an unknown count is taken as 2.
+    """
     planned = [
-        _plan_jpeg_job(attrs, conv),
         _plan_duplex_job(attrs, conv, conv_reason),
+        _plan_jpeg_job(attrs, conv),
     ]
     jobs = [j for j in planned if isinstance(j, PlannedJob)]
     sheets = min(sum(j.sheets for j in jobs), MAX_SHEETS)
@@ -1457,6 +1501,7 @@ async def run_print_tests(
     ipp = make_ipp(args, session, IPP_TIMEOUT)
     ops = _as_list(attrs.get("operations-supported"))
     used = 0
+    used_note = ""  # why ``used`` is what it is, for the skip message
     for job in planned:
         if isinstance(job, Result):
             emit(report, job)
@@ -1503,14 +1548,20 @@ async def run_print_tests(
                     job.num,
                     job.title,
                     SKIP,
-                    f"gönderilmedi: en fazla {MAX_SHEETS} kağıt sınırı aşılırdı",
+                    f"gönderilmedi: {used_note}en fazla {MAX_SHEETS} kağıt "
+                    "sınırı aşılabilirdi",
                 ),
             )
             continue
-        used += job.sheets
-        result = await _send_and_wait(args, session, job)
+        result, sheets = await _send_and_wait(args, session, job)
         result.detail += note
         emit(report, result)
+        if sheets is None:
+            used += MAX_SHEETS  # not certain: assume the worst
+            used_note = f"{job.num} işinin kaç kağıt kullandığı bilinmiyor; "
+        else:
+            used += sheets
+            used_note = f"{job.num} işi {sheets} kağıt kullandı; "
 
 
 # --- main --------------------------------------------------------------------------
