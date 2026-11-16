@@ -12,9 +12,10 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+import numpy as np
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 from ..models import JpegLimits, MediaCaps
 from .errors import InvalidDocument, TooManyPages
@@ -25,9 +26,10 @@ JPEG = "image/jpeg"
 
 DEFAULT_DPI = 300
 DEFAULT_MAX_PAGES = 200
-# Explicit cap, below Pillow's own decompression-bomb limits. 60 MP is an
-# A4 sheet at ~880 dpi; anything bigger is not a sane print image.
-MAX_IMAGE_PIXELS = 60_000_000
+# Explicit cap, well below Pillow's own decompression-bomb limits. 25 MP is
+# an A4 sheet at ~570 dpi; a decoded RGBA image this size is ~100 MB, which
+# is as much as we want to hold on a small Home Assistant host.
+MAX_IMAGE_PIXELS = 25_000_000
 
 _A4_HMM = (21000, 29700)
 _DEFAULT_MARGIN_HMM = 300  # 3 mm
@@ -244,12 +246,15 @@ def _render_pdf_page(
 def _image_pages(image: Image.Image, spec: PageSpec) -> Iterator[Image.Image]:
     left, top, right, bottom = spec.printable
     box_w, box_h = right - left, bottom - top
+    # Either orientation may end up on the sheet, so shrink into a square of
+    # the long side: never below what the final fit needs.
+    longest = max(box_w, box_h)
     try:
         try:
             if image.format == "JPEG":
                 # Let libjpeg decode at a reduced scale when the photo is huge.
-                image.draft(spec.mode, (max(box_w, box_h),) * 2)
-            flat = _flatten(image)
+                image.draft(spec.mode, (longest, longest))
+            flat = _flatten(image, (longest, longest))
         except (OSError, ValueError, SyntaxError) as err:
             raise InvalidDocument("corrupt") from err
     finally:
@@ -311,26 +316,97 @@ def _compose(content: Image.Image, spec: PageSpec, rotated: bool) -> Image.Image
 # --- images -------------------------------------------------------------------
 
 
-def _flatten(image: Image.Image) -> Image.Image:
-    """Upright image in ``L`` or ``RGB``, with any transparency on white."""
-    image = ImageOps.exif_transpose(image)
-    gray = image.mode in ("1", "L", "LA", "I", "I;16", "F")
+# EXIF orientation -> transpose, as in ImageOps.exif_transpose.
+_EXIF_ORIENTATION = 0x0112
+_ORIENTATION_TRANSPOSE = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+_WIDE_GRAY_MODES = ("I", "F")  # plus I;16, I;16B, I;16L, I;16N
+
+
+def _to_8bit_gray(image: Image.Image) -> Image.Image:
+    """Scale a 16-bit, 32-bit integer or float gray image to ``L``.
+
+    Pillow's own ``convert("L")`` clips at 255, so a 16-bit scan would print
+    almost white. 16-bit data is shifted down; ``I``/``F`` values are scaled
+    from the smallest range that holds them (0..1, 0..255, 0..65535, or 0..max).
+    """
+    arr = np.asarray(image)
+    if image.mode.startswith("I;16"):
+        return Image.fromarray((arr.astype(np.uint16) >> 8).astype(np.uint8))
+    top = float(arr.max()) if arr.size else 0.0
+    if image.mode == "F" and top <= 1.0:
+        scale = 255.0
+    elif top <= 255:
+        scale = 1.0
+    elif top <= 65535:
+        scale = 255.0 / 65535.0
+    else:
+        scale = 255.0 / top
+    out = np.clip(arr.astype(np.float32) * scale, 0, 255)
+    return Image.fromarray(np.rint(out).astype(np.uint8))
+
+
+def _flatten(
+    image: Image.Image, max_size: tuple[int, int] | None = None
+) -> Image.Image:
+    """Upright image in ``L`` or ``RGB``, with any transparency on white.
+
+    With ``max_size``, the decoded image is shrunk to fit it first, so the
+    RGBA copy and the composite are only ever made at the reduced size.
+    """
+    source = image
+    orientation = image.getexif().get(_EXIF_ORIENTATION, 1)
     has_alpha = image.mode in ("RGBA", "LA", "PA", "RGBa", "La") or (
         "transparency" in image.info
     )
+    gray = image.mode in ("1", "L", "LA", "La", "I", "F") or image.mode.startswith(
+        "I;16"
+    )
+    # Resizing these would fall back to nearest-neighbour; widen them first.
+    if image.mode == "1":
+        image = image.convert("L")
+    elif image.mode == "P":
+        image = image.convert("RGBA" if has_alpha else "RGB")
+    elif image.mode in _WIDE_GRAY_MODES or image.mode.startswith("I;16"):
+        image = _to_8bit_gray(image)
+    if max_size is not None and (
+        image.width > max_size[0] or image.height > max_size[1]
+    ):
+        image = image.resize(
+            _fit_size(image.width, image.height, *max_size),
+            Image.Resampling.LANCZOS,
+            reducing_gap=3.0,
+        )
+    if (method := _ORIENTATION_TRANSPOSE.get(orientation)) is not None:
+        image = image.transpose(method)
     if has_alpha:
         rgba = image.convert("RGBA")
         background = Image.new("RGBA", rgba.size, _WHITE_RGB + (255,))
         image = Image.alpha_composite(background, rgba)
     target = "L" if gray else "RGB"
-    return image if image.mode == target else image.convert(target)
+    if image.mode != target:
+        return image.convert(target)
+    # Callers close the file image; hand back pixels that outlive it.
+    return image.copy() if image is source else image
 
 
-def png_to_jpeg(data: bytes, quality: int = 90) -> bytes:
-    """Re-encode an image as JPEG, transparency flattened onto white."""
+def png_to_jpeg(
+    data: bytes, quality: int = 90, max_size: tuple[int, int] | None = None
+) -> bytes:
+    """Re-encode an image as JPEG, transparency flattened onto white.
+
+    ``max_size`` (width, height) shrinks a bigger image to fit, aspect kept.
+    """
     image = _open_image(data, ["PNG"])
     try:
-        flat = _flatten(image)
+        flat = _flatten(image, max_size)
     except (OSError, ValueError, SyntaxError) as err:
         raise InvalidDocument("corrupt") from err
     finally:
@@ -361,7 +437,9 @@ def fit_jpeg(data: bytes, limits: JpegLimits | None) -> bytes:
         return data
 
     try:
-        flat = _flatten(image)
+        # Decode at a reduced scale (libjpeg) and shrink before flattening.
+        image.draft(None, (max_x, max_y))
+        flat = _flatten(image, (max_x, max_y))
     except (OSError, ValueError, SyntaxError) as err:
         raise InvalidDocument("corrupt") from err
     finally:

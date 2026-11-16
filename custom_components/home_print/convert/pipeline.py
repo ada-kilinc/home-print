@@ -136,6 +136,21 @@ def _urf_dm(caps: Capabilities) -> str | None:
     return modes[0] if modes else None
 
 
+def _jpeg_box(caps: Capabilities, gray: bool) -> tuple[int, int]:
+    """Largest JPEG worth sending: the sheet's long side, within JPEG limits.
+
+    A square of the printable long side at 300 dpi, so either orientation
+    keeps full print resolution; the printer scales it to the page.
+    """
+    left, top, right, bottom = page_spec_for(caps.media, DEFAULT_DPI, gray).printable
+    longest = max(right - left, bottom - top)
+    limits = caps.jpeg
+    return (
+        min(longest, (limits.max_x if limits else None) or longest),
+        min(longest, (limits.max_y if limits else None) or longest),
+    )
+
+
 def _selected_pages(
     data: bytes, options: PrintOptions, max_pages: int
 ) -> tuple[list[int] | None, int]:
@@ -175,7 +190,7 @@ def prepare(
     pages, selected = _selected_pages(data, options, max_pages)
     if target == JPEG:  # PNG -> JPEG; an image is a single page
         return PreparedJob(
-            fit_jpeg(png_to_jpeg(data), caps.jpeg),
+            fit_jpeg(png_to_jpeg(data, max_size=_jpeg_box(caps, gray)), caps.jpeg),
             JPEG,
             send_page_ranges=False,
             page_count=selected,

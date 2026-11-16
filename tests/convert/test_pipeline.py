@@ -238,3 +238,11 @@ def test_prepare_too_many_pages_raises():
         blank_pdf(4), PDF, DESKJET, PrintOptions(page_ranges="1-3"), max_pages=3
     )
     assert job.page_count == 3
+
+
+def test_prepare_big_png_to_jpeg_is_shrunk_to_the_sheet():
+    png = image_bytes(Image.new("RGBA", (7000, 3500), (0, 0, 255, 255)), "PNG")
+    job = prepare(png, PNG, DESKJET, PrintOptions())
+    assert job.document_format == JPEG
+    # A4 at 300 dpi, 2.96 mm margins: the printable long side is 3438 px.
+    assert Image.open(io.BytesIO(job.data)).size == (3438, 1719)

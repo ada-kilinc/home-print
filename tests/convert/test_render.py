@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 
+import numpy as np
 import pypdfium2 as pdfium
 import pytest
 from PIL import Image
@@ -312,10 +313,10 @@ def test_declared_format_must_match_image():
 def test_image_pixel_cap(monkeypatch):
     from custom_components.home_print.convert import render
 
-    assert render.MAX_IMAGE_PIXELS == 60_000_000
-    # 8000x7600 = 60.8 MP: over the cap, but Pillow's own bomb check
-    # (~89 MP warning) would let it through. Only the header is read.
-    big = Image.new("L", (8000, 7600), 255)
+    assert render.MAX_IMAGE_PIXELS == 25_000_000
+    # 5000x5001 = 25.005 MP: just over the cap, far below Pillow's own bomb
+    # check (~89 MP warning). Only the header is read.
+    big = Image.new("L", (5000, 5001), 255)
     png = samples.image_bytes(big, "PNG")
     with pytest.raises(InvalidDocument, match="too_large"):
         iter_pages(png, "image/png", A4_100, None)
@@ -348,3 +349,121 @@ def test_pages_record_whether_content_was_rotated():
         png = samples.image_bytes(samples.page_image(*size), "PNG")
         (page,) = iter_pages(png, "image/png", A4_100, None)
         assert page.info["home_print_rotated"] is rotated
+
+
+# --- high bit depth (I5) ----------------------------------------------------
+
+
+def _gradient16() -> Image.Image:
+    """A 0..65535 top-to-bottom gradient in mode I;16 (mean ~ half scale)."""
+    column = np.linspace(0, 65535, 256).astype(np.uint16)
+    return Image.fromarray(np.tile(column[:, None], (1, 64)))
+
+
+def _mean(image: Image.Image) -> float:
+    return float(np.asarray(image.convert("L"), dtype=np.float64).mean())
+
+
+def test_16bit_gray_png_is_not_blank():
+    png = samples.image_bytes(_gradient16(), "PNG")
+    assert Image.open(io.BytesIO(png)).mode == "I;16"
+
+    jpeg = Image.open(io.BytesIO(png_to_jpeg(png)))
+    assert abs(_mean(jpeg) - 127) <= 10
+
+    spec = page_spec_for(None, 100, gray=True)
+    (page,) = iter_pages(png, "image/png", spec, None)
+    left, top, right, bottom = spec.printable
+    # The portrait gradient fills the printable height; sample down its middle.
+    band = page.crop((page.width // 2 - 5, top, page.width // 2 + 5, bottom))
+    assert abs(_mean(band) - 127) <= 10
+
+
+@pytest.mark.parametrize(
+    ("array", "mode"),
+    [
+        (np.linspace(0, 65535, 256).astype(np.int32), "I"),
+        (np.linspace(0, 65535, 256).astype(np.float32), "F"),
+        (np.linspace(0, 1, 256).astype(np.float32), "F"),
+    ],
+)
+def test_flatten_scales_wide_gray_modes_to_8_bit(array, mode):
+    from custom_components.home_print.convert.render import _flatten
+
+    image = Image.fromarray(np.tile(array, (16, 1)))
+    assert image.mode == mode
+    flat = _flatten(image)
+    assert flat.mode == "L"
+    assert abs(_mean(flat) - 127) <= 10
+
+
+# --- big images (I6) --------------------------------------------------------
+
+
+def _watch_full_size_work(monkeypatch, limit: int) -> list[tuple[int, int]]:
+    """Record alpha_composite / RGBA convert sizes; fail any over ``limit``."""
+    seen: list[tuple[int, int]] = []
+    real_composite = Image.alpha_composite
+    real_convert = Image.Image.convert
+
+    def composite(im1, im2):
+        seen.append(im2.size)
+        assert max(im2.size) <= limit, f"full-size composite {im2.size}"
+        return real_composite(im1, im2)
+
+    def convert(self, mode=None, *args, **kwargs):
+        if mode == "RGBA":
+            seen.append(self.size)
+            assert max(self.size) <= limit, f"full-size RGBA copy {self.size}"
+        return real_convert(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "alpha_composite", composite)
+    monkeypatch.setattr(Image.Image, "convert", convert)
+    return seen
+
+
+def test_big_rgba_png_is_downscaled_before_compositing(monkeypatch):
+    image = Image.new("RGBA", (7000, 3500), (0, 0, 255, 128))
+    png = samples.image_bytes(image, "PNG", compress_level=1)
+    left, top, right, bottom = A4_300.printable
+    limit = max(right - left, bottom - top)
+    seen = _watch_full_size_work(monkeypatch, limit)
+
+    (page,) = iter_pages(png, "image/png", A4_300, None)
+    assert page.size == (A4_300.width_px, A4_300.height_px)
+    assert seen  # the alpha path really ran
+
+    seen.clear()
+    jpeg = Image.open(io.BytesIO(png_to_jpeg(png, max_size=(limit, limit))))
+    assert max(jpeg.size) <= limit
+    assert seen
+
+
+def test_fit_jpeg_drafts_big_photos(monkeypatch):
+    photo = samples.image_bytes(Image.new("RGB", (6000, 4000), (10, 120, 200)), "JPEG")
+    from PIL import JpegImagePlugin
+
+    drafted: list[tuple[int, int]] = []
+    real_draft = JpegImagePlugin.JpegImageFile.draft
+
+    def draft(self, mode, size):
+        result = real_draft(self, mode, size)
+        drafted.append(self.size)
+        return result
+
+    monkeypatch.setattr(JpegImagePlugin.JpegImageFile, "draft", draft)
+    out = fit_jpeg(photo, JpegLimits(max_x=1000, max_y=1000, max_kb=None))
+    assert Image.open(io.BytesIO(out)).size == (1000, 667)
+    assert drafted and max(drafted[0]) < 6000  # decoded at a reduced scale
+
+
+def test_exif_orientation_applied_after_downscale():
+    from custom_components.home_print.convert.render import _flatten
+
+    image = samples.page_image(400, 200)
+    exif = Image.Exif()
+    exif[0x0112] = 6  # rotate 90° clockwise to display
+    jpeg = samples.image_bytes(image, "JPEG", exif=exif)
+    flat = _flatten(Image.open(io.BytesIO(jpeg)), (100, 100))
+    assert flat.size == (50, 100)
+    assert _is_red(flat.getpixel((45, 3)))  # top-left mark now top-right
