@@ -11,8 +11,17 @@ const EDITOR_TYPE = "home-print-card-editor";
 const REFRESH_MS = 60 * 1000;
 const POLL_MS = 3 * 1000;
 const POLL_LIMIT_MS = 10 * 60 * 1000;
+// Past this the job no longer holds the Print button while its status can't
+// be read, so a stalled poll never locks the card.
+const STALL_MS = 30 * 1000;
+// A little over the server's own 300 s print timeout.
+const UPLOAD_TIMEOUT_MS = 330 * 1000;
 const PAGE_RANGES_RE = /^\s*\d+(\s*-\s*\d*)?(\s*,\s*\d+(\s*-\s*\d*)?)*\s*$/;
 const ACCEPT = "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png";
+// Some Android pickers honour only the first MIME type of ACCEPT, which greys
+// out photos; this second picker asks for images only (iOS hands Photos' HEIC
+// over as JPEG for it).
+const PHOTO_ACCEPT = "image/jpeg,image/png";
 const DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
 const EXT_FORMATS = {
   pdf: "application/pdf",
@@ -30,12 +39,20 @@ const WORD_TYPES = [
 ];
 const RUNNING_JOB_STATES = ["pending", "held", "processing", "stopped"];
 const FATAL_JOB_ERRORS = ["not_found", "unauthorized"];
+// IPP job-state-reasons worth showing, by prefix; any other reason is hidden.
+const REASONS = [
+  [["media-empty", "media-needed"], "reason_media_empty"],
+  [["media-jam"], "reason_media_jam"],
+  [["marker-supply-empty", "toner-empty"], "reason_ink_empty"],
+  [["door-open", "cover-open"], "reason_cover_open"],
+];
 const PRINTER_ERROR_LIMIT = 3;
 const KNOWN_STATES = ["idle", "processing", "stopped"];
 
 const STRINGS = {
   tr: {
     choose_file: "Dosya seç",
+    choose_photo: "Fotoğraf seç",
     editor_printer: "Yazıcı",
     editor_auto: "Otomatik (ilk yazıcı)",
     editor_not_found: "{id} (bulunamadı)",
@@ -87,6 +104,14 @@ const STRINGS = {
     job_lost: "İşin durumu alınamıyor.",
     job_status_failed: "Durum alınamadı, yazıcıya bak.",
     job_timeout: "Durum bilinmiyor, yazıcıya bak.",
+    job_gone: "İş yazıcının listesinde yok, muhtemelen bitti. Kâğıda bak.",
+    upload_timeout:
+      "Yükleme çok uzun sürdü. İş yine de yazdırılmış olabilir, tekrar denemeden önce yazıcıya bak.",
+    reason_media_empty: "Kâğıt bitti",
+    reason_media_jam: "Kâğıt sıkıştı",
+    reason_ink_empty: "Mürekkep bitti",
+    reason_cover_open: "Kapak açık",
+    reason_canceled_at_device: "Yazıcıdan iptal edildi",
   },
   en: {
     editor_printer: "Printer",
@@ -95,6 +120,7 @@ const STRINGS = {
     editor_title: "Title",
     editor_show_ink: "Show ink levels",
     choose_file: "Choose file",
+    choose_photo: "Choose photo",
     copies: "Copies",
     duplex: "Two-sided",
     color: "Colour",
@@ -140,6 +166,14 @@ const STRINGS = {
     job_lost: "Can't get the job's status.",
     job_status_failed: "Couldn't get the status, check the printer.",
     job_timeout: "Status unknown, check the printer.",
+    job_gone: "The printer no longer lists the job; it probably finished.",
+    upload_timeout:
+      "The upload took too long. The job may still have printed; check the printer before trying again.",
+    reason_media_empty: "Out of paper",
+    reason_media_jam: "Paper jam",
+    reason_ink_empty: "Out of ink",
+    reason_cover_open: "Cover open",
+    reason_canceled_at_device: "Cancelled at the printer",
   },
 };
 
@@ -194,9 +228,27 @@ function buildForm(file, options = {}) {
   return form;
 }
 
+function reasonLabel(lang, reason) {
+  const name = String(reason ?? "");
+  if (name === "job-canceled-at-device") return t(lang, "reason_canceled_at_device");
+  for (const [prefixes, key] of REASONS) {
+    if (prefixes.some((prefix) => name.startsWith(prefix))) return t(lang, key);
+  }
+  return null;
+}
+
+// fetchWithAuth rejects before sending when the token can't be refreshed.
+function isAuthError(err, hass) {
+  if (hass?.auth?.expired === true) return true;
+  if (err?.status === 401 || err?.code === 401) return true;
+  const text = `${err?.message ?? ""} ${err?.code ?? ""}`.toLowerCase();
+  return ["auth", "token", "401"].some((word) => text.includes(word));
+}
+
 function jobLabel(lang, status) {
   const state = status?.state;
-  const reasons = Array.isArray(status?.reasons) ? status.reasons.filter(Boolean) : [];
+  const raw = Array.isArray(status?.reasons) ? status.reasons : [];
+  const reasons = [...new Set(raw.map((reason) => reasonLabel(lang, reason)).filter(Boolean))];
   const withReasons = (key) =>
     t(lang, key) + (reasons.length ? t(lang, "job_reasons", { reasons: reasons.join(", ") }) : "");
   switch (state) {
@@ -308,7 +360,7 @@ const STYLE = `
   }
   .bar-fill { height: 100%; }
   .pct { color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
-  .file-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .file-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
   .file-button {
     position: relative;
     flex: none;
@@ -386,6 +438,10 @@ const TEMPLATE = `
           <input type="file" data-role="file" accept="${ACCEPT}" />
           <span data-t="choose_file"></span>
         </label>
+        <label class="file-button">
+          <input type="file" data-role="photo" accept="${PHOTO_ACCEPT}" />
+          <span data-t="choose_photo"></span>
+        </label>
         <span class="file-name" data-role="file-name"></span>
         <span class="file-size" data-role="file-size"></span>
       </div>
@@ -435,7 +491,9 @@ class HomePrintCard extends HTMLElement {
     this._pollTimer = null;
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
-    this._role("file").addEventListener("change", (ev) => this._onFile(ev));
+    for (const name of ["file", "photo"]) {
+      this._role(name).addEventListener("change", (ev) => this._onFile(ev));
+    }
     this._role("print").addEventListener("click", () => this._onPrint());
   }
 
@@ -534,9 +592,18 @@ class HomePrintCard extends HTMLElement {
     return this._file ? validateFile(this._file, printer) : null;
   }
 
+  // A running job holds the Print button, unless its status has been out of
+  // reach for longer than STALL_MS.
+  _jobHolds() {
+    const job = this._job;
+    if (!job) return false;
+    return job.troubleSince === null || Date.now() - job.troubleSince <= STALL_MS;
+  }
+
   _canSubmit(printer) {
     return (
       !this._uploading &&
+      !this._jobHolds() &&
       Boolean(printer) &&
       this._reachable(printer) &&
       printer.can_print !== false &&
@@ -576,25 +643,38 @@ class HomePrintCard extends HTMLElement {
     const entryId = printer.entry_id;
     const form = buildForm(this._file, { ...this._options(printer), page_ranges: pages });
 
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
     let response;
+    let body = null;
     try {
       response = await this._hass.fetchWithAuth(
         `/api/home_print/upload/${encodeURIComponent(entryId)}`,
-        { method: "POST", body: form },
+        { method: "POST", body: form, signal: controller.signal },
       );
-    } catch (_err) {
-      this._finish(t(lang, "network_error"), "error");
+      if (response.status !== 401) {
+        try {
+          body = await response.json();
+        } catch (_err) {
+          body = null;
+        }
+      }
+    } catch (err) {
+      let key = "network_error";
+      if (controller.signal.aborted) key = "upload_timeout";
+      else if (isAuthError(err, this._hass)) key = "session_expired";
+      this._finish(t(lang, key), "error");
+      return;
+    } finally {
+      clearTimeout(abortTimer);
+    }
+    if (controller.signal.aborted) {
+      this._finish(t(lang, "upload_timeout"), "error");
       return;
     }
     if (response.status === 401) {
       this._finish(t(lang, "session_expired"), "error");
       return;
-    }
-    let body = null;
-    try {
-      body = await response.json();
-    } catch (_err) {
-      body = null;
     }
     if (!response.ok || body?.job_id === undefined || body?.job_id === null) {
       const text =
@@ -605,9 +685,18 @@ class HomePrintCard extends HTMLElement {
       return;
     }
 
-    // The upload is confirmed: free the button and keep following the job.
+    // The upload is confirmed: follow the job, which holds the button, and
+    // clear the picked file so choosing the same one again fires "change".
     this._uploading = false;
-    this._job = { entryId, jobId: body.job_id, started: Date.now(), printerErrors: 0 };
+    this._file = null;
+    for (const name of ["file", "photo"]) this._role(name).value = "";
+    this._job = {
+      entryId,
+      jobId: body.job_id,
+      started: Date.now(),
+      printerErrors: 0,
+      troubleSince: null,
+    };
     this._setMessage(jobLabel(lang, { state: "pending" }));
     this._schedulePoll();
   }
@@ -662,6 +751,10 @@ class HomePrintCard extends HTMLElement {
         this._finish(t(lang, "job_lost"), "error");
         return;
       }
+      if (err?.code === "job_gone") {
+        this._finish(t(lang, "job_gone"));
+        return;
+      }
       if (err?.code === "printer_error") {
         job.printerErrors += 1;
         if (job.printerErrors >= PRINTER_ERROR_LIMIT) {
@@ -670,6 +763,7 @@ class HomePrintCard extends HTMLElement {
         }
       } else {
         job.printerErrors = 0;
+        job.troubleSince ??= Date.now();
       }
       // printer_unavailable, a dropped connection, an occasional printer_error.
       this._setMessage(t(lang, "job_checking"));
@@ -678,6 +772,7 @@ class HomePrintCard extends HTMLElement {
     }
     if (this._job !== job) return;
     job.printerErrors = 0;
+    job.troubleSince = null;
     const label = jobLabel(lang, status);
     if (RUNNING_JOB_STATES.includes(status?.state)) {
       this._setMessage(label, status.state === "stopped" ? "error" : "info");
@@ -915,6 +1010,7 @@ HomePrintCard.helpers = Object.freeze({
   validateFile,
   buildForm,
   jobLabel,
+  reasonLabel,
 });
 
 if (!customElements.get(CARD_TYPE)) {

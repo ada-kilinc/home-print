@@ -46,8 +46,7 @@ function makeFile(name, type, size = 1234) {
   return file;
 }
 
-async function selectFile(card, file) {
-  const input = role(card, "file");
+async function selectFile(card, file, input = role(card, "file")) {
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   input.dispatchEvent(new Event("change"));
   await flush();
@@ -274,9 +273,153 @@ describe("printing", () => {
     expect(button.disabled).toBe(true);
     await flush();
     expect(hass.fetchWithAuth).toHaveBeenCalledTimes(1);
-    // Upload confirmed: the button is free again while the job is followed.
-    expect(role(card, "print").disabled).toBe(false);
+    // Upload confirmed: the button stays off while the job is running.
+    expect(role(card, "print").disabled).toBe(true);
     expect(text(card, "message")).toBe("Yazdırılıyor…");
+  });
+
+  it("sends no second upload when tapped again while the job is printing", async () => {
+    const hass = makeHass({ jobs: [{ job_id: 42, state: "processing", reasons: [] }] });
+    const card = await mount(hass);
+    const file = makeFile("rapor.pdf", "application/pdf");
+    await selectFile(card, file);
+    await clickPrint(card);
+    // The picked file is cleared so the same file can be chosen again.
+    expect(text(card, "file-name")).toBe("");
+    expect(role(card, "file").value).toBe("");
+    await selectFile(card, file);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Yazdırılıyor…");
+    expect(role(card, "print").disabled).toBe(true);
+    await clickPrint(card);
+    expect(hass.fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("frees the button once the job completes", async () => {
+    const hass = makeHass({
+      jobs: [
+        { job_id: 42, state: "processing", reasons: [] },
+        { job_id: 42, state: "completed", reasons: [] },
+      ],
+    });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(role(card, "print").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Tamamlandı ✓");
+    expect(role(card, "print").disabled).toBe(false);
+    await clickPrint(card);
+    expect(hass.fetchWithAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("frees the button when the status stays unavailable for over 30 s", async () => {
+    const hass = makeHass({
+      jobs: [{ job_id: 42, state: "processing", reasons: [] }, { error: "printer_unavailable" }],
+    });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await vi.advanceTimersByTimeAsync(3000 + 30_000);
+    expect(text(card, "message")).toContain("Durum şu an alınamıyor");
+    expect(role(card, "print").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(role(card, "print").disabled).toBe(false);
+  });
+
+  it("frees the button when a dropped connection lasts over 30 s", async () => {
+    const hass = makeHass({ jobs: [{ error: "connection_lost" }] });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(role(card, "print").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(36_000);
+    expect(role(card, "print").disabled).toBe(false);
+  });
+
+  it("has a photo button that only accepts JPEG and PNG and uploads", async () => {
+    const hass = makeHass({ jobs: [{ job_id: 42, state: "processing", reasons: [] }] });
+    const card = await mount(hass);
+    const file = role(card, "file");
+    const photo = role(card, "photo");
+    expect(file.getAttribute("accept")).toBe(
+      "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png",
+    );
+    expect(photo.type).toBe("file");
+    expect(photo.getAttribute("accept")).toBe("image/jpeg,image/png");
+    expect(photo.closest("label").textContent.trim()).toBe("Fotoğraf seç");
+    await selectFile(card, makeFile("IMG_0001.JPG", "image/jpeg"), photo);
+    expect(text(card, "file-name")).toBe("IMG_0001.JPG");
+    await clickPrint(card);
+    expect(hass.fetchWithAuth.mock.calls[0][1].body.get("file").name).toBe("IMG_0001.JPG");
+    expect(photo.value).toBe("");
+  });
+
+  it("checks a photo like any other file", async () => {
+    const hass = makeHass();
+    const card = await mount(hass);
+    await selectFile(card, makeFile("big.png", "image/png", 26 * 1024 * 1024), role(card, "photo"));
+    expect(text(card, "message")).toContain("25");
+    await clickPrint(card);
+    expect(hass.fetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  it("says a job the printer no longer lists probably finished", async () => {
+    const hass = makeHass({
+      jobs: [{ job_id: 42, state: "processing", reasons: [] }, { error: "job_gone" }],
+    });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(text(card, "message")).toBe(
+      "İş yazıcının listesinde yok, muhtemelen bitti. Kâğıda bak.",
+    );
+    expect(role(card, "print").disabled).toBe(false);
+    const count = hass.calls.filter((m) => m.type === "home_print/job").length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(hass.calls.filter((m) => m.type === "home_print/job")).toHaveLength(count);
+  });
+
+  it("gives up on an upload after 330 s", async () => {
+    const hass = makeHass({ upload: "hang" });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(hass.fetchWithAuth.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    await vi.advanceTimersByTimeAsync(329_000);
+    expect(text(card, "message")).toBe("Gönderiliyor…");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(text(card, "message")).toBe(
+      "Yükleme çok uzun sürdü. İş yine de yazdırılmış olabilir, tekrar denemeden önce yazıcıya bak.",
+    );
+    expect(text(card, "message")).not.toContain("Bağlantı");
+    expect(vi.getTimerCount()).toBe(1); // only the 60 s printer refresh
+  });
+
+  it("shows the session text when the token refresh is rejected", async () => {
+    for (const [upload, auth] of [
+      [new Error("Unable to fetch tokens"), undefined],
+      [Object.assign(new Error("x"), { code: "invalid_auth" }), undefined],
+      [Object.assign(new Error("x"), { status: 401 }), undefined],
+      [new Error("Failed to fetch"), { expired: true }],
+    ]) {
+      const hass = makeHass({ upload });
+      hass.auth = auth;
+      const card = await mount(hass);
+      await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+      await clickPrint(card);
+      expect(text(card, "message"), String(upload.message)).toBe(
+        "Oturum süresi doldu, sayfayı yenile.",
+      );
+      document.body.innerHTML = "";
+    }
   });
 
   it("follows the job until completed", async () => {
@@ -289,6 +432,7 @@ describe("printing", () => {
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
     expect(text(card, "message")).toBe("Yazdırılıyor…");
     await vi.advanceTimersByTimeAsync(3000);
     expect(text(card, "message")).toBe("Yazdırılıyor…");
@@ -301,15 +445,24 @@ describe("printing", () => {
     expect(hass.calls.filter((m) => m.type === "home_print/job")).toHaveLength(jobCalls.length);
   });
 
-  it("shows reasons for an aborted job", async () => {
+  it("shows known reasons in plain words and hides raw IPP names", async () => {
     const hass = makeHass({
-      jobs: [{ job_id: 42, state: "aborted", reasons: ["document-format-error"] }],
+      jobs: [
+        {
+          job_id: 42,
+          state: "stopped",
+          reasons: ["media-empty-error", "media-needed", "document-format-error"],
+        },
+        { job_id: 42, state: "aborted", reasons: ["document-format-error"] },
+      ],
     });
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     await clickPrint(card);
     await vi.advanceTimersByTimeAsync(3000);
-    expect(text(card, "message")).toContain("document-format-error");
+    expect(text(card, "message")).toBe("Yazıcı durdu, yazıcıya bak. (Kâğıt bitti)");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Yazdırma yarıda kaldı.");
   });
 
   it("keeps polling an unreachable printer and stops after 10 minutes", async () => {
@@ -317,6 +470,7 @@ describe("printing", () => {
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
     await vi.advanceTimersByTimeAsync(9 * 60_000);
     expect(role(card, "print").disabled).toBe(false);
     expect(text(card, "message")).toContain("Durum şu an alınamıyor");
@@ -344,7 +498,9 @@ describe("printing", () => {
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     await clickPrint(card);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
     await vi.advanceTimersByTimeAsync(4 * 3000);
+    expect(role(card, "print").disabled).toBe(true);
     expect(text(card, "message")).not.toBe("Durum alınamadı, yazıcıya bak.");
     await vi.advanceTimersByTimeAsync(3000);
     expect(text(card, "message")).toBe("Durum alınamadı, yazıcıya bak.");
@@ -589,8 +745,30 @@ describe("helpers", () => {
   it("jobLabel", () => {
     expect(h().jobLabel("tr", { state: "pending" })).toBe("Yazdırılıyor…");
     expect(h().jobLabel("en", { state: "completed" })).toBe("Done ✓");
-    expect(h().jobLabel("en", { state: "canceled", reasons: ["job-canceled-by-user"] })).toContain(
-      "job-canceled-by-user",
+    expect(h().jobLabel("en", { state: "canceled", reasons: ["job-canceled-by-user"] })).toBe(
+      "The job was canceled.",
     );
+    expect(h().jobLabel("en", { state: "canceled", reasons: ["job-canceled-at-device"] })).toBe(
+      "The job was canceled. (Cancelled at the printer)",
+    );
+  });
+
+  it("reasonLabel maps the reasons people can act on", () => {
+    const cases = [
+      ["media-empty-error", "Kâğıt bitti", "Out of paper"],
+      ["media-needed-report", "Kâğıt bitti", "Out of paper"],
+      ["media-jam-error", "Kâğıt sıkıştı", "Paper jam"],
+      ["marker-supply-empty-warning", "Mürekkep bitti", "Out of ink"],
+      ["toner-empty-error", "Mürekkep bitti", "Out of ink"],
+      ["door-open-error", "Kapak açık", "Cover open"],
+      ["cover-open", "Kapak açık", "Cover open"],
+      ["job-canceled-at-device", "Yazıcıdan iptal edildi", "Cancelled at the printer"],
+    ];
+    for (const [reason, tr, en] of cases) {
+      expect(h().reasonLabel("tr", reason), reason).toBe(tr);
+      expect(h().reasonLabel("en", reason), reason).toBe(en);
+    }
+    expect(h().reasonLabel("tr", "job-printing")).toBeNull();
+    expect(h().reasonLabel("tr", "marker-supply-low-warning")).toBeNull();
   });
 });

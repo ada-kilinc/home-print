@@ -56,6 +56,8 @@ export function deskjetStates() {
  * `printers` is the `home_print/printers` list. `jobs` is a queue of
  * `home_print/job` answers: an object is returned as `{job}`, an object with
  * `error` rejects like HA's callWS does. The last answer repeats.
+ * `upload` is the upload answer, an Error to reject with, or "hang" for a
+ * request that only ends when its AbortSignal fires.
  */
 export function makeHass({
   printers = [deskjetPrinter()],
@@ -85,8 +87,15 @@ export function makeHass({
       }
       throw { code: "unknown_command", message: msg.type };
     }),
-    fetchWithAuth: vi.fn(async () => {
+    fetchWithAuth: vi.fn(async (_url, init = {}) => {
       if (upload instanceof Error) throw upload;
+      if (upload === "hang") {
+        return new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        });
+      }
       const body = upload.body;
       return {
         ok: upload.status >= 200 && upload.status < 300,
