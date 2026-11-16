@@ -148,6 +148,12 @@
     "too_many_pages": {
       "message": "This document is too long. You can print at most {limit} pages."
     },
+    "image_too_large": {
+      "message": "This image is too large to print. Use an image of at most {limit} megapixels."
+    },
+    "output_too_large": {
+      "message": "The converted document got too large (at most {limit} MB). Choose fewer pages or print in black and white."
+    },
     "invalid_request": {
       "message": "The upload request is not valid."
     },

@@ -31,6 +31,24 @@ def pdf_from_images(images: list[Image.Image]) -> bytes:
     return out.getvalue()
 
 
+def noisy_pdf(page_count: int, dpi: int = 100) -> bytes:
+    """A4 pages of colour noise at ``dpi``: like a colour scan, PackBits
+    can't shrink them once rendered at that resolution."""
+    width, height = (round(side * dpi / 72) for side in A4_PT)
+    noise = Image.merge(
+        "RGB", [Image.effect_noise((width, height), 120) for _ in "RGB"]
+    )
+    out = io.BytesIO()
+    noise.save(
+        out,
+        "PDF",
+        resolution=float(dpi),
+        save_all=True,
+        append_images=[noise] * (page_count - 1),
+    )
+    return out.getvalue()
+
+
 def blank_pdf(page_count: int, size: tuple[int, int] = A4_PT) -> bytes:
     """A PDF with ``page_count`` empty pages (made with pypdfium2)."""
     pdf = pdfium.PdfDocument.new()

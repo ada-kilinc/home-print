@@ -27,9 +27,17 @@ from .const import (
     DEFAULT_MAX_FILE_MB,
     DOMAIN,
     EVENT_JOB,
+    PRINT_TIMEOUT,
+    PRINT_TIMEOUT_PER_PAGE,
 )
 from .convert import pipeline
-from .convert.errors import InvalidDocument, NoConversionRoute, TooManyPages
+from .convert.errors import (
+    InvalidDocument,
+    NoConversionRoute,
+    OutputTooLarge,
+    TooManyPages,
+)
+from .convert.render import MAX_IMAGE_PIXELS
 from .models import JobResult, LastJob, PrinterInfo, PrintOptions
 
 if TYPE_CHECKING:
@@ -134,6 +142,20 @@ class TooManyPagesError(PrintError, ServiceValidationError):
 
     key = "too_many_pages"
     http_status = 400
+
+
+class ImageTooLargeError(PrintError, ServiceValidationError):
+    """The image has more pixels than we convert."""
+
+    key = "image_too_large"
+    http_status = 400
+
+
+class OutputTooLargeError(PrintError, ServiceValidationError):
+    """The converted document grew past the output budget."""
+
+    key = "output_too_large"
+    http_status = 413
 
 
 # InvalidDocument reasons that come from the page selection, not the file.
@@ -302,11 +324,7 @@ async def _async_send(
     if document_format is None:
         raise UnsupportedFileType()
 
-    # Conversion needs the printer's capabilities. Cached ones are used even
-    # after a failed poll; they describe the hardware, not its state.
-    info = entry.runtime_data.coordinator.data
-    if info is None:
-        raise PrinterUnavailable()
+    info = await _async_printer_info(entry)
     prepared = await _async_prepare(hass, data, document_format, info, options)
 
     try:
@@ -317,6 +335,7 @@ async def _async_send(
             user_name=_user_name(user),
             options=options,
             send_page_ranges=prepared.send_page_ranges,
+            timeout=_print_timeout(prepared),
         )
     except PrintTimeout as err:
         raise PrintTimedOut() from err
@@ -330,6 +349,32 @@ async def _async_send(
         _LOGGER.warning("Printing %s failed: %s", file_name, err)
         raise PrintError() from err
     return result, prepared
+
+
+async def _async_printer_info(entry: HomePrintConfigEntry) -> PrinterInfo:
+    """The printer's capabilities for conversion.
+
+    The coordinator keeps its last data after a failed poll, so cached data
+    says nothing about whether the printer is there. After a failed poll
+    (or with no data at all) one quick Get-Printer-Attributes decides: if it
+    fails too, give up before spending time on conversion.
+    """
+    coordinator = entry.runtime_data.coordinator
+    if coordinator.data is not None and coordinator.last_update_success:
+        return coordinator.data
+    try:
+        info = await entry.runtime_data.client.get_printer()
+    except HomePrintError as err:
+        raise PrinterUnavailable() from err
+    coordinator.async_set_updated_data(info)
+    return info
+
+
+def _print_timeout(prepared: pipeline.PreparedJob) -> float | None:
+    """Print-Job timeout: the default, plus per-page time for converted jobs."""
+    if prepared.send_page_ranges or prepared.pages_sent is None:
+        return None  # passthrough: the client's PRINT_TIMEOUT
+    return PRINT_TIMEOUT + PRINT_TIMEOUT_PER_PAGE * prepared.pages_sent
 
 
 async def _async_prepare(
@@ -348,7 +393,14 @@ async def _async_prepare(
         raise FormatNotSupportedByPrinter(format=document_format) from err
     except TooManyPages as err:
         raise TooManyPagesError(limit=err.limit) from err
+    except OutputTooLarge as err:
+        raise OutputTooLargeError(limit=err.limit_mb) from err
     except InvalidDocument as err:
-        if str(err) in _PAGE_SELECTION_REASONS:
+        reason = str(err)
+        if reason in _PAGE_SELECTION_REASONS:
             raise InvalidPrintOption(option="page_ranges") from err
+        if reason == "too_large":
+            raise ImageTooLargeError(limit=MAX_IMAGE_PIXELS // 1_000_000) from err
+        if reason == "unsupported_format":
+            raise UnsupportedFileType() from err
         raise InvalidDocumentError() from err

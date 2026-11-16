@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from homeassistant.core import Event
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from PIL import Image
 from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.home_print.client import (
@@ -30,9 +31,11 @@ from custom_components.home_print.models import PrintOptions
 from custom_components.home_print.printing import (
     FileTooLarge,
     FormatNotSupportedByPrinter,
+    ImageTooLargeError,
     InvalidDocumentError,
     InvalidPrintOption,
     OptionNotSupportedByPrinter,
+    OutputTooLargeError,
     PrinterRejectedJob,
     PrintError,
     PrinterUnavailable,
@@ -46,7 +49,13 @@ from custom_components.home_print.printing import (
 
 from .common import JPEG, PDF, PNG, make_entry, setup_entry
 from .convert import pwg_decoder
-from .convert.samples import blank_pdf, page_image, pdf_from_images
+from .convert.samples import (
+    blank_pdf,
+    image_bytes,
+    noisy_pdf,
+    page_image,
+    pdf_from_images,
+)
 
 DESKJET = parse_printer(
     json.loads(
@@ -132,27 +141,35 @@ async def test_async_print_offline_raises_unavailable(hass, mock_client):
     assert entry.runtime_data.coordinator.last_job.state == "error"
 
 
-async def test_async_print_uses_cached_caps_after_failed_poll(hass, mock_client):
+async def test_async_print_after_failed_poll_rechecks_printer(hass, mock_client):
     entry = await setup_entry(hass)
-    # Last poll failed but capabilities are cached: they still decide the
-    # target format, and the client reports the real connection problem.
-    entry.runtime_data.coordinator.last_update_success = False
+    coordinator = entry.runtime_data.coordinator
+    # The coordinator keeps its old data after a failed poll, so "no data"
+    # never tells us the printer is gone; one quick status request does.
+    coordinator.last_update_success = False
+    mock_client.get_printer.reset_mock()
     mock_client.print_job.side_effect = CannotConnect("offline")
 
     with pytest.raises(PrinterUnavailable):
         await async_print(
             hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
         )
+    mock_client.get_printer.assert_awaited_once()
     mock_client.print_job.assert_called_once()
+    assert coordinator.last_update_success  # the fresh answer was kept
 
 
-async def test_async_print_without_printer_data_is_unavailable(hass, mock_client):
+@pytest.mark.parametrize("data_cached", [True, False])
+async def test_async_print_unreachable_after_failed_poll_skips_conversion(
+    hass, mock_client, data_cached
+):
     entry = await setup_entry(hass)
     events = async_capture_events(hass, EVENT_JOB)
     coordinator = entry.runtime_data.coordinator
-    # Setup needs a first refresh, so this is a defensive guard. Entities
-    # assume data, so keep the last-job update from notifying them.
-    coordinator.data = None
+    coordinator.last_update_success = False
+    if not data_cached:
+        coordinator.data = None  # defensive: setup always fetches data
+    mock_client.get_printer.side_effect = CannotConnect("offline")
 
     with (
         patch.object(pipeline, "prepare", wraps=pipeline.prepare) as prepare,
@@ -384,7 +401,9 @@ async def test_async_print_converts_pdf_for_deskjet(hass, mock_client):
     assert kwargs["send_page_ranges"] is False
     # Options go through unchanged: copies and sides are still IPP attributes.
     assert kwargs["options"] == options
-    assert isinstance(data, bytes)
+    # 2 pages sent: 300 s for the upload plus 15 s per page.
+    assert kwargs["timeout"] == 300 + 15 * 2
+    assert isinstance(data, (bytes, bytearray))
     pages = pwg_decoder.decode(data)
     assert len(pages) == 2
     assert pages[0].header["NumCopies"] == 1
@@ -408,6 +427,7 @@ async def test_async_print_passthrough_sends_page_ranges(hass, mock_client):
     kwargs = mock_client.print_job.call_args.kwargs
     assert kwargs["document_format"] == "application/pdf"
     assert kwargs["send_page_ranges"] is True
+    assert kwargs["timeout"] is None  # the client's PRINT_TIMEOUT
     assert events[0].data["converted_to"] is None
     assert events[0].data["pages"] is None
 
@@ -498,31 +518,118 @@ async def test_async_print_no_route_is_format_not_supported(hass, mock_client):
     assert exc.value.translation_placeholders == {"format": "application/pdf"}
 
 
+async def _traced_print(
+    hass, entry, pdf, **kwargs
+) -> tuple[int, float, PrintError | None]:
+    """Print ``pdf``; return tracemalloc's peak, the time and any PrintError."""
+    error = None
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        start = time.monotonic()
+        try:
+            await async_print(hass, entry, pdf, user=None, **kwargs)
+        except PrintError as err:
+            error = err
+        elapsed = time.monotonic() - start
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak, elapsed, error
+
+
 async def test_async_print_large_pdf_end_to_end(hass, mock_client):
     """Review Focus 5: 150 pages, one page bitmap in memory at a time.
 
     tracemalloc sees Python and numpy buffers (numpy reports its data
     allocations to it); Pillow's and PDFium's own C heaps are invisible to
-    it. The bound is on what it can see, with the output (the chunks plus
-    the joined bytes, 2x the job size) and the input PDF taken out.
+    it. The bound includes everything it sees: the output buffer too.
     """
     entry = await _deskjet_entry(hass, mock_client)
     pdf = pdf_from_images([page_image(595, 842)] * 150)
 
-    tracemalloc.start()
-    try:
-        tracemalloc.reset_peak()
-        start = time.monotonic()
-        await async_print(
-            hass, entry, pdf, file_name="big.pdf", options=PrintOptions(), user=None
-        )
-        elapsed = time.monotonic() - start
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
+    peak, elapsed, error = await _traced_print(
+        hass, entry, pdf, file_name="big.pdf", options=PrintOptions()
+    )
+    assert error is None
 
     (data,), kwargs = mock_client.print_job.call_args
     assert kwargs["document_format"] == PWG
+    assert kwargs["timeout"] == 300 + 15 * 150
     assert pwg_decoder.parse_header(data[4 : 4 + 1796])["TotalPageCount"] == 150
     assert elapsed < 60
-    assert peak - 2 * len(data) < 3 * A4_300DPI_RGB_BYTES
+    assert peak < 3 * A4_300DPI_RGB_BYTES
+
+
+async def test_async_print_colour_scan_output_is_bounded(
+    hass, mock_client, monkeypatch
+):
+    """C1: incompressible pages stop at the output budget, memory included."""
+    entry = await _deskjet_entry(hass, mock_client)
+    events = async_capture_events(hass, EVENT_JOB)
+    budget = 60 * 1024 * 1024  # ~2 colour pages at 300 dpi (~25 MB each)
+    monkeypatch.setattr(pipeline, "MAX_OUTPUT_BYTES", budget)
+    pdf = noisy_pdf(4, dpi=300)
+
+    peak, _, error = await _traced_print(
+        hass, entry, pdf, file_name="scan.pdf", options=PrintOptions()
+    )
+    await hass.async_block_till_done()
+
+    assert isinstance(error, OutputTooLargeError)
+    assert error.key == "output_too_large"
+    assert error.http_status == 413
+    assert error.translation_placeholders == {"limit": "60"}
+    mock_client.print_job.assert_not_called()
+    assert events[0].data["error"] == "output_too_large"
+    # Everything traced, output included: the budget, plus the input and a
+    # few page buffers (bitmap, its numpy copy, the encoded page).
+    assert peak < budget + len(pdf) + 3 * A4_300DPI_RGB_BYTES
+
+
+async def test_async_print_too_large_image_has_its_own_error(hass, mock_client):
+    """M1: not "damaged or password protected"."""
+    entry = await _deskjet_entry(hass, mock_client)
+    events = async_capture_events(hass, EVENT_JOB)
+    png = image_bytes(Image.new("L", (5000, 5001), 255), "PNG")
+    with pytest.raises(ImageTooLargeError) as exc:
+        await async_print(
+            hass, entry, png, file_name="huge.png", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    assert exc.value.key == "image_too_large"
+    assert exc.value.http_status == 400
+    assert exc.value.translation_placeholders == {"limit": "25"}
+    assert events[0].data["error"] == "image_too_large"
+
+
+async def test_async_print_unsupported_image_format_is_unsupported_type(
+    hass, mock_client
+):
+    """M1: a format Pillow knows but we don't print is a file-type error."""
+    entry = await _deskjet_entry(hass, mock_client)
+    gif = image_bytes(Image.new("L", (10, 10), 255), "GIF")
+    with (
+        patch(
+            "custom_components.home_print.printing.sniff_format",
+            return_value="image/png",
+        ),
+        pytest.raises(UnsupportedFileType) as exc,
+    ):
+        await async_print(
+            hass, entry, gif, file_name="a.png", options=PrintOptions(), user=None
+        )
+    assert exc.value.key == "unsupported_file_type"
+    assert exc.value.http_status == 400
+
+
+@pytest.mark.parametrize("lang", ["en", "tr"])
+def test_new_error_messages_are_translated(lang):
+    root = Path(__file__).parent.parent / "custom_components" / "home_print"
+    strings = json.loads((root / "strings.json").read_text())["exceptions"]
+    messages = json.loads((root / f"translations/{lang}.json").read_text())[
+        "exceptions"
+    ]
+    assert set(messages) == set(strings)
+    assert "{limit}" in messages["output_too_large"]["message"]
+    assert "{limit}" in messages["image_too_large"]["message"]

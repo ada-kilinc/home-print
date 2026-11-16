@@ -148,6 +148,12 @@
     "too_many_pages": {
       "message": "Bu belge çok uzun. En fazla {limit} sayfa yazdırabilirsin."
     },
+    "image_too_large": {
+      "message": "Bu görsel yazdırmak için çok büyük. En fazla {limit} megapiksellik bir görsel gönder."
+    },
+    "output_too_large": {
+      "message": "Dönüştürülmüş belge çok büyük oldu (en fazla {limit} MB). Daha az sayfa seç ya da siyah-beyaz yazdır."
+    },
     "invalid_request": {
       "message": "Yükleme isteği geçersiz."
     },

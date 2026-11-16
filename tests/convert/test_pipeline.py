@@ -32,7 +32,7 @@ from custom_components.home_print.models import (
 )
 
 from . import pwg_decoder, urf_decoder
-from .samples import blank_pdf, image_bytes, page_image, pdf_from_images
+from .samples import blank_pdf, image_bytes, noisy_pdf, page_image, pdf_from_images
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 PDF = "application/pdf"
@@ -264,15 +264,6 @@ LOW_RES_PWG = _only(
 )
 
 
-def _noisy_pdf(pages: int) -> bytes:
-    """Colour noise pages: PackBits can't shrink them (like a colour scan)."""
-    images = [
-        Image.merge("RGB", [Image.effect_noise((595, 842), 120) for _ in "RGB"])
-        for _ in range(pages)
-    ]
-    return pdf_from_images(images)
-
-
 def _count_rendered(monkeypatch) -> dict:
     """Wrap the page iterator; record pages pulled and whether it was closed."""
     state = {"rendered": 0, "closed": False}
@@ -305,7 +296,7 @@ def test_prepare_stops_when_output_exceeds_budget(monkeypatch):
     # One 100 dpi colour noise page is ~2.9 MB of PWG; allow about two.
     monkeypatch.setattr(pipeline, "MAX_OUTPUT_BYTES", 6 * 1024 * 1024)
     with pytest.raises(OutputTooLarge) as exc:
-        prepare(_noisy_pdf(6), PDF, LOW_RES_PWG, PrintOptions())
+        prepare(noisy_pdf(6), PDF, LOW_RES_PWG, PrintOptions())
     assert isinstance(exc.value, ConvertError)
     assert exc.value.limit_mb == 6
     assert state["rendered"] < 6  # stopped early, not after rendering it all
@@ -314,7 +305,7 @@ def test_prepare_stops_when_output_exceeds_budget(monkeypatch):
 
 def test_prepare_returns_one_buffer_within_budget(monkeypatch):
     state = _count_rendered(monkeypatch)
-    job = prepare(_noisy_pdf(2), PDF, LOW_RES_PWG, PrintOptions())
+    job = prepare(noisy_pdf(2), PDF, LOW_RES_PWG, PrintOptions())
     assert isinstance(job.data, (bytes, bytearray))
     assert len(pwg_decoder.decode(job.data)) == 2
     assert state == {"rendered": 2, "closed": True}

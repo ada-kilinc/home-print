@@ -16,6 +16,9 @@ DEFAULT_MAX_FILE_MB = 25
 DEFAULT_SCAN_INTERVAL = 60
 # Seconds allowed for a whole Print-Job upload; slow inkjets may need to wake.
 PRINT_TIMEOUT = 300
+# Extra seconds per page sent for converted (raster) jobs: the printer reads
+# the upload only as fast as it prints.
+PRINT_TIMEOUT_PER_PAGE = 15
 
 EVENT_JOB = "home_print_job"
 
@@ -43,4 +46,5 @@ __all__ = [
     "DOMAIN",
     "EVENT_JOB",
     "PRINT_TIMEOUT",
+    "PRINT_TIMEOUT_PER_PAGE",
 ]

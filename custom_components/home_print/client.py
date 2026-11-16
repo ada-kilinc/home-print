@@ -155,7 +155,7 @@ class HomePrintClient:
         verify_ssl: bool,
         session: aiohttp.ClientSession,
     ) -> None:
-        def ipp(request_timeout: int | None = None) -> IPP:
+        def ipp(request_timeout: float | None = None) -> IPP:
             client = IPP(
                 host=host,
                 port=port,
@@ -170,16 +170,22 @@ class HomePrintClient:
 
         # Status polls keep pyipp's short default timeout; the Print-Job
         # timeout covers the whole upload, so it gets its own long one.
+        self._make_ipp = ipp
         self._ipp = ipp()
         self._print_ipp = ipp(PRINT_TIMEOUT)
 
     async def _execute(
-        self, operation: IppOperation, message: dict[str, Any], ipp: IPP | None = None
+        self,
+        operation: IppOperation,
+        message: dict[str, Any],
+        ipp: IPP | None = None,
+        *,
+        print_request: bool = False,
     ) -> dict[str, Any]:
         try:
             return await (ipp or self._ipp).execute(operation, message)
         except IPPConnectionError as err:
-            if ipp is self._print_ipp and isinstance(err.__cause__, TimeoutError):
+            if print_request and isinstance(err.__cause__, TimeoutError):
                 raise PrintTimeout(str(err)) from err
             raise CannotConnect(str(err)) from err
         except IPPConnectionUpgradeRequired as err:
@@ -212,19 +218,21 @@ class HomePrintClient:
 
     async def print_job(
         self,
-        data: bytes,
+        data: bytes | bytearray,
         *,
         document_format: str,
         job_name: str,
         user_name: str,
         options: PrintOptions,
         send_page_ranges: bool = True,
+        timeout: float | None = None,
     ) -> JobResult:
         """Submit a Print-Job after validating options against capabilities.
 
         ``send_page_ranges=False`` is for converted jobs, whose data already
         holds only the selected pages: ``page-ranges`` is then neither checked
-        nor sent.
+        nor sent. ``timeout`` (seconds, whole upload) replaces
+        ``PRINT_TIMEOUT`` for this job; long raster jobs need more.
         """
         caps = (await self.get_printer()).capabilities
         page_ranges = options.page_ranges if send_page_ranges else None
@@ -254,7 +262,8 @@ class HomePrintClient:
                 "job-attributes-tag": job_attrs,
                 "data": data,
             },
-            self._print_ipp,
+            self._print_ipp if timeout is None else self._make_ipp(timeout),
+            print_request=True,
         )
         job = next(iter(response.get("jobs") or []), {})
         if "job-id" not in job:

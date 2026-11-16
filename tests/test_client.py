@@ -334,3 +334,50 @@ async def test_status_timeout_still_cannot_connect():
     client = _client(AsyncMock(side_effect=timeout))
     with pytest.raises(CannotConnect):
         await client.get_printer()
+
+
+async def test_print_job_timeout_override_reaches_the_print_request(monkeypatch):
+    from pyipp import IPP
+
+    client = _client(AsyncMock())
+    client._ipp.execute = AsyncMock(return_value=_printer_response())
+    seen: list[tuple[IppOperation, float]] = []
+
+    async def execute(self, operation, message):
+        seen.append((operation, self.request_timeout))
+        return {"status-code": 0, "jobs": [{"job-id": 1}]}
+
+    monkeypatch.setattr(IPP, "execute", execute)
+    args = {
+        "document_format": "image/pwg-raster",
+        "job_name": "j",
+        "user_name": "u",
+        "options": PrintOptions(),
+    }
+    del client._print_ipp.execute  # use the class method patched above
+    await client.print_job(b"RaS2", timeout=465, **args)
+    await client.print_job(b"RaS2", **args)
+    assert seen == [
+        (IppOperation.PRINT_JOB, 465),
+        (IppOperation.PRINT_JOB, PRINT_TIMEOUT),
+    ]
+    assert client._print_ipp.request_timeout == PRINT_TIMEOUT  # not mutated
+
+
+async def test_print_job_timeout_override_still_raises_print_timeout(monkeypatch):
+    from pyipp import IPP
+
+    timeout = IPPConnectionError("Timeout occurred while connecting to IPP server.")
+    timeout.__cause__ = TimeoutError()
+    client = _client(AsyncMock())
+    client._ipp.execute = AsyncMock(return_value=_printer_response())
+    monkeypatch.setattr(IPP, "execute", AsyncMock(side_effect=timeout))
+    with pytest.raises(PrintTimeout):
+        await client.print_job(
+            b"RaS2",
+            document_format="image/pwg-raster",
+            job_name="j",
+            user_name="u",
+            options=PrintOptions(),
+            timeout=400,
+        )
