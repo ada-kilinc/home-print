@@ -18,7 +18,7 @@ mkdir -p ~/home-print && unzip ~/Downloads/home-print.zip -d ~/home-print
 ```
 
   - Zip'te dosyalar doğrudan en üstte, ayrı bir klasör yok: `~/home-print/scripts/remote_check.py` oluşmalı.
-  - GitHub deposu açılınca: `git clone https://github.com/adakilinc/home-print.git ~/home-print`, sonraki güncellemeler için `git pull`.
+  - GitHub deposu açılınca: `git clone https://github.com/ada-kilinc/home-print.git ~/home-print`, sonraki güncellemeler için `git pull`.
 - Ayrı bir sanal ortam kur. Paket sürümleri integration'ın manifest'iyle aynı:
 
 ```bash
