@@ -47,11 +47,11 @@ Per printer (**Configure**): default duplex and colour mode, maximum file size (
 
 If your printer has a scanner, Home Print finds it on the printer's own address (eSCL, also known as AirScan). Nothing extra to set up.
 
-- **Card:** the **Scan** button sits under **Print**. It opens the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
+- **Card:** the **Scan** button sits under **Print**. It opens the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. While it runs, **Cancel** stops it. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
 - **History:** the clock icon in the card header opens a window with two tabs, **Prints** and **Scans**.
-- **Where files go:** every scan is saved as `/media/home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
+- **Where files go:** every scan is saved as `home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) in the default media root (`/media` on Home Assistant OS) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
 - **Options** (per printer, **Configure**):
-  - **Scanner address:** leave empty to find it automatically, or enter an address if the scanner isn't found.
+  - **Scanner address:** leave empty to find it automatically, or enter an address like `http://192.168.1.20/eSCL` if the scanner isn't found (`http://` and `/eSCL` are added when left out). If no scanner answers at start-up (printer asleep), Home Print looks again after 1, 5 and 30 minutes, then hourly.
   - **Keep scans (days):** default 30, 0 keeps them forever.
   - **Max space for scans (MB):** default 2000, 0 means no limit. When it's exceeded, the oldest scans are deleted.
 - **Sensor:** `Scanner status` on the printer's device.
@@ -89,7 +89,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements_test.txt
 npm install && npm test      # card tests
 ```
 
-`scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`). Run it from the repo folder.
+`scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`) and prints the scanner's raw answers (status codes, `Location` header). Run it from the repo folder. The saved `escl_*.xml` files contain device identifiers (serial number, UUID); don't post them publicly.
 
 ---
 
@@ -117,11 +117,11 @@ Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor.
 
 Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bulur (eSCL, diğer adıyla AirScan). Ayrıca kurulum gerekmez.
 
-- **Kart:** **Tara** düğmesi **Yazdır**'ın altında. Basınca tarama paneli açılır: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
+- **Kart:** **Tara** düğmesi **Yazdır**'ın altında. Basınca tarama paneli açılır: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Sürerken **İptal** ile durdurabilirsin. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
 - **Geçmiş:** Kartın başlığındaki saat simgesi **Baskılar** ve **Taramalar** diye iki sekmeli bir pencere açar.
-- **Dosyalar nerede:** Her tarama `/media/home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
+- **Dosyalar nerede:** Her tarama varsayılan medya klasöründe (Home Assistant OS'ta `/media`) `home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
 - **Ayarlar** (her yazıcının **Yapılandır** ekranında):
-  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa adresi elle yaz.
+  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa `http://192.168.1.20/eSCL` gibi elle yaz (`http://` ve `/eSCL` yazmazsan eklenir). Açılışta tarayıcı yanıt vermezse (yazıcı uykudaysa) Home Print 1, 5 ve 30 dakika sonra, sonra da saatte bir yeniden bakar.
   - **Taramaları sakla (gün):** varsayılan 30, 0 hiç silme demek.
   - **Taramalar için en fazla alan (MB):** varsayılan 2000, 0 sınırsız demek. Aşılırsa en eski taramalar silinir.
 - **Sensör:** Yazıcı cihazında `Tarayıcı durumu`.
@@ -145,7 +145,7 @@ Henüz yok: yazıcı girişi olmayan, yalnızca tarayıcı olan cihazlar, eski U
 
 **Tarama gizliliği:** Taramaları (liste, ön izleme, indirme) Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği taramayı başlatmayı, adını değiştirmeyi ve silmeyi kısıtlar, görmeyi kısıtlamaz. Dosyalar medya klasöründe durur, medyayı yedekliyorsan Home Assistant yedeklerine de girer. Sildiğin tarama önceden alınmış yedeklerde kalır. Yazıcı girişini silersen arşiv kayıtları gider ama medya klasöründeki dosyalara dokunulmaz. Hassas belge tarıyorsan **Taramaları sakla (gün)** değerini düşük tut.
 
-Uzaktan kontrol scripti `scripts/remote_check.py` ile `--scan-info` tarayıcıyı bulup yeteneklerini yazdırır (kâğıt harcamaz), `--scan` ise camdan 75 dpi gri tek sayfa deneme taraması yapıp `scan_test.jpg` kaydeder. Repo klasöründen çalıştır.
+Uzaktan kontrol scripti `scripts/remote_check.py` ile `--scan-info` tarayıcıyı bulup yeteneklerini yazdırır (kâğıt harcamaz), `--scan` ise camdan 75 dpi gri tek sayfa deneme taraması yapıp `scan_test.jpg` kaydeder ve tarayıcının ham yanıtlarını (durum kodları, `Location` başlığı) yazdırır. Repo klasöründen çalıştır. Kaydedilen `escl_*.xml` dosyaları cihaz kimlikleri (seri no, UUID) içerir, herkese açık yerde paylaşma.
 
 ### Katkı
 

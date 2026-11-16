@@ -9,7 +9,7 @@ Spec birbirinden bağımsız test edilebilen birkaç alt sistemi kapsıyor. Bu y
 | 1 | Çekirdek entegrasyon: yazıcı ekleme, sensörler, doğrudan IPP yazdırma | Ayarlar'dan yazıcı eklenir, durum ve mürekkep görünür, `home_print.print_file` ve yükleme ucu PDF/JPEG yazdırır | 5, 7.1, 7.2, 8, 9, 12 |
 | 2 | Kart: Yazdır sekmesi | Ana sayfa kartından telefonla yazdırma | 7.3 |
 | 3 | Dönüştürme | Raster yazıcılar, sayfa aralığı, fotoğrafı sayfaya sığdırma | 13 |
-| 4 | Tarama: eSCL, arşiv, kartın Tara sekmesi | Tarama, ön izleme, indirme, "Son taramalar" listesi, `home_print.scan` | 7.5 |
+| 4 | Tarama: eSCL, arşiv, Yazdır'ın altında Tara düğmesi; geçmişte Taramalar sekmesi | Tarama, ön izleme, indirme, geçmişte Taramalar sekmesi, `home_print.scan` | 7.5 |
 | 5 | Home Print Server: CUPS + SANE köprüsü + OCR | Eski/USB cihazlar ve aranabilir PDF; HA eklentisi ve bağımsız Docker imajı | 7.4, 7.5 (SANE/OCR) |
 | 6 | Yayın | İsim çakışma kontrolü, README (tr+en, tek tık düğmeleri), CI (hassfest, HACS, eklenti derlemesi), ilk sürüm | 10, 11, 12 |
 
