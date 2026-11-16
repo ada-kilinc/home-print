@@ -137,3 +137,38 @@ def test_build_pdf_too_many_pages():
     page = _img((10, 10))
     with pytest.raises(TooManyPages):
         scan_doc.build_pdf([page] * 201, 300)
+
+
+def test_normalize_truncated_jpeg_raises():
+    jpeg = _img((400, 400))
+    with pytest.raises(InvalidDocument, match="bad_scan"):
+        scan_doc.normalize_page(jpeg[: len(jpeg) // 2])
+
+
+def test_normalize_jpeg_trailing_padding_ok():
+    jpeg = _img((100, 100))
+    padded = jpeg + b"\x00\x00\n "
+    assert scan_doc.normalize_page(padded) == padded
+
+
+@pytest.mark.parametrize("dpi", [0, -300])
+def test_bad_dpi_raises(dpi):
+    with pytest.raises(ValueError):
+        scan_doc.build_pdf([_img((10, 10))], dpi)
+    base = scan_doc.build_pdf([_img((10, 10))], 300)
+    with pytest.raises(ValueError):
+        scan_doc.append_pdf(base, [_img((10, 10))], dpi)
+
+
+def test_append_pdf_enforces_combined_page_limit():
+    page = _img((10, 10))
+    base = scan_doc.build_pdf([page] * 150, 300)
+    with pytest.raises(TooManyPages):
+        scan_doc.append_pdf(base, [page] * 51, 300)
+    assert count_pages(scan_doc.append_pdf(base, [page] * 50, 300)) == 200
+
+
+def test_append_pdf_mixed_modes():
+    base = scan_doc.build_pdf([_img((100, 100)), _img((100, 100), mode="L")], 300)
+    out = scan_doc.append_pdf(base, [_img((100, 100), mode="L"), _img((100, 100))], 300)
+    assert count_pages(out) == 4

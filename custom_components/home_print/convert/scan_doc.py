@@ -43,7 +43,10 @@ def normalize_page(data: bytes) -> bytes:
             raise InvalidDocument("too_large")
         try:
             if image.format == "JPEG":
-                # Header checks only: scanner JPEGs are embedded verbatim.
+                # Scanner JPEGs are embedded verbatim, not decoded; a cut-off
+                # transfer is caught by the missing end-of-image marker.
+                if not data.rstrip(b"\x00 \t\r\n").endswith(b"\xff\xd9"):
+                    raise InvalidDocument("bad_scan")
                 return data
             flat = _flatten(image)
         except (OSError, ValueError, SyntaxError) as err:
@@ -77,6 +80,8 @@ def build_pdf(pages: list[bytes], dpi: int) -> bytes:
     Each page's normalized JPEG is embedded byte for byte (DCTDecode), so
     nothing is re-encoded and no pixels are decoded here.
     """
+    if dpi < 1:
+        raise ValueError("dpi must be at least 1")
     if not pages:
         raise InvalidDocument("no_pages")
     if len(pages) > DEFAULT_MAX_PAGES:
@@ -141,6 +146,9 @@ def append_pdf(pdf: bytes, pages: list[bytes], dpi: int) -> bytes:
     with _PDFIUM_LOCK:
         base = _open_pdf(pdf)
         try:
+            total = len(base) + len(pages)
+            if total > DEFAULT_MAX_PAGES:
+                raise TooManyPages(total, DEFAULT_MAX_PAGES)
             addition = _open_pdf(extra)
             try:
                 base.import_pages(addition)
