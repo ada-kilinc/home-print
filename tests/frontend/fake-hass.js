@@ -68,6 +68,52 @@ export function historyEntry(overrides = {}) {
   };
 }
 
+export function scannerBlock(overrides = {}) {
+  return {
+    available: true,
+    state: "idle",
+    adf_loaded: false,
+    sources: {
+      platen: { color_modes: ["color", "gray", "bw"], resolutions: [75, 150, 300, 600] },
+      adf: { color_modes: ["color", "gray"], resolutions: [150, 300] },
+    },
+    formats: ["pdf", "jpeg"],
+    defaults: { source: "platen", color_mode: "color", resolution: 300, format: "pdf" },
+    active_scan_id: null,
+    last_scan: null,
+    ...overrides,
+  };
+}
+
+export function scanRecord(overrides = {}) {
+  return {
+    id: "c".repeat(32),
+    time: "2026-11-16T15:52:00+00:00",
+    name: "tarama_2026-11-16_1652",
+    user: "Ada",
+    pages: 1,
+    size: 4321,
+    mime: "application/pdf",
+    path: "home_print/scans/2026-11/tarama_2026-11-16_1652.pdf",
+    source: "platen",
+    color_mode: "color",
+    resolution: 300,
+    ...overrides,
+  };
+}
+
+export function scanState(overrides = {}) {
+  return {
+    scan_id: "s1",
+    state: "scanning",
+    pages: 0,
+    error: null,
+    record: null,
+    user: "Ada",
+    ...overrides,
+  };
+}
+
 /**
  * Build a fake hass.
  *
@@ -78,6 +124,10 @@ export function historyEntry(overrides = {}) {
  * request that only ends when its AbortSignal fires. `history` seeds the
  * `home_print/history` store, which `home_print/history/delete` edits;
  * `historyError`, `deleteError` and `signError` make those calls reject.
+ * `scans` seeds the `home_print/scans` store (edited by scans/delete and
+ * scans/rename). `scanStart` is the scan/start answer (a state, or an object
+ * with `error` to reject); `scanStates` is a queue of scan/state answers like
+ * `jobs`. `scanDeleteError` and `renameError` make those calls reject.
  */
 export function makeHass({
   printers = [deskjetPrinter()],
@@ -90,8 +140,15 @@ export function makeHass({
   historyError = null,
   deleteError = null,
   signError = null,
+  scans = [],
+  scanStart = null,
+  scanStates = [],
+  scanDeleteError = null,
+  renameError = null,
 } = {}) {
   const jobQueue = [...jobs];
+  const scanQueue = [...scanStates];
+  const scanStore = scans.map((record) => ({ ...record }));
   const historyStore = history.map((entry) => ({ ...entry }));
   const hass = {
     language,
@@ -119,6 +176,31 @@ export function makeHass({
         const index = historyStore.findIndex((entry) => entry.id === msg.history_id);
         if (index >= 0) historyStore.splice(index, 1);
         return { deleted: index >= 0 };
+      }
+      if (msg.type === "home_print/scan/start") {
+        if (scanStart?.error) throw { code: scanStart.error, message: scanStart.error };
+        return { scan: scanStart ?? scanState() };
+      }
+      if (msg.type === "home_print/scan/state") {
+        const next = scanQueue.length > 1 ? scanQueue.shift() : scanQueue[0];
+        if (!next) throw { code: "not_found", message: "not found" };
+        if (next.code) throw { code: next.code, message: next.code };
+        return { scan: next };
+      }
+      if (msg.type === "home_print/scans") {
+        return { entries: scanStore.map((record) => ({ ...record })) };
+      }
+      if (msg.type === "home_print/scans/delete") {
+        if (scanDeleteError) throw scanDeleteError;
+        const index = scanStore.findIndex((record) => record.id === msg.scan_record_id);
+        if (index >= 0) scanStore.splice(index, 1);
+        return { deleted: index >= 0 };
+      }
+      if (msg.type === "home_print/scans/rename") {
+        if (renameError) throw renameError;
+        const record = scanStore.find((r) => r.id === msg.scan_record_id);
+        if (record) record.name = msg.name.trim();
+        return { entry: record ? { ...record } : null };
       }
       if (msg.type === "auth/sign_path") {
         if (signError) throw signError;

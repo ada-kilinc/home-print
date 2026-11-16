@@ -1,5 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { deskjetPrinter, deskjetStates, historyEntry, makeHass } from "./fake-hass.js";
+import {
+  deskjetPrinter,
+  deskjetStates,
+  historyEntry,
+  makeHass,
+  scannerBlock,
+  scanRecord,
+  scanState,
+} from "./fake-hass.js";
 
 let HomePrintCard;
 let errorSpy;
@@ -1795,5 +1803,406 @@ describe("final review", () => {
     } finally {
       delete navigator.userAgent;
     }
+  });
+});
+
+describe("scan", () => {
+  const REC_ID = "c".repeat(32);
+  const scanPrinter = (scanner = {}, overrides = {}) =>
+    deskjetPrinter({ scanner: scannerBlock(scanner), ...overrides });
+  const options = (card, name) =>
+    [...role(card, name).querySelectorAll("option")].map((o) => o.value);
+  const wsCalls = (hass, type) => hass.calls.filter((m) => m.type === type);
+  const visible = (card, name) => Boolean(role(card, name)) && !role(card, name).hidden;
+
+  async function openPanel(card) {
+    role(card, "scan-toggle").click();
+    await flush();
+  }
+
+  // Start a scan that the fake finishes on the first poll with `record`.
+  async function scanToDone(record = scanRecord(), extra = {}) {
+    const hass = makeHass({
+      printers: [scanPrinter()],
+      scanStates: [scanState({ state: "done", pages: record.pages, record })],
+      scans: [record],
+      ...extra,
+    });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1500);
+    return { hass, card };
+  }
+
+  it("scan toggle hidden without scanner", async () => {
+    const card = await mount(makeHass());
+    expect(visible(card, "scan-toggle")).toBe(false);
+    expect(visible(card, "scan-panel")).toBe(false);
+  });
+
+  it("scan toggle opens panel with caps options", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    const toggle = role(card, "scan-toggle");
+    expect(visible(card, "scan-toggle")).toBe(true);
+    expect(toggle.textContent.trim()).toBe("Tara");
+    expect(toggle.querySelector("svg path")).toBeTruthy();
+    // Right under the Print button.
+    expect(role(card, "print").nextElementSibling).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(visible(card, "scan-panel")).toBe(false);
+    await openPanel(card);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(options(card, "scan-source")).toEqual(["platen", "adf"]);
+    expect(role(card, "scan-source").value).toBe("platen");
+    expect(options(card, "scan-color")).toEqual(["color", "gray", "bw"]);
+    expect(role(card, "scan-color").value).toBe("color");
+    expect(options(card, "scan-resolution")).toEqual(["75", "150", "300", "600"]);
+    expect(role(card, "scan-resolution").value).toBe("300");
+    expect(options(card, "scan-format")).toEqual(["pdf", "jpeg"]);
+    expect(text(card, "scan-start")).toBe("Taramayı başlat");
+    await openPanel(card);
+    expect(visible(card, "scan-panel")).toBe(false);
+
+    // A single source needs no source choice.
+    document.body.innerHTML = "";
+    const single = await mount(
+      makeHass({
+        printers: [scanPrinter({ sources: { platen: scannerBlock().sources.platen } })],
+      }),
+    );
+    await openPanel(single);
+    expect($(single, '[data-scan="source"]').hidden).toBe(true);
+  });
+
+  it("source change refreshes resolutions", async () => {
+    const hass = makeHass({ printers: [scanPrinter()] });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-color").value = "bw";
+    setInput(card, "scan-source", "adf");
+    await flush();
+    expect(options(card, "scan-color")).toEqual(["color", "gray"]);
+    expect(role(card, "scan-color").value).toBe("color");
+    expect(options(card, "scan-resolution")).toEqual(["150", "300"]);
+    expect(role(card, "scan-resolution").value).toBe("300");
+    role(card, "scan-start").click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scan/start")[0]).toMatchObject({
+      source: "adf",
+      color_mode: "color",
+      resolution: 300,
+    });
+  });
+
+  it("start sends ws and polls to done then shows result", async () => {
+    const record = scanRecord({ pages: 3 });
+    const hass = makeHass({
+      printers: [scanPrinter()],
+      scanStates: [
+        scanState({ pages: 1 }),
+        scanState({ state: "saving", pages: 3 }),
+        scanState({ state: "done", pages: 3, record }),
+      ],
+    });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    role(card, "scan-start").click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scan/start")).toEqual([
+      {
+        type: "home_print/scan/start",
+        entry_id: "deskjet",
+        source: "platen",
+        color_mode: "color",
+        resolution: 300,
+        format: "pdf",
+      },
+    ]);
+    expect(text(card, "scan-message")).toBe("Taranıyor…");
+    expect(role(card, "scan-start").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsCalls(hass, "home_print/scan/state")[0]).toEqual({
+      type: "home_print/scan/state",
+      entry_id: "deskjet",
+      scan_id: "s1",
+    });
+    expect(text(card, "scan-message")).toBe("Taranıyor… (2. sayfa)");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card, "scan-message")).toBe("Kaydediliyor…");
+    expect(visible(card, "scan-result")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(role(card, "scan-start").disabled).toBe(false);
+    expect(visible(card, "scan-result")).toBe(true);
+    expect(role(card, "scan-name").value).toBe(record.name);
+    expect(role(card, "scan-img").getAttribute("src")).toBe(
+      `/api/home_print/scans/deskjet/${REC_ID}/page/1?authSig=sig`,
+    );
+    expect(text(card, "scan-page-label")).toBe("Sayfa 1/3");
+    expect(role(card, "scan-prev").disabled).toBe(true);
+    role(card, "scan-next").click();
+    await flush();
+    expect(text(card, "scan-page-label")).toBe("Sayfa 2/3");
+    expect(role(card, "scan-img").getAttribute("src")).toBe(
+      `/api/home_print/scans/deskjet/${REC_ID}/page/2?authSig=sig`,
+    );
+    // Polling has stopped.
+    const polls = wsCalls(hass, "home_print/scan/state").length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(polls);
+  });
+
+  it("busy error shown", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStart: { error: "scanner_busy" } });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    expect(text(card, "scan-message")).toBe("Tarayıcı şu an meşgul.");
+    expect(role(card, "scan-message").classList.contains("error")).toBe(true);
+    expect(role(card, "scan-start").disabled).toBe(false);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+
+    // An error the scan ends with, and an unknown code.
+    const helpers = HomePrintCard.helpers;
+    expect(helpers.scanErrorText("tr", "adf_empty")).toBe("Besleyicide kâğıt yok.");
+    expect(helpers.scanErrorText("tr", "scanner_unavailable")).toBe("Tarayıcıya ulaşılamadı.");
+    expect(helpers.scanErrorText("en", "scanner_busy")).toBe("The scanner is busy right now.");
+    expect(helpers.scanErrorText("tr", "weird")).toBe(helpers.scanErrorText("tr", "scan_failed"));
+
+    document.body.innerHTML = "";
+    const hass2 = makeHass({
+      printers: [scanPrinter()],
+      scanStates: [scanState({ state: "error", error: "adf_empty" })],
+    });
+    const card2 = await mount(hass2);
+    await openPanel(card2);
+    role(card2, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card2, "scan-message")).toBe("Besleyicide kâğıt yok.");
+    expect(role(card2, "scan-start").disabled).toBe(false);
+  });
+
+  it("download uses signed file path", async () => {
+    const clicks = [];
+    const spy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function () {
+        clicks.push({ href: this.getAttribute("href"), download: this.hasAttribute("download") });
+      });
+    try {
+      const { hass, card } = await scanToDone();
+      role(card, "scan-download").click();
+      await flush();
+      const signs = wsCalls(hass, "auth/sign_path").map((m) => m.path);
+      expect(signs).toContain(`/api/home_print/scans/deskjet/${REC_ID}/file`);
+      expect(clicks).toEqual([
+        { href: `/api/home_print/scans/deskjet/${REC_ID}/file?authSig=sig`, download: true },
+      ]);
+      // The temporary link does not stay behind.
+      expect(card.shadowRoot.querySelector("a[download]")).toBe(null);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("add page sends append_to and hidden for jpeg", async () => {
+    const record = scanRecord({ color_mode: "gray", resolution: 150 });
+    const { hass, card } = await scanToDone(record);
+    expect(visible(card, "scan-add")).toBe(true);
+    role(card, "scan-format").value = "jpeg";
+    role(card, "scan-add").click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scan/start")[1]).toEqual({
+      type: "home_print/scan/start",
+      entry_id: "deskjet",
+      source: "platen",
+      color_mode: "gray",
+      resolution: 150,
+      format: "pdf",
+      append_to: REC_ID,
+    });
+
+    for (const other of [scanRecord({ mime: "image/jpeg" }), scanRecord({ source: "adf" })]) {
+      document.body.innerHTML = "";
+      const done = await scanToDone(other);
+      expect(visible(done.card, "scan-result")).toBe(true);
+      expect(visible(done.card, "scan-add")).toBe(false);
+    }
+  });
+
+  it("rename on enter", async () => {
+    const { hass, card } = await scanToDone();
+    const input = role(card, "scan-name");
+    input.value = "  fatura  ";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/rename")).toEqual([
+      { type: "home_print/scans/rename", entry_id: "deskjet", scan_record_id: REC_ID, name: "fatura" },
+    ]);
+    expect(input.value).toBe("fatura");
+    input.dispatchEvent(new Event("blur"));
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/rename")).toHaveLength(1);
+    input.value = "makbuz";
+    input.dispatchEvent(new Event("blur"));
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/rename")).toHaveLength(2);
+  });
+
+  it("delete needs two taps", async () => {
+    const { hass, card } = await scanToDone();
+    const button = role(card, "scan-delete");
+    expect(button.textContent.trim()).toBe("Sil");
+    button.click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/delete")).toHaveLength(0);
+    expect(button.textContent.trim()).toBe("Emin misin?");
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(button.textContent.trim()).toBe("Sil");
+    button.click();
+    await flush();
+    button.click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/delete")).toEqual([
+      { type: "home_print/scans/delete", entry_id: "deskjet", scan_record_id: REC_ID },
+    ]);
+    expect(visible(card, "scan-result")).toBe(false);
+  });
+
+  it("resumes active scan on reconnect", async () => {
+    const record = scanRecord();
+    const hass = makeHass({
+      printers: [scanPrinter({ active_scan_id: "s9" })],
+      scanStates: [scanState({ scan_id: "s9", pages: 0 }), scanState({ scan_id: "s9", state: "done", pages: 1, record })],
+    });
+    const card = await mount(hass);
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(role(card, "scan-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(role(card, "scan-start").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(wsCalls(hass, "home_print/scan/state")[0]).toEqual({
+      type: "home_print/scan/state",
+      entry_id: "deskjet",
+      scan_id: "s9",
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(visible(card, "scan-result")).toBe(true);
+    // A printers list that still names the scan does not start it over.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(visible(card, "scan-result")).toBe(true);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(2);
+    // A finished last_scan alone does not open the panel.
+    document.body.innerHTML = "";
+    const quiet = await mount(
+      makeHass({ printers: [scanPrinter({ last_scan: scanState({ state: "done", record }) })] }),
+    );
+    expect(visible(quiet, "scan-panel")).toBe(false);
+  });
+
+  it("history tabs switch to scans list", async () => {
+    const hass = makeHass({
+      printers: [scanPrinter()],
+      history: [historyEntry()],
+      scans: [scanRecord({ pages: 2, name: "fatura" }), scanRecord({ id: "d".repeat(32), name: "makbuz" })],
+    });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    expect(visible(card, "history-tabs")).toBe(true);
+    expect(role(card, "history-tabs").getAttribute("role")).toBe("tablist");
+    expect(role(card, "tab-prints").getAttribute("aria-selected")).toBe("true");
+    expect(text(card, "tab-prints")).toBe("Baskılar");
+    expect(text(card, "tab-scans")).toBe("Taramalar");
+    expect(card.shadowRoot.querySelectorAll('[data-role="history-item"]')).toHaveLength(1);
+    role(card, "tab-scans").click();
+    await flush();
+    expect(role(card, "tab-scans").getAttribute("aria-selected")).toBe("true");
+    expect(wsCalls(hass, "home_print/scans")).toEqual([{ type: "home_print/scans", entry_id: "deskjet" }]);
+    const rows = [...card.shadowRoot.querySelectorAll('[data-role="scan-item"]')];
+    expect(rows).toHaveLength(2);
+    expect(card.shadowRoot.querySelectorAll('[data-role="history-item"]')).toHaveLength(0);
+    expect(rows[0].textContent).toContain("fatura");
+    expect(rows[0].textContent).toContain("2 sayfa");
+    expect(rows[0].textContent).toContain("Ada");
+    expect(rows[0].querySelector('[data-role="scan-row-download"]')).toBeTruthy();
+    // The row trash also asks once.
+    const trash = rows[1].querySelector('[data-role="scan-row-delete"]');
+    trash.click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/delete")).toHaveLength(0);
+    trash.click();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/delete")).toHaveLength(1);
+    expect(card.shadowRoot.querySelectorAll('[data-role="scan-item"]')).toHaveLength(1);
+    role(card, "tab-prints").click();
+    await flush();
+    expect(card.shadowRoot.querySelectorAll('[data-role="history-item"]')).toHaveLength(1);
+
+    document.body.innerHTML = "";
+    const plain = await mount(makeHass());
+    role(plain, "history-button").click();
+    await flush();
+    expect(visible(plain, "history-tabs")).toBe(false);
+  });
+
+  it("scan row opens preview with scan page path", async () => {
+    const realObserver = window.IntersectionObserver;
+    window.IntersectionObserver = undefined;
+    try {
+      const hass = makeHass({ printers: [scanPrinter()], scans: [scanRecord({ pages: 2 })] });
+      const card = await mount(hass);
+      role(card, "history-button").click();
+      await flush();
+      role(card, "tab-scans").click();
+      await flush();
+      $(card, '[data-role="scan-open"]').click();
+      await flush();
+      expect(role(card, "preview-dialog").open).toBe(true);
+      expect(text(card, "preview-title")).toBe("tarama_2026-11-16_1652");
+      expect(role(card, "preview-body").querySelectorAll("[data-page]")).toHaveLength(2);
+      const signs = wsCalls(hass, "auth/sign_path").map((m) => m.path);
+      expect(signs).toEqual([`/api/home_print/scans/deskjet/${REC_ID}/page/1`]);
+    } finally {
+      window.IntersectionObserver = realObserver;
+    }
+  });
+
+  it("admin_only disables scan toggle", async () => {
+    const hass = makeHass({
+      printers: [scanPrinter({ active_scan_id: "s9" }, { can_print: false })],
+      scans: [scanRecord()],
+    });
+    const card = await mount(hass);
+    expect(visible(card, "scan-toggle")).toBe(true);
+    expect(role(card, "scan-toggle").disabled).toBe(true);
+    expect(visible(card, "scan-panel")).toBe(false);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+    // Viewing stays open: the scans tab lists with download but no trash.
+    role(card, "history-button").click();
+    await flush();
+    role(card, "tab-scans").click();
+    await flush();
+    const row = $(card, '[data-role="scan-item"]');
+    expect(row.querySelector('[data-role="scan-row-download"]')).toBeTruthy();
+    expect(row.querySelector('[data-role="scan-row-delete"]')).toBe(null);
+  });
+
+  it("has English scan texts", async () => {
+    const card = await mount(makeHass({ language: "en", printers: [scanPrinter()] }));
+    expect(role(card, "scan-toggle").textContent.trim()).toBe("Scan");
+    await openPanel(card);
+    expect(text(card, "scan-start")).toBe("Start scan");
+    role(card, "history-button").click();
+    await flush();
+    expect(text(card, "tab-prints")).toBe("Prints");
+    expect(text(card, "tab-scans")).toBe("Scans");
   });
 });

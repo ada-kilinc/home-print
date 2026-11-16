@@ -6,6 +6,11 @@
  * job with `home_print/job`. A clock button opens the print history
  * (`home_print/history`, `home_print/history/delete`) and a page preview
  * served by `/api/home_print/history/<entry_id>/<id>/page/<n>`.
+ *
+ * A printer with a scanner also gets a Scan button under Print: it opens a
+ * panel that starts `home_print/scan/start`, polls `home_print/scan/state`
+ * and shows the result (preview, rename, download, add page, delete). The
+ * history popup then has a second tab listing `home_print/scans`.
  */
 
 const CARD_TYPE = "home-print-card";
@@ -31,6 +36,27 @@ const PREVIEW_SIGN_SECONDS = 300;
 // A signature older than this is renewed before its image is requested.
 const PREVIEW_RESIGN_MS = 240 * 1000;
 const PREVIEW_MARGIN = "800px 0px";
+const DOWNLOAD_SIGN_SECONDS = 60;
+const SCAN_POLL_MS = 1500;
+const SCAN_POLL_LIMIT_MS = 10 * 60 * 1000;
+// A destructive button asks once ("Sure?") and forgets after this long.
+const CONFIRM_MS = 4 * 1000;
+const SCAN_SELECTS = ["scan-source", "scan-color", "scan-resolution", "scan-format"];
+const SCAN_ERRORS = [
+  "scanner_busy",
+  "scanner_unavailable",
+  "adf_empty",
+  "invalid_option",
+  "bad_scan",
+  "too_large",
+  "too_many_pages",
+  "not_found",
+  "no_scanner",
+  "unauthorized",
+  "scan_failed",
+];
+// Poll answers that mean the scan can no longer be followed.
+const FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
 const DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
 const EXT_FORMATS = {
   pdf: "application/pdf",
@@ -84,6 +110,13 @@ const ICONS = {
     "M22,16V4A2,2 0 0,0 20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16M11,12L13.03,14.71L16,11L20,16H8M2,6V20A2,2 0 0,0 4,22H18V20H4V6",
   camera:
     "M4,4H7L9,2H15L17,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M12,7A5,5 0 0,0 7,12A5,5 0 0,0 12,17A5,5 0 0,0 17,12A5,5 0 0,0 12,7M12,9A3,3 0 0,1 15,12A3,3 0 0,1 12,15A3,3 0 0,1 9,12A3,3 0 0,1 12,9Z",
+  scanner:
+    "M4.2,10.7L19.8,5L20.5,6.9L6.4,12H19A2,2 0 0,1 21,14V18A2,2 0 0,1 19,20H5A2,2 0 0,1 3,18V12.5C3,11.7 3.5,10.9 4.2,10.7M17,17H19V15H17V17M5,17H15V15H5V17Z",
+  download: "M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z",
+  file_plus:
+    "M13.81 22H6C4.89 22 4 21.11 4 20V4C4 2.9 4.89 2 6 2H14L20 8V13.09C19.67 13.04 19.34 13 19 13S18.33 13.04 18 13.09V9H13V4H6V20H13.09C13.21 20.72 13.46 21.39 13.81 22M23 18H20V15H18V18H15V20H18V23H20V20H23V18Z",
+  chevron_left: "M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z",
+  chevron_right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
 };
 
 const svg = (name) =>
@@ -174,6 +207,52 @@ const STRINGS = {
     reason_ink_empty: "Mürekkep bitti",
     reason_cover_open: "Kapak açık",
     reason_canceled_at_device: "Yazıcıdan iptal edildi",
+    scan: "Tara",
+    scan_source: "Kaynak",
+    scan_color: "Renk",
+    scan_resolution: "Çözünürlük",
+    scan_format: "Format",
+    scan_source_platen: "Cam",
+    scan_source_adf: "Besleyici",
+    scan_source_adf_duplex: "Besleyici (çift taraf)",
+    scan_color_color: "Renkli",
+    scan_color_gray: "Gri",
+    scan_color_bw: "Siyah-beyaz",
+    scan_format_pdf: "PDF",
+    scan_format_jpeg: "JPEG",
+    scan_dpi: "{n} dpi",
+    scan_start: "Taramayı başlat",
+    scan_scanning: "Taranıyor…",
+    scan_scanning_page: "Taranıyor… ({n}. sayfa)",
+    scan_saving: "Kaydediliyor…",
+    scan_done: "Tarama hazır ✓",
+    scan_deleted: "Tarama silindi.",
+    scan_lost: "Taramanın durumu alınamıyor. Taramalar listesine bak.",
+    scan_timeout: "Tarama çok uzun sürdü, yazıcıya bak.",
+    scan_page_of: "Sayfa {n}/{total}",
+    scan_prev: "Önceki sayfa",
+    scan_next: "Sonraki sayfa",
+    scan_name: "Ad",
+    scan_download: "İndir",
+    scan_add_page: "Sayfa ekle",
+    confirm_delete: "Emin misin?",
+    rename_failed: "Ad değiştirilemedi. Birazdan tekrar dene.",
+    edit_not_allowed: "Bunu yalnızca yöneticiler yapabilir.",
+    download_failed: "İndirilemedi. Birazdan tekrar dene.",
+    tab_prints: "Baskılar",
+    tab_scans: "Taramalar",
+    scans_empty: "Henüz tarama yok.",
+    scan_error_scanner_busy: "Tarayıcı şu an meşgul.",
+    scan_error_scanner_unavailable: "Tarayıcıya ulaşılamadı.",
+    scan_error_adf_empty: "Besleyicide kâğıt yok.",
+    scan_error_invalid_option: "Tarayıcı bu ayarı desteklemiyor. Başka bir ayar seç.",
+    scan_error_bad_scan: "Tarayıcıdan gelen görüntü okunamadı. Tekrar dene.",
+    scan_error_too_large: "Tarama çok büyük. Daha düşük bir çözünürlük seç.",
+    scan_error_too_many_pages: "Sayfa sayısı çok fazla. Belgeyi parça parça tara.",
+    scan_error_not_found: "Belge bulunamadı, silinmiş olabilir.",
+    scan_error_no_scanner: "Bu yazıcıda tarayıcı yok.",
+    scan_error_unauthorized: "Bu yazıcıda yalnızca yöneticiler tarayabilir.",
+    scan_error_scan_failed: "Tarama yapılamadı. Birazdan tekrar dene.",
   },
   en: {
     editor_printer: "Printer",
@@ -258,6 +337,52 @@ const STRINGS = {
     reason_ink_empty: "Out of ink",
     reason_cover_open: "Cover open",
     reason_canceled_at_device: "Cancelled at the printer",
+    scan: "Scan",
+    scan_source: "Source",
+    scan_color: "Colour",
+    scan_resolution: "Resolution",
+    scan_format: "Format",
+    scan_source_platen: "Glass",
+    scan_source_adf: "Document feeder",
+    scan_source_adf_duplex: "Document feeder (two-sided)",
+    scan_color_color: "Colour",
+    scan_color_gray: "Grey",
+    scan_color_bw: "Black and white",
+    scan_format_pdf: "PDF",
+    scan_format_jpeg: "JPEG",
+    scan_dpi: "{n} dpi",
+    scan_start: "Start scan",
+    scan_scanning: "Scanning…",
+    scan_scanning_page: "Scanning… (page {n})",
+    scan_saving: "Saving…",
+    scan_done: "Scan ready ✓",
+    scan_deleted: "Scan deleted.",
+    scan_lost: "Can't get the scan's status. Check the Scans list.",
+    scan_timeout: "The scan took too long, check the printer.",
+    scan_page_of: "Page {n}/{total}",
+    scan_prev: "Previous page",
+    scan_next: "Next page",
+    scan_name: "Name",
+    scan_download: "Download",
+    scan_add_page: "Add page",
+    confirm_delete: "Sure?",
+    rename_failed: "Couldn't rename it. Try again shortly.",
+    edit_not_allowed: "Only administrators can do this.",
+    download_failed: "Couldn't download it. Try again shortly.",
+    tab_prints: "Prints",
+    tab_scans: "Scans",
+    scans_empty: "No scans yet.",
+    scan_error_scanner_busy: "The scanner is busy right now.",
+    scan_error_scanner_unavailable: "Couldn't reach the scanner.",
+    scan_error_adf_empty: "The document feeder is empty.",
+    scan_error_invalid_option: "The scanner doesn't support this setting. Pick another one.",
+    scan_error_bad_scan: "Couldn't read the image from the scanner. Try again.",
+    scan_error_too_large: "The scan is too large. Pick a lower resolution.",
+    scan_error_too_many_pages: "Too many pages. Scan the document in parts.",
+    scan_error_not_found: "Document not found; it may have been deleted.",
+    scan_error_no_scanner: "This printer has no scanner.",
+    scan_error_unauthorized: "Only administrators can scan on this printer.",
+    scan_error_scan_failed: "The scan failed. Try again shortly.",
   },
 };
 
@@ -422,6 +547,27 @@ function historyStateIcon(state) {
 
 function previewPath(entryId, recordId, page) {
   return `/api/home_print/history/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/page/${page}`;
+}
+
+function scanPagePath(entryId, recordId, page) {
+  return `/api/home_print/scans/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/page/${page}`;
+}
+
+function scanFilePath(entryId, recordId) {
+  return `/api/home_print/scans/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/file`;
+}
+
+// A scan error code in words; an unknown code gets the general text.
+function scanErrorText(lang, code) {
+  const name = code === "printer_unavailable" ? "scanner_unavailable" : String(code ?? "");
+  return t(lang, SCAN_ERRORS.includes(name) ? `scan_error_${name}` : "scan_error_scan_failed");
+}
+
+// Label of a scan option value: a known keyword in words, else as sent.
+function scanOptionLabel(lang, kind, value) {
+  if (kind === "resolution") return t(lang, "scan_dpi", { n: value });
+  const key = `scan_${kind}_${value}`;
+  return key in STRINGS.en ? t(lang, key) : String(value);
 }
 
 function svgIcon(name) {
@@ -741,6 +887,85 @@ const STYLE = `
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   }
   .preview-body .sheet-status { padding: 0; }
+
+  /* Scanning */
+  .scan-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 48px;
+    width: 100%;
+    border: 1px solid var(--primary-color);
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--primary-color);
+    background: none;
+    cursor: pointer;
+  }
+  .scan-toggle:disabled { opacity: 0.5; cursor: default; }
+  .scan-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .scan-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 8px 12px;
+  }
+  .scan-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    color: var(--secondary-text-color);
+    font-size: 0.9em;
+  }
+  .scan-field select { width: 100%; font-size: 1rem; }
+  .scan-result { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .scan-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--secondary-background-color);
+  }
+  .scan-page img {
+    display: block;
+    max-width: 100%;
+    max-height: 240px;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  }
+  .scan-page .sheet-status { padding: 8px; }
+  .scan-nav { display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .scan-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .scan-name input { flex: 1 1 auto; min-width: 0; }
+  .scan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-button:disabled { opacity: 0.5; cursor: default; }
+  .file-button.danger { color: var(--error-color); border-color: var(--error-color); }
+  .icon-button.armed {
+    width: auto;
+    padding: 0 8px;
+    border-radius: 8px;
+    color: var(--error-color);
+    white-space: nowrap;
+  }
+  .tabs { display: flex; border-bottom: 1px solid var(--divider-color); }
+  .tab {
+    flex: 1 1 0;
+    min-height: 48px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    font: inherit;
+    font-weight: 500;
+    color: var(--secondary-text-color);
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+  .history-mark svg { color: var(--secondary-text-color); vertical-align: middle; }
 `;
 
 const TEMPLATE = `
@@ -799,6 +1024,54 @@ const TEMPLATE = `
         <input type="text" data-role="pages" autocomplete="off" />
       </label>
       <button type="button" class="print" data-role="print" data-t="print"></button>
+      <button type="button" class="scan-toggle" data-role="scan-toggle" aria-expanded="false" aria-controls="scan-panel" hidden>
+        ${svg("scanner")}<span data-t="scan"></span>
+      </button>
+      <div class="scan-panel" id="scan-panel" data-role="scan-panel" hidden>
+        <div class="scan-fields">
+          <label class="scan-field" data-scan="source">
+            <span data-t="scan_source"></span><select data-role="scan-source"></select>
+          </label>
+          <label class="scan-field" data-scan="color">
+            <span data-t="scan_color"></span><select data-role="scan-color"></select>
+          </label>
+          <label class="scan-field" data-scan="resolution">
+            <span data-t="scan_resolution"></span><select data-role="scan-resolution"></select>
+          </label>
+          <label class="scan-field" data-scan="format">
+            <span data-t="scan_format"></span><select data-role="scan-format"></select>
+          </label>
+        </div>
+        <button type="button" class="print" data-role="scan-start" data-t="scan_start"></button>
+        <div class="message" data-role="scan-message" aria-live="polite"></div>
+        <div class="scan-result" data-role="scan-result" hidden>
+          <div class="scan-page" data-role="scan-page"></div>
+          <div class="scan-nav" data-role="scan-nav">
+            <button type="button" class="icon-button" data-role="scan-prev" data-aria="scan_prev">
+              ${svg("chevron_left")}
+            </button>
+            <span data-role="scan-page-label"></span>
+            <button type="button" class="icon-button" data-role="scan-next" data-aria="scan_next">
+              ${svg("chevron_right")}
+            </button>
+          </div>
+          <label class="scan-name">
+            <span data-t="scan_name"></span>
+            <input type="text" data-role="scan-name" autocomplete="off" maxlength="80" />
+          </label>
+          <div class="scan-actions">
+            <button type="button" class="file-button" data-role="scan-download">
+              ${svg("download")}<span data-t="scan_download"></span>
+            </button>
+            <button type="button" class="file-button" data-role="scan-add">
+              ${svg("file_plus")}<span data-t="scan_add_page"></span>
+            </button>
+            <button type="button" class="file-button danger" data-role="scan-delete">
+              ${svg("delete")}<span data-t="delete"></span>
+            </button>
+          </div>
+        </div>
+      </div>
       <div class="message" data-role="message" aria-live="polite"></div>
       <div class="detail" data-role="detail" hidden></div>
     </div>
@@ -810,6 +1083,10 @@ const TEMPLATE = `
         <button type="button" class="icon-button" data-role="history-close" data-aria="close">
           ${svg("close")}
         </button>
+      </div>
+      <div class="tabs" role="tablist" data-role="history-tabs" hidden>
+        <button type="button" role="tab" class="tab" data-role="tab-prints" data-tab="prints" data-t="tab_prints"></button>
+        <button type="button" role="tab" class="tab" data-role="tab-scans" data-tab="scans" data-t="tab_scans"></button>
       </div>
       <div class="sheet-status" data-role="history-status" role="status"></div>
       <ul class="history-list" data-role="history-list"></ul>
@@ -854,7 +1131,23 @@ class HomePrintCard extends HTMLElement {
     this._previewToken = 0;
     this._preview = null;
     this._deletedIds = new Set();
+    // "prints" or "scans": the history tab shown.
+    this._historyTab = "prints";
     this._savedOverflow = null;
+    // Scanning. _scan is the scan being followed ({entryId, scanId, started,
+    // appendPages}); _scanResult the finished document shown in the panel.
+    this._scanOpen = false;
+    this._scan = null;
+    this._scanTimer = null;
+    this._scanResult = null;
+    this._scanMessage = null;
+    this._scanAppliedId = null;
+    this._scanImgToken = 0;
+    // Scan ids already followed, so a printers list that still names a
+    // finished scan never resumes it.
+    this._scanSeen = new Set();
+    // Buttons waiting for their second tap: button -> {timer, children, label}.
+    this._armed = new Map();
     this._onDocumentClick = (ev) => this._closeMenuOutside(ev);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
@@ -875,6 +1168,24 @@ class HomePrintCard extends HTMLElement {
     this._role("preview-close").addEventListener("click", () => this._closePreview());
     this._wireDialog(this._role("history-dialog"), () => this._closeHistory());
     this._wireDialog(this._role("preview-dialog"), () => this._closePreview());
+    this._role("scan-toggle").addEventListener("click", () => this._onScanToggle());
+    this._role("scan-source").addEventListener("change", () => this._update());
+    this._role("scan-start").addEventListener("click", () => this._onScanStart());
+    this._role("scan-add").addEventListener("click", () => this._onScanAdd());
+    this._role("scan-download").addEventListener("click", () => this._onScanDownload());
+    const scanDelete = this._role("scan-delete");
+    scanDelete.addEventListener("click", () =>
+      this._confirmTap(scanDelete, () => this._deleteScanResult()),
+    );
+    this._role("scan-prev").addEventListener("click", () => this._onScanPage(-1));
+    this._role("scan-next").addEventListener("click", () => this._onScanPage(1));
+    const name = this._role("scan-name");
+    name.addEventListener("keydown", (ev) => this._onScanNameKey(ev));
+    name.addEventListener("blur", () => this._renameScan());
+    for (const tab of this.shadowRoot.querySelectorAll('[role="tab"]')) {
+      tab.addEventListener("click", () => this._switchHistoryTab(tab.dataset.tab));
+    }
+    this._role("history-tabs").addEventListener("keydown", (ev) => this._onTabKey(ev));
   }
 
   static getConfigElement() {
@@ -914,6 +1225,7 @@ class HomePrintCard extends HTMLElement {
   connectedCallback() {
     if (this._hass) this._startRefresh();
     if (this._job && !this._pollTimer) this._schedulePoll();
+    if (this._scan?.scanId && !this._scanTimer) this._scheduleScanPoll();
   }
 
   disconnectedCallback() {
@@ -921,8 +1233,10 @@ class HomePrintCard extends HTMLElement {
     this._closeMenu();
     clearInterval(this._refreshTimer);
     clearTimeout(this._pollTimer);
+    clearTimeout(this._scanTimer);
     this._refreshTimer = null;
     this._pollTimer = null;
+    this._scanTimer = null;
   }
 
   // ------------------------------------------------------------ data
@@ -1138,6 +1452,8 @@ class HomePrintCard extends HTMLElement {
     const printer = this._printer();
     if (!printer) return;
     this._historyEntryId = printer.entry_id;
+    this._historyTab = "prints";
+    this._role("history-tabs").hidden = !printer.scanner;
     this._historyEntries = [];
     this._deletedIds = new Set();
     this._renderHistory({ key: "history_loading" });
@@ -1152,13 +1468,35 @@ class HomePrintCard extends HTMLElement {
     this._hideDialog(this._role("history-dialog"));
   }
 
+  _switchHistoryTab(tab) {
+    if (!this._historyEntryId || tab === this._historyTab) return;
+    this._closePreview();
+    this._historyTab = tab;
+    this._historyEntries = [];
+    this._deletedIds = new Set();
+    this._renderHistory({ key: "history_loading" });
+    this._loadHistory();
+  }
+
+  _onTabKey(ev) {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key];
+    if (!step) return;
+    ev.preventDefault();
+    const tabs = [...this.shadowRoot.querySelectorAll('[role="tab"]')];
+    const index = tabs.findIndex((tab) => tab.dataset.tab === this._historyTab);
+    const next = tabs[(index + step + tabs.length) % tabs.length];
+    this._switchHistoryTab(next.dataset.tab);
+    next.focus();
+  }
+
   async _loadHistory() {
     const entryId = this._historyEntryId;
     if (!entryId || !this._hass) return;
     const token = ++this._historyToken;
+    const type = this._historyTab === "scans" ? "home_print/scans" : "home_print/history";
     let result;
     try {
-      result = await this._hass.callWS({ type: "home_print/history", entry_id: entryId });
+      result = await this._hass.callWS({ type, entry_id: entryId });
     } catch (_err) {
       if (token !== this._historyToken) return;
       // Keep rows already shown; a reload that fails only says so.
@@ -1175,42 +1513,62 @@ class HomePrintCard extends HTMLElement {
   async _deleteHistory(record, button) {
     const entryId = this._historyEntryId;
     if (!entryId) return;
+    const scans = this._historyTab === "scans";
     button.disabled = true;
     try {
-      await this._hass.callWS({
-        type: "home_print/history/delete",
-        entry_id: entryId,
-        history_id: record.id,
-      });
+      await this._hass.callWS(
+        scans
+          ? { type: "home_print/scans/delete", entry_id: entryId, scan_record_id: record.id }
+          : { type: "home_print/history/delete", entry_id: entryId, history_id: record.id },
+      );
     } catch (err) {
       button.disabled = false;
-      if (this._historyEntryId !== entryId) return;
+      if (this._historyEntryId !== entryId || this._historyTab !== (scans ? "scans" : "prints")) {
+        return;
+      }
       const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
       this._renderHistory({ key, error: true });
       return;
     }
+    if (scans && this._scanResult?.record.id === record.id) {
+      this._clearScanResult();
+      this._update();
+    }
     if (this._historyEntryId !== entryId) return;
+    // The tab changed meanwhile: its rows are another list.
+    if (this._historyTab !== (scans ? "scans" : "prints")) return;
     // {"deleted": false} means it was already gone; either way the row goes.
     this._deletedIds.add(record.id);
     const index = this._historyEntries.findIndex((e) => e.id === record.id);
     this._historyEntries = this._historyEntries.filter((e) => e.id !== record.id);
     this._renderHistory();
     // Focus moves on to the row that took its place, else to the close button.
-    const rows = this._role("history-list").querySelectorAll('[data-role="history-delete"]');
+    const rows = this._role("history-list").querySelectorAll(
+      '[data-role="history-delete"], [data-role="scan-row-delete"]',
+    );
     (rows[Math.max(index, 0)] ?? this._role("history-close")).focus();
   }
 
   _renderHistory(status = null) {
     const lang = pickLanguage(this._hass);
     const entries = this._historyEntries;
-    const shown = status ?? (entries.length === 0 ? { key: "history_empty" } : null);
+    const scans = this._historyTab === "scans";
+    for (const tab of this.shadowRoot.querySelectorAll('[role="tab"]')) {
+      const selected = tab.dataset.tab === this._historyTab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    const empty = scans ? "scans_empty" : "history_empty";
+    const shown = status ?? (entries.length === 0 ? { key: empty } : null);
     const statusEl = this._role("history-status");
     statusEl.textContent = shown ? t(lang, shown.key) : "";
     statusEl.hidden = !shown;
     statusEl.classList.toggle("error", Boolean(shown?.error));
     const canDelete = this._printer()?.can_print !== false;
     this._role("history-list").replaceChildren(
-      ...entries.map((record) => this._historyRow(lang, record, canDelete)),
+      ...entries.map((record) =>
+        scans ? this._scanRow(lang, record, canDelete) : this._historyRow(lang, record, canDelete),
+      ),
     );
   }
 
@@ -1227,7 +1585,16 @@ class HomePrintCard extends HTMLElement {
     open.dataset.role = "history-open";
     if (hadFile) {
       open.type = "button";
-      open.addEventListener("click", () => this._openPreview(record));
+      open.addEventListener("click", () => {
+        const entryId = this._historyEntryId;
+        this._openPreview({
+          title: record.file_name,
+          gone: record.file === false,
+          isImage: String(record.mime ?? "").startsWith("image/"),
+          pages: record.pages,
+          pagePath: (page) => previewPath(entryId, record.id, page),
+        });
+      });
     }
 
     const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
@@ -1246,19 +1613,7 @@ class HomePrintCard extends HTMLElement {
     name.dataset.role = "history-name";
     name.textContent = String(record.file_name ?? "");
     name.title = name.textContent;
-    const meta = document.createElement("span");
-    meta.className = "history-meta";
-    const pages = Number(record.pages);
-    const parts = [
-      formatHistoryTime(this._timeLanguage(), record.time),
-      record.user ? String(record.user) : "",
-      pages > 0 ? t(lang, pages === 1 ? "history_pages_one" : "history_pages", { n: pages }) : "",
-    ].filter(Boolean);
-    for (const part of parts) {
-      const span = document.createElement("span");
-      span.textContent = part;
-      meta.append(span);
-    }
+    const meta = this._recordMeta(lang, record);
     if (hadFile && record.file === false) {
       const tag = document.createElement("span");
       tag.className = "tag";
@@ -1283,36 +1638,115 @@ class HomePrintCard extends HTMLElement {
     return row;
   }
 
+  _recordMeta(lang, record) {
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    const pages = Number(record.pages);
+    const parts = [
+      formatHistoryTime(this._timeLanguage(), record.time),
+      record.user ? String(record.user) : "",
+      pages > 0 ? t(lang, pages === 1 ? "history_pages_one" : "history_pages", { n: pages }) : "",
+    ].filter(Boolean);
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      meta.append(span);
+    }
+    return meta;
+  }
+
+  // One row of the Scans tab: tap to preview, download, delete (asks once).
+  _scanRow(lang, record, canDelete) {
+    const entryId = this._historyEntryId;
+    const row = document.createElement("li");
+    row.className = "history-item";
+    row.dataset.role = "scan-item";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-open";
+    open.dataset.role = "scan-open";
+    open.addEventListener("click", () =>
+      this._openPreview({
+        title: record.name,
+        gone: false,
+        isImage: String(record.mime ?? "").startsWith("image/"),
+        pages: record.pages,
+        pagePath: (page) => scanPagePath(entryId, record.id, page),
+      }),
+    );
+    const mark = document.createElement("span");
+    mark.className = "history-mark";
+    mark.append(svgIcon("scanner"));
+    const textBox = document.createElement("span");
+    textBox.className = "history-text";
+    const name = document.createElement("span");
+    name.className = "history-name";
+    name.dataset.role = "history-name";
+    name.textContent = String(record.name ?? "");
+    name.title = name.textContent;
+    textBox.append(name, this._recordMeta(lang, record));
+    open.append(mark, textBox);
+    row.append(open);
+
+    const download = this._iconButton(lang, "download", "scan_download", "scan-row-download");
+    download.addEventListener("click", async () => {
+      if (!(await this._downloadScan(entryId, record)) && this._historyEntryId === entryId) {
+        this._renderHistory({ key: "download_failed", error: true });
+      }
+    });
+    row.append(download);
+    if (canDelete) {
+      const trash = this._iconButton(lang, "delete", "delete", "scan-row-delete");
+      trash.addEventListener("click", () =>
+        this._confirmTap(trash, () => this._deleteHistory(record, trash)),
+      );
+      row.append(trash);
+    }
+    return row;
+  }
+
+  _iconButton(lang, icon, label, roleName) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-button";
+    button.dataset.role = roleName;
+    button.setAttribute("aria-label", t(lang, label));
+    button.title = t(lang, label);
+    button.append(svgIcon(icon));
+    return button;
+  }
+
   _timeLanguage() {
     return String(this._hass?.locale?.language ?? this._hass?.language ?? "en");
   }
 
   // Pages are signed just before they load: a signed path lives 300 s, and a
   // request with an expired one is a 401 that HA counts as a failed login.
-  _openPreview(record) {
-    const entryId = this._historyEntryId;
-    if (!entryId) return;
+  //
+  // `spec`: {title, gone, isImage, pages, pagePath(page) -> unsigned path},
+  // so print history and scans share the same viewer.
+  _openPreview(spec) {
+    if (!this._historyEntryId) return;
     this._stopPreview();
     const lang = pickLanguage(this._hass);
-    this._role("preview-title").textContent = String(record.file_name ?? "");
+    this._role("preview-title").textContent = String(spec.title ?? "");
     const body = this._role("preview-body");
     body.replaceChildren();
     body.scrollTop = 0;
     this._showDialog(this._role("preview-dialog"));
-    if (record.file === false) {
+    if (spec.gone) {
       this._previewNote(body, t(lang, "file_gone"));
       return;
     }
-    const isImage = String(record.mime ?? "").startsWith("image/");
-    const known = Number(record.pages) > 0 ? Number(record.pages) : null;
+    const known = Number(spec.pages) > 0 ? Number(spec.pages) : null;
     const preview = {
       token: this._previewToken,
       body,
       lang,
-      entryId,
-      recordId: record.id,
+      pagePath: spec.pagePath,
       // null: unknown, pages are added one by one until one is missing.
-      count: isImage ? 1 : known,
+      count: spec.isImage ? 1 : known,
       observer: null,
     };
     this._preview = preview;
@@ -1344,12 +1778,12 @@ class HomePrintCard extends HTMLElement {
     return box;
   }
 
-  async _signPage(preview, page) {
-    const result = await this._hass.callWS({
-      type: "auth/sign_path",
-      path: previewPath(preview.entryId, preview.recordId, page),
-      expires: PREVIEW_SIGN_SECONDS,
-    });
+  _signPage(preview, page) {
+    return this._signPath(preview.pagePath(page));
+  }
+
+  async _signPath(path, expires = PREVIEW_SIGN_SECONDS) {
+    const result = await this._hass.callWS({ type: "auth/sign_path", path, expires });
     return String(result?.path ?? "");
   }
 
@@ -1604,6 +2038,510 @@ class HomePrintCard extends HTMLElement {
     this._update();
   }
 
+  // ------------------------------------------------------------ scanning
+
+  _scanBusy() {
+    return this._scan !== null;
+  }
+
+  _onScanToggle() {
+    if (this._role("scan-toggle").disabled) return;
+    this._scanOpen = !this._scanOpen;
+    this._update();
+  }
+
+  _onScanStart() {
+    const printer = this._printer();
+    if (!printer?.scanner || this._scanBusy() || printer.can_print === false) return;
+    this._startScan(printer.entry_id, {
+      source: this._role("scan-source").value,
+      color_mode: this._role("scan-color").value,
+      resolution: Number(this._role("scan-resolution").value),
+      format: this._role("scan-format").value,
+    });
+  }
+
+  // Another page from the glass, added to the PDF shown, with its settings.
+  _onScanAdd() {
+    const result = this._scanResult;
+    if (!result || this._scanBusy()) return;
+    const record = result.record;
+    this._startScan(
+      result.entryId,
+      {
+        source: record.source,
+        color_mode: record.color_mode,
+        resolution: Number(record.resolution),
+        format: "pdf",
+        append_to: record.id,
+      },
+      Number(record.pages) || 0,
+    );
+  }
+
+  async _startScan(entryId, request, appendPages = null) {
+    const lang = pickLanguage(this._hass);
+    const scan = { entryId, scanId: null, started: Date.now(), appendPages };
+    this._scan = scan;
+    this._disarmAll();
+    // A new document replaces the result shown; an added page keeps it.
+    if (appendPages === null) this._clearScanResult();
+    this._scanMessage = { text: t(lang, "scan_scanning"), kind: "info" };
+    this._update();
+    let state;
+    try {
+      state = (
+        await this._hass.callWS({ type: "home_print/scan/start", entry_id: entryId, ...request })
+      )?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      this._endScan(scanErrorText(lang, err?.code), "error");
+      return;
+    }
+    if (this._scan !== scan) return;
+    scan.scanId = state?.scan_id ?? null;
+    if (!scan.scanId) {
+      // Nothing to follow; never leave the button held.
+      this._endScan(scanErrorText(lang, "scan_failed"), "error");
+      return;
+    }
+    this._scanSeen.add(scan.scanId);
+    this._onScanState(scan, state);
+  }
+
+  // A scan the server is running that this card isn't following yet: after
+  // a reload, or one started on another screen. A finished last_scan alone
+  // is not shown, so a card opened later doesn't pop open on old news.
+  _resumeScan(printer) {
+    const id = printer.scanner?.active_scan_id;
+    if (!id || this._scan || this._scanSeen.has(id) || printer.can_print === false) return;
+    this._scanSeen.add(id);
+    this._scan = { entryId: printer.entry_id, scanId: id, started: Date.now(), appendPages: null };
+    this._clearScanResult();
+    this._scanOpen = true;
+    this._scanMessage = { text: t(pickLanguage(this._hass), "scan_scanning"), kind: "info" };
+    if (this.isConnected) this._scheduleScanPoll();
+  }
+
+  _scheduleScanPoll() {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = setTimeout(() => {
+      this._scanTimer = null;
+      this._pollScan();
+    }, SCAN_POLL_MS);
+  }
+
+  async _pollScan() {
+    const scan = this._scan;
+    if (!scan?.scanId || !this._hass) return;
+    const lang = pickLanguage(this._hass);
+    if (Date.now() - scan.started >= SCAN_POLL_LIMIT_MS) {
+      this._endScan(t(lang, "scan_timeout"), "error");
+      return;
+    }
+    let state;
+    try {
+      state = (
+        await this._hass.callWS({
+          type: "home_print/scan/state",
+          entry_id: scan.entryId,
+          scan_id: scan.scanId,
+        })
+      )?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
+        this._endScan(t(lang, "scan_lost"), "error");
+        return;
+      }
+      // A dropped connection: keep asking until the time limit.
+      if (this.isConnected) this._scheduleScanPoll();
+      return;
+    }
+    if (this._scan !== scan) return;
+    this._onScanState(scan, state);
+  }
+
+  _onScanState(scan, state) {
+    const lang = pickLanguage(this._hass);
+    switch (state?.state) {
+      case "done": {
+        const record = state.record;
+        if (record) {
+          // After an added page, show the first new one.
+          const page = scan.appendPages === null ? 1 : scan.appendPages + 1;
+          this._showScanResult(scan.entryId, record, page);
+        }
+        this._endScan(t(lang, "scan_done"), "success");
+        this._reloadScans(scan.entryId);
+        return;
+      }
+      case "error":
+        this._endScan(scanErrorText(lang, state.error), "error");
+        return;
+      case "saving":
+        this._scanMessage = { text: t(lang, "scan_saving"), kind: "info" };
+        break;
+      default: {
+        const pages = Number(state?.pages) || 0;
+        const text =
+          pages > 0 ? t(lang, "scan_scanning_page", { n: pages + 1 }) : t(lang, "scan_scanning");
+        this._scanMessage = { text, kind: "info" };
+      }
+    }
+    this._update();
+    if (this.isConnected) this._scheduleScanPoll();
+  }
+
+  _endScan(text, kind) {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = null;
+    this._scan = null;
+    this._scanMessage = { text, kind };
+    this._update();
+  }
+
+  // Forget everything about scanning on this card (the printer changed).
+  // A scan still running is left to the server; switching back resumes it.
+  _resetScan() {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = null;
+    if (this._scan?.scanId) this._scanSeen.delete(this._scan.scanId);
+    this._scan = null;
+    this._scanMessage = null;
+    this._scanOpen = false;
+    this._clearScanResult();
+  }
+
+  _reloadScans(entryId) {
+    if (this._historyEntryId === entryId && this._historyTab === "scans") this._loadHistory();
+  }
+
+  _showScanResult(entryId, record, page = 1) {
+    const total = Math.max(1, Number(record.pages) || 1);
+    this._scanResult = {
+      entryId,
+      record,
+      page: Math.min(Math.max(1, page), total),
+      pendingName: null,
+      deleting: false,
+    };
+    this._role("scan-name").value = String(record.name ?? "");
+    this._loadScanImage();
+  }
+
+  _clearScanResult() {
+    this._disarmAll();
+    this._scanResult = null;
+    this._scanImgToken += 1;
+    this._role("scan-page").replaceChildren();
+  }
+
+  _onScanPage(step) {
+    const result = this._scanResult;
+    if (!result) return;
+    const total = Math.max(1, Number(result.record.pages) || 1);
+    const page = Math.min(Math.max(1, result.page + step), total);
+    if (page === result.page) return;
+    result.page = page;
+    this._update();
+    this._loadScanImage();
+  }
+
+  // The page shown is signed just before it loads, like the preview's pages.
+  async _loadScanImage() {
+    const result = this._scanResult;
+    if (!result) return;
+    const token = ++this._scanImgToken;
+    const lang = pickLanguage(this._hass);
+    const box = this._role("scan-page");
+    const failed = () => {
+      if (token !== this._scanImgToken) return;
+      box.replaceChildren(this._previewNote(null, t(lang, "preview_failed")));
+    };
+    let path;
+    try {
+      path = await this._signPath(scanPagePath(result.entryId, result.record.id, result.page));
+    } catch (_err) {
+      failed();
+      return;
+    }
+    if (token !== this._scanImgToken) return;
+    // A fresh image per page, so a late error of the previous one is ignored.
+    const img = document.createElement("img");
+    img.dataset.role = "scan-img";
+    img.alt = t(lang, "preview_page", { n: result.page });
+    img.addEventListener("error", failed);
+    img.src = path;
+    box.replaceChildren(img);
+  }
+
+  _onScanNameKey(ev) {
+    const result = this._scanResult;
+    if (!result) return;
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      this._renameScan();
+    } else if (ev.key === "Escape") {
+      ev.stopPropagation();
+      this._role("scan-name").value = String(result.record.name ?? "");
+    }
+  }
+
+  async _renameScan() {
+    const result = this._scanResult;
+    if (!result || this._printer()?.can_print === false) return;
+    const lang = pickLanguage(this._hass);
+    const input = this._role("scan-name");
+    const name = input.value.trim();
+    if (!name) {
+      input.value = String(result.record.name ?? "");
+      return;
+    }
+    // Enter and the blur after it would otherwise send the same name twice.
+    if (name === (result.pendingName ?? result.record.name)) return;
+    result.pendingName = name;
+    let entry;
+    try {
+      entry = (
+        await this._hass.callWS({
+          type: "home_print/scans/rename",
+          entry_id: result.entryId,
+          scan_record_id: result.record.id,
+          name,
+        })
+      )?.entry;
+    } catch (err) {
+      if (this._scanResult !== result) return;
+      result.pendingName = null;
+      input.value = String(result.record.name ?? "");
+      const key = err?.code === "unauthorized" ? "edit_not_allowed" : "rename_failed";
+      this._scanMessage = { text: t(lang, key), kind: "error" };
+      this._update();
+      return;
+    }
+    if (this._scanResult !== result) return;
+    result.pendingName = null;
+    if (!entry) {
+      // Deleted elsewhere meanwhile.
+      this._clearScanResult();
+      this._scanMessage = { text: t(lang, "scan_error_not_found"), kind: "error" };
+    } else {
+      result.record = entry;
+      // The server may have tidied the name or added " (2)"; show its name
+      // unless the field was edited again while the rename was on its way.
+      if (input.value.trim() === name) input.value = String(entry.name ?? "");
+    }
+    this._update();
+    this._reloadScans(result.entryId);
+  }
+
+  async _onScanDownload() {
+    const result = this._scanResult;
+    if (!result) return;
+    if (await this._downloadScan(result.entryId, result.record)) return;
+    if (this._scanResult !== result) return;
+    this._scanMessage = { text: t(pickLanguage(this._hass), "download_failed"), kind: "error" };
+    this._update();
+  }
+
+  // The file route needs auth, so a short-lived signed link is clicked; the
+  // server's Content-Disposition names the file.
+  async _downloadScan(entryId, record) {
+    let path;
+    try {
+      path = await this._signPath(scanFilePath(entryId, record.id), DOWNLOAD_SIGN_SECONDS);
+    } catch (_err) {
+      return false;
+    }
+    if (!path) return false;
+    const link = document.createElement("a");
+    link.href = path;
+    link.setAttribute("download", "");
+    link.hidden = true;
+    this.shadowRoot.append(link);
+    link.click();
+    link.remove();
+    return true;
+  }
+
+  async _deleteScanResult() {
+    const result = this._scanResult;
+    if (!result || result.deleting || this._scanBusy()) return;
+    const lang = pickLanguage(this._hass);
+    result.deleting = true;
+    this._update();
+    try {
+      await this._hass.callWS({
+        type: "home_print/scans/delete",
+        entry_id: result.entryId,
+        scan_record_id: result.record.id,
+      });
+    } catch (err) {
+      if (this._scanResult !== result) return;
+      result.deleting = false;
+      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
+      this._scanMessage = { text: t(lang, key), kind: "error" };
+      this._update();
+      return;
+    }
+    if (this._scanResult === result) {
+      this._clearScanResult();
+      this._scanMessage = { text: t(lang, "scan_deleted"), kind: "info" };
+    }
+    this._update();
+    this._reloadScans(result.entryId);
+  }
+
+  // First tap arms the button ("Sure?"), the second within CONFIRM_MS runs
+  // `action`; otherwise it goes back to how it was.
+  _confirmTap(button, action) {
+    if (this._armed.has(button)) {
+      this._disarm(button);
+      action();
+      return;
+    }
+    const lang = pickLanguage(this._hass);
+    const label = document.createElement("span");
+    label.textContent = t(lang, "confirm_delete");
+    this._armed.set(button, {
+      children: [...button.childNodes],
+      label: button.getAttribute("aria-label"),
+      timer: setTimeout(() => this._disarm(button), CONFIRM_MS),
+    });
+    button.classList.add("armed");
+    button.setAttribute("aria-label", label.textContent);
+    button.replaceChildren(label);
+  }
+
+  _disarm(button) {
+    const armed = this._armed.get(button);
+    if (!armed) return;
+    this._armed.delete(button);
+    clearTimeout(armed.timer);
+    button.classList.remove("armed");
+    if (armed.label === null) button.removeAttribute("aria-label");
+    else button.setAttribute("aria-label", armed.label);
+    button.replaceChildren(...armed.children);
+  }
+
+  _disarmAll() {
+    for (const button of [...this._armed.keys()]) this._disarm(button);
+  }
+
+  // Fill a select only when its options change, so an open dropdown survives
+  // the frequent hass updates.
+  _setOptions(select, values, label, wanted) {
+    const items = values.map((value) => [String(value), label(value)]);
+    const key = JSON.stringify(items);
+    if (select.dataset.key !== key) {
+      select.replaceChildren(
+        ...items.map(([value, text]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          return option;
+        }),
+      );
+      select.dataset.key = key;
+    }
+    const strings = items.map(([value]) => value);
+    select.value = strings.includes(String(wanted)) ? String(wanted) : (strings[0] ?? "");
+  }
+
+  // Options come from the chosen source's capabilities; a value no longer
+  // offered falls back to the scanner's default, else the first one.
+  _fillScanSelects(lang, scanner, reset) {
+    const defaults = scanner.defaults ?? {};
+    const pick = (values, current, fallback) => {
+      const strings = values.map(String);
+      if (!reset && strings.includes(String(current))) return current;
+      return strings.includes(String(fallback)) ? fallback : values[0];
+    };
+    const sources = Object.keys(scanner.sources ?? {});
+    const source = pick(sources, this._role("scan-source").value, defaults.source);
+    const caps = scanner.sources?.[source] ?? {};
+    const colors = caps.color_modes ?? [];
+    const resolutions = caps.resolutions ?? [];
+    const formats = scanner.formats ?? ["pdf"];
+    const field = (name) => this.shadowRoot.querySelector(`[data-scan="${name}"]`);
+    this._setOptions(
+      this._role("scan-source"),
+      sources,
+      (v) => scanOptionLabel(lang, "source", v),
+      source,
+    );
+    field("source").hidden = sources.length < 2;
+    this._setOptions(
+      this._role("scan-color"),
+      colors,
+      (v) => scanOptionLabel(lang, "color", v),
+      pick(colors, this._role("scan-color").value, defaults.color_mode),
+    );
+    this._setOptions(
+      this._role("scan-resolution"),
+      resolutions,
+      (v) => scanOptionLabel(lang, "resolution", v),
+      pick(resolutions, this._role("scan-resolution").value, defaults.resolution),
+    );
+    this._setOptions(
+      this._role("scan-format"),
+      formats,
+      (v) => scanOptionLabel(lang, "format", v),
+      pick(formats, this._role("scan-format").value, defaults.format),
+    );
+  }
+
+  _renderScan(lang, printer) {
+    const scanner = printer?.scanner ?? null;
+    const id = scanner ? printer.entry_id : null;
+    if (id !== this._scanAppliedId) {
+      this._resetScan();
+      this._scanAppliedId = id;
+      if (scanner) this._fillScanSelects(lang, scanner, true);
+    } else if (scanner) {
+      this._fillScanSelects(lang, scanner, false);
+    }
+    const editable = printer?.can_print !== false;
+    if (scanner) this._resumeScan(printer);
+    const toggle = this._role("scan-toggle");
+    const open = Boolean(scanner) && editable && this._scanOpen;
+    toggle.hidden = !scanner;
+    toggle.disabled = !editable;
+    toggle.setAttribute("aria-expanded", String(open));
+    this._role("scan-panel").hidden = !open;
+    if (!scanner) return;
+
+    const busy = this._scanBusy();
+    const offline = scanner.available === false;
+    this._role("scan-start").disabled = busy || !editable || offline;
+    for (const name of SCAN_SELECTS) this._role(name).disabled = busy;
+    const message = this._role("scan-message");
+    let shown = this._scanMessage;
+    if (!shown && offline) {
+      shown = { text: scanErrorText(lang, "scanner_unavailable"), kind: "error" };
+    }
+    message.textContent = shown?.text ?? "";
+    message.className = `message ${shown?.kind ?? ""}`.trim();
+
+    const result = this._scanResult;
+    this._role("scan-result").hidden = !result;
+    if (!result) return;
+    const record = result.record;
+    const total = Math.max(1, Number(record.pages) || 1);
+    this._role("scan-nav").hidden = total <= 1;
+    this._role("scan-page-label").textContent = t(lang, "scan_page_of", { n: result.page, total });
+    this._role("scan-prev").disabled = result.page <= 1;
+    this._role("scan-next").disabled = result.page >= total;
+    this._role("scan-name").disabled = busy || !editable;
+    const add = this._role("scan-add");
+    add.hidden = !editable || record.mime !== "application/pdf" || record.source !== "platen";
+    add.disabled = busy;
+    const remove = this._role("scan-delete");
+    remove.hidden = !editable;
+    remove.disabled = busy || result.deleting;
+  }
+
   // ------------------------------------------------------------ rendering
 
   _role(name) {
@@ -1645,6 +2583,7 @@ class HomePrintCard extends HTMLElement {
     this._renderOptions(printer);
     this._renderFile(lang, printer);
     this._role("print").disabled = !this._canSubmit(printer);
+    this._renderScan(lang, printer);
     this._role("history-button").hidden = !printer;
     const pick = this._role("pick");
     if (isIOS(globalThis.navigator)) {
@@ -1814,6 +2753,9 @@ HomePrintCard.helpers = Object.freeze({
   isIOS,
   formatHistoryTime,
   historyStateIcon,
+  scanErrorText,
+  scanPagePath,
+  scanFilePath,
 });
 
 if (!customElements.get(CARD_TYPE)) {
