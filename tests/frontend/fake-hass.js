@@ -50,6 +50,24 @@ export function deskjetStates() {
   };
 }
 
+export function historyEntry(overrides = {}) {
+  return {
+    id: "a".repeat(32),
+    time: "2026-11-16T15:52:00+00:00",
+    file_name: "rapor.pdf",
+    user: "Ada",
+    job_id: 7,
+    state: "completed",
+    pages: 2,
+    converted_to: null,
+    error: null,
+    file: true,
+    size: 1234,
+    mime: "application/pdf",
+    ...overrides,
+  };
+}
+
 /**
  * Build a fake hass.
  *
@@ -57,7 +75,9 @@ export function deskjetStates() {
  * `home_print/job` answers: an object is returned as `{job}`, an object with
  * `error` rejects like HA's callWS does. The last answer repeats.
  * `upload` is the upload answer, an Error to reject with, or "hang" for a
- * request that only ends when its AbortSignal fires.
+ * request that only ends when its AbortSignal fires. `history` seeds the
+ * `home_print/history` store, which `home_print/history/delete` edits;
+ * `historyError`, `deleteError` and `signError` make those calls reject.
  */
 export function makeHass({
   printers = [deskjetPrinter()],
@@ -66,8 +86,13 @@ export function makeHass({
   jobs = [],
   upload = { status: 200, body: { job_id: 42 } },
   printersError = null,
+  history = [],
+  historyError = null,
+  deleteError = null,
+  signError = null,
 } = {}) {
   const jobQueue = [...jobs];
+  const historyStore = history.map((entry) => ({ ...entry }));
   const hass = {
     language,
     locale: { language },
@@ -84,6 +109,20 @@ export function makeHass({
         if (!next) throw { code: "not_found", message: "not found" };
         if (next.error) throw { code: next.error, message: next.error };
         return { job: next };
+      }
+      if (msg.type === "home_print/history") {
+        if (historyError) throw historyError;
+        return { entries: historyStore.map((entry) => ({ ...entry })) };
+      }
+      if (msg.type === "home_print/history/delete") {
+        if (deleteError) throw deleteError;
+        const index = historyStore.findIndex((entry) => entry.id === msg.history_id);
+        if (index >= 0) historyStore.splice(index, 1);
+        return { deleted: index >= 0 };
+      }
+      if (msg.type === "auth/sign_path") {
+        if (signError) throw signError;
+        return { path: `${msg.path}?authSig=sig` };
       }
       throw { code: "unknown_command", message: msg.type };
     }),

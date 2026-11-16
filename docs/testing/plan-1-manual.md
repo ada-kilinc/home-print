@@ -172,6 +172,7 @@ show_ink: true
 ```
 
 - Kart entegrasyonla birlikte kendiliğinden yüklenir, ayrıca bir kaynak (resource) eklemen gerekmez.
+- Başlıktaki saat simgesi geçmiş baskıları açar: çöp kutusuyla kaydı ve dosyayı silebilir, kayda dokunup ön izlemeyi kaydırarak görebilirsin; **Dosya seç** iPhone/iPad'de sistemin kendi menüsünü, diğer cihazlarda kartın "Dosyadan seç / Fotoğraf seç / Fotoğraf çek" menüsünü açar.
 - Entegrasyonu güncelledikten sonra kart eski haliyle görünürse tarayıcıda sayfayı sert yenile (Ctrl+Shift+R, telefonda uygulamayı kapatıp aç).
 
 ## Bilinen konular

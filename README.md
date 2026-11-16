@@ -34,6 +34,8 @@ title: Printer
 show_ink: true
 ```
 
+The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the iPhone/iPad system sheet, or on other devices a small menu (from files, photo library, take photo).
+
 ## Options
 
 Per printer (**Configure**): default duplex and colour mode, maximum file size (default 25 MB), polling interval, and "only admins can print".

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { deskjetPrinter, deskjetStates, makeHass } from "./fake-hass.js";
+import { deskjetPrinter, deskjetStates, historyEntry, makeHass } from "./fake-hass.js";
 
 let HomePrintCard;
 let errorSpy;
@@ -46,7 +46,7 @@ function makeFile(name, type, size = 1234) {
   return file;
 }
 
-async function selectFile(card, file, input = role(card, "file")) {
+async function selectFile(card, file, input = role(card, "input-file")) {
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   input.dispatchEvent(new Event("change"));
   await flush();
@@ -188,9 +188,6 @@ describe("options from capabilities", () => {
     expect(markers[0].textContent).toContain("%40");
     expect(markers[1].textContent).toContain("Renkli");
     expect(markers[1].textContent).toContain("%20");
-    expect(text(card, "last")).toContain("rapor.pdf");
-    expect(text(card, "last")).toContain("✓");
-    expect(text(card, "last")).toContain("Ada");
 
     const states = deskjetStates();
     states["sensor.deskjet_status"].state = "processing";
@@ -286,7 +283,7 @@ describe("printing", () => {
     await clickPrint(card);
     // The picked file is cleared so the same file can be chosen again.
     expect(text(card, "file-name")).toBe("");
-    expect(role(card, "file").value).toBe("");
+    expect(role(card, "input-file").value).toBe("");
     await selectFile(card, file);
     await vi.advanceTimersByTimeAsync(3000);
     expect(text(card, "message")).toBe("Yazdırılıyor…");
@@ -342,31 +339,33 @@ describe("printing", () => {
     expect(role(card, "print").disabled).toBe(false);
   });
 
-  it("has a photo button that only accepts JPEG and PNG and uploads", async () => {
+  it("uploads a photo from the photo input and clears every input", async () => {
     const hass = makeHass({ jobs: [{ job_id: 42, state: "processing", reasons: [] }] });
     const card = await mount(hass);
-    const file = role(card, "file");
-    const photo = role(card, "photo");
-    expect(file.getAttribute("accept")).toBe(
-      "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png",
-    );
-    expect(photo.type).toBe("file");
-    expect(photo.getAttribute("accept")).toBe("image/jpeg,image/png");
-    expect(photo.closest("label").textContent.trim()).toBe("Fotoğraf seç");
+    const photo = role(card, "input-photo");
     await selectFile(card, makeFile("IMG_0001.JPG", "image/jpeg"), photo);
     expect(text(card, "file-name")).toBe("IMG_0001.JPG");
     await clickPrint(card);
     expect(hass.fetchWithAuth.mock.calls[0][1].body.get("file").name).toBe("IMG_0001.JPG");
-    expect(photo.value).toBe("");
+    for (const name of ["input-file", "input-photo", "input-camera"]) {
+      expect(role(card, name).value, name).toBe("");
+    }
   });
 
-  it("checks a photo like any other file", async () => {
-    const hass = makeHass();
-    const card = await mount(hass);
-    await selectFile(card, makeFile("big.png", "image/png", 26 * 1024 * 1024), role(card, "photo"));
-    expect(text(card, "message")).toContain("25");
-    await clickPrint(card);
-    expect(hass.fetchWithAuth).not.toHaveBeenCalled();
+  it("checks a file from each of the three inputs the same way", async () => {
+    for (const name of ["input-file", "input-photo", "input-camera"]) {
+      const hass = makeHass();
+      const card = await mount(hass);
+      await selectFile(card, makeFile("big.png", "image/png", 26 * 1024 * 1024), role(card, name));
+      expect(text(card, "message"), name).toContain("25");
+      await clickPrint(card);
+      expect(hass.fetchWithAuth, name).not.toHaveBeenCalled();
+      await selectFile(card, makeFile("ödev.docx", ""), role(card, name));
+      expect(text(card, "message"), name).toContain("Word");
+      await selectFile(card, makeFile("foto.png", "image/png"), role(card, name));
+      expect(role(card, "print").disabled, name).toBe(false);
+      document.body.innerHTML = "";
+    }
   });
 
   it("says a job the printer no longer lists probably finished", async () => {
@@ -541,13 +540,18 @@ describe("printing", () => {
       color: "#123456",
       friendly_name: '<img src=x onerror="alert(1)">',
     };
-    states["sensor.deskjet_last_job"].state = "<b>son</b>.pdf";
-    const card = await mount(makeHass({ states }));
+    const history = [historyEntry({ file_name: "<b>son</b>.pdf", user: "<i>Ada</i>" })];
+    const card = await mount(makeHass({ states, history }));
     const name = '<img src=x onerror="alert(1)">.pdf';
     await selectFile(card, makeFile(name, "application/pdf"));
     expect(role(card, "file-name").textContent).toBe(name);
     expect(role(card, "ink").textContent).toContain('<img src=x onerror="alert(1)">');
-    expect(text(card, "last")).toContain("<b>son</b>.pdf");
+    role(card, "history-button").click();
+    await flush();
+    const item = role(card, "history-item");
+    expect(item.textContent).toContain("<b>son</b>.pdf");
+    expect(item.textContent).toContain("<i>Ada</i>");
+    expect(card.shadowRoot.querySelector("i")).toBeNull();
     expect(card.shadowRoot.querySelector("img")).toBeNull();
     expect(card.shadowRoot.querySelector("b")).toBeNull();
   });
@@ -958,5 +962,494 @@ describe("helpers", () => {
     }
     expect(h().reasonLabel("tr", "job-printing")).toBeNull();
     expect(h().reasonLabel("tr", "marker-supply-low-warning")).toBeNull();
+  });
+});
+
+describe("single file picker", () => {
+  const IOS_UA =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148";
+
+  function fakeNavigator(props) {
+    for (const [key, value] of Object.entries(props)) {
+      Object.defineProperty(navigator, key, { value, configurable: true });
+    }
+    return () => {
+      for (const key of Object.keys(props)) delete navigator[key];
+    };
+  }
+
+  const spyClicks = (card) =>
+    Object.fromEntries(
+      ["input-file", "input-photo", "input-camera"].map((name) => [
+        name,
+        vi.spyOn(role(card, name), "click").mockImplementation(() => {}),
+      ]),
+    );
+
+  it("has one pick button and no separate photo button or last-job line", async () => {
+    const card = await mount(makeHass());
+    expect(card.shadowRoot.querySelectorAll('[data-role="pick"]')).toHaveLength(1);
+    expect(text(card, "pick")).toBe("Dosya seç");
+    expect(role(card, "photo")).toBeNull();
+    expect(role(card, "file")).toBeNull();
+    expect(role(card, "last")).toBeNull();
+    expect(card.shadowRoot.textContent).not.toContain("Son:");
+    expect(role(card, "pick-menu").hidden).toBe(true);
+  });
+
+  it("sets accept and capture on the three inputs", async () => {
+    const card = await mount(makeHass());
+    const file = role(card, "input-file");
+    const photo = role(card, "input-photo");
+    const camera = role(card, "input-camera");
+    for (const input of [file, photo, camera]) expect(input.type).toBe("file");
+    expect(file.getAttribute("accept")).toBe(
+      "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png",
+    );
+    expect(file.hasAttribute("capture")).toBe(false);
+    expect(photo.getAttribute("accept")).toBe("image/jpeg,image/png");
+    expect(photo.hasAttribute("capture")).toBe(false);
+    expect(camera.getAttribute("accept")).toBe("image/*");
+    expect(camera.getAttribute("capture")).toBe("environment");
+  });
+
+  it("on iOS opens the single system picker and never its own menu", async () => {
+    for (const nav of [
+      { userAgent: IOS_UA },
+      {
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
+        platform: "MacIntel",
+        maxTouchPoints: 5,
+      },
+    ]) {
+      const restore = fakeNavigator(nav);
+      try {
+        const card = await mount(makeHass());
+        const clicks = spyClicks(card);
+        role(card, "pick").click();
+        await flush();
+        expect(clicks["input-file"]).toHaveBeenCalledTimes(1);
+        expect(clicks["input-photo"]).not.toHaveBeenCalled();
+        expect(clicks["input-camera"]).not.toHaveBeenCalled();
+        expect(role(card, "pick-menu").hidden).toBe(true);
+        expect(role(card, "pick").hasAttribute("aria-expanded")).toBe(false);
+      } finally {
+        restore();
+        document.body.innerHTML = "";
+      }
+    }
+  });
+
+  it("elsewhere opens its own menu whose options click the right input", async () => {
+    const restore = fakeNavigator({
+      userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile",
+      platform: "Linux armv8l",
+      maxTouchPoints: 5,
+    });
+    try {
+      const card = await mount(makeHass());
+      const clicks = spyClicks(card);
+      const menu = role(card, "pick-menu");
+      const labels = { file: "Dosyadan seç", photo: "Fotoğraf seç", camera: "Fotoğraf çek" };
+      for (const option of ["file", "photo", "camera"]) {
+        role(card, "pick").click();
+        await flush();
+        expect(menu.hidden).toBe(false);
+        expect(role(card, "pick").getAttribute("aria-expanded")).toBe("true");
+        expect(clicks["input-file"]).toHaveBeenCalledTimes(option === "file" ? 0 : 1);
+        const button = $(card, `[data-option="${option}"]`);
+        expect(button.textContent.trim()).toBe(labels[option]);
+        expect(button.querySelector("svg")).toBeTruthy();
+        button.click();
+        await flush();
+        expect(clicks[`input-${option}`]).toHaveBeenCalledTimes(1);
+        expect(menu.hidden).toBe(true);
+        expect(role(card, "pick").getAttribute("aria-expanded")).toBe("false");
+      }
+      // A second tap on the button closes an open menu.
+      role(card, "pick").click();
+      role(card, "pick").click();
+      expect(menu.hidden).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("has English menu labels", async () => {
+    const card = await mount(makeHass({ language: "en" }));
+    expect(text(card, "pick")).toBe("Choose file");
+    expect($(card, '[data-option="file"]').textContent.trim()).toBe("From files");
+    expect($(card, '[data-option="photo"]').textContent.trim()).toBe("Photo library");
+    expect($(card, '[data-option="camera"]').textContent.trim()).toBe("Take photo");
+  });
+
+  it("isIOS follows the plan's rule", () => {
+    const isIOS = HomePrintCard.helpers.isIOS;
+    expect(isIOS({ userAgent: IOS_UA })).toBe(true);
+    expect(isIOS({ userAgent: "iPad", platform: "iPad" })).toBe(true);
+    expect(isIOS({ userAgent: "Mac", platform: "MacIntel", maxTouchPoints: 5 })).toBe(true);
+    expect(isIOS({ userAgent: "Mac", platform: "MacIntel", maxTouchPoints: 0 })).toBe(false);
+    expect(isIOS({ userAgent: "Android", platform: "Linux" })).toBe(false);
+    expect(isIOS(undefined)).toBe(false);
+  });
+});
+
+describe("history", () => {
+  const entries = () => [
+    historyEntry({ id: "1".repeat(32), file_name: "rapor.pdf", user: "Ada", pages: 3 }),
+    historyEntry({
+      id: "2".repeat(32),
+      file_name: "foto.jpg",
+      user: null,
+      state: "aborted",
+      pages: 1,
+      mime: "image/jpeg",
+      file: false,
+    }),
+    historyEntry({ id: "3".repeat(32), file_name: "yeni.pdf", state: "sent", pages: null }),
+  ];
+  const items = (card) => [...card.shadowRoot.querySelectorAll('[data-role="history-item"]')];
+  const dialog = (card) => role(card, "history-dialog");
+
+  async function openHistory(card) {
+    role(card, "history-button").click();
+    await flush();
+  }
+
+  it("has a clock button with a label in the header", async () => {
+    const card = await mount(makeHass());
+    const button = role(card, "history-button");
+    expect(button.closest(".header")).toBeTruthy();
+    expect(button.getAttribute("aria-label")).toBe("Geçmiş");
+    expect(button.querySelector("svg path")).toBeTruthy();
+    expect(dialog(card).open).toBe(false);
+    document.body.innerHTML = "";
+    const en = await mount(makeHass({ language: "en" }));
+    expect(role(en, "history-button").getAttribute("aria-label")).toBe("History");
+  });
+
+  it("opens the popup, asks for the printer's history and lists it", async () => {
+    const hass = makeHass({ history: entries() });
+    const card = await mount(hass);
+    await openHistory(card);
+    expect(dialog(card).open).toBe(true);
+    expect(hass.calls.filter((m) => m.type === "home_print/history")).toEqual([
+      { type: "home_print/history", entry_id: "deskjet" },
+    ]);
+    const rows = items(card);
+    expect(rows).toHaveLength(3);
+    const time = HomePrintCard.helpers.formatHistoryTime("tr", "2026-11-16T15:52:00+00:00");
+    expect(rows[0].textContent).toContain("rapor.pdf");
+    expect(rows[0].textContent).toContain(time);
+    expect(rows[0].textContent).toContain("Ada");
+    expect(rows[0].textContent).toContain("3 sayfa");
+    expect(rows[0].textContent).toContain("✓");
+    expect(rows[0].textContent).not.toContain("dosya yok");
+    expect(rows[1].textContent).toContain("✗");
+    expect(rows[1].textContent).toContain("dosya yok");
+    expect(rows[2].textContent).toContain("…");
+    expect(rows[2].textContent).not.toContain("sayfa");
+    const trash = rows[0].querySelector('[data-role="history-delete"]');
+    expect(trash.getAttribute("aria-label")).toBe("Sil");
+    expect(trash.querySelector("svg")).toBeTruthy();
+  });
+
+  it("deletes a row with the trash button and it stays gone after a reload", async () => {
+    const hass = makeHass({ history: entries() });
+    const card = await mount(hass);
+    await openHistory(card);
+    items(card)[0].querySelector('[data-role="history-delete"]').click();
+    await flush();
+    expect(hass.calls.filter((m) => m.type === "home_print/history/delete")).toEqual([
+      { type: "home_print/history/delete", entry_id: "deskjet", history_id: "1".repeat(32) },
+    ]);
+    expect(items(card)).toHaveLength(2);
+    expect(card.shadowRoot.textContent).not.toContain("rapor.pdf");
+    expect(role(card, "preview-dialog").open).toBe(false);
+    role(card, "history-close").click();
+    await openHistory(card);
+    expect(items(card)).toHaveLength(2);
+    expect(items(card)[0].textContent).toContain("foto.jpg");
+  });
+
+  it("shows the empty text once the last row is deleted", async () => {
+    const hass = makeHass({ history: [historyEntry()] });
+    const card = await mount(hass);
+    await openHistory(card);
+    items(card)[0].querySelector('[data-role="history-delete"]').click();
+    await flush();
+    expect(items(card)).toHaveLength(0);
+    expect(text(card, "history-status")).toBe("Henüz baskı yok.");
+  });
+
+  it("keeps the row and says so when deleting fails", async () => {
+    const hass = makeHass({
+      history: entries(),
+      deleteError: { code: "unauthorized", message: "Administrator required" },
+    });
+    const card = await mount(hass);
+    await openHistory(card);
+    items(card)[0].querySelector('[data-role="history-delete"]').click();
+    await flush();
+    expect(items(card)).toHaveLength(3);
+    expect(text(card, "history-status")).toBe("Kayıtları yalnızca yöneticiler silebilir.");
+  });
+
+  it("hides the trash button when this user can't print", async () => {
+    const hass = makeHass({ history: entries(), printers: [deskjetPrinter({ can_print: false })] });
+    const card = await mount(hass);
+    await openHistory(card);
+    expect(items(card)).toHaveLength(3);
+    expect(role(card, "history-delete")).toBeNull();
+  });
+
+  it("closes with the X, a backdrop tap and Escape", async () => {
+    const card = await mount(makeHass({ history: entries() }));
+    await openHistory(card);
+    role(card, "history-close").click();
+    expect(dialog(card).open).toBe(false);
+
+    await openHistory(card);
+    // A tap inside the sheet does not close it.
+    $(card, '[data-role="history-dialog"] .sheet').click();
+    expect(dialog(card).open).toBe(true);
+    dialog(card).click();
+    expect(dialog(card).open).toBe(false);
+
+    await openHistory(card);
+    dialog(card).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(dialog(card).open).toBe(false);
+    expect(role(card, "history-close").getAttribute("aria-label")).toBe("Kapat");
+  });
+
+  it("says when there are no prints yet", async () => {
+    const card = await mount(makeHass({ history: [], language: "en" }));
+    await openHistory(card);
+    expect(items(card)).toHaveLength(0);
+    expect(text(card, "history-status")).toBe("No prints yet.");
+  });
+
+  it("shows an error text when the history can't be read, without crashing", async () => {
+    const hass = makeHass({ historyError: { code: "unknown_command", message: "x" } });
+    const card = await mount(hass);
+    await openHistory(card);
+    expect(dialog(card).open).toBe(true);
+    expect(text(card, "history-status")).toBe("Geçmiş alınamadı. Birazdan tekrar dene.");
+    expect(role(card, "history-status").classList.contains("error")).toBe(true);
+    expect(items(card)).toHaveLength(0);
+    expect(text(card, "state")).toBe("Hazır");
+  });
+
+  it("ellipsises a long Turkish file name in a row", async () => {
+    const name = "çok_uzun_öğrenci_belgesi_2026_güz_dönemi_ödev_teslim_formu_son_hali.pdf";
+    const card = await mount(makeHass({ history: [historyEntry({ file_name: name })] }));
+    await openHistory(card);
+    const nameEl = items(card)[0].querySelector('[data-role="history-name"]');
+    expect(nameEl.textContent).toBe(name);
+    const style = getComputedStyle(nameEl);
+    expect(style.textOverflow).toBe("ellipsis");
+    expect(style.overflow).toBe("hidden");
+    expect(style.whiteSpace).toBe("nowrap");
+    expect(getComputedStyle(role(card, "history-list")).overflowY).toBe("auto");
+  });
+
+  it("reloads the open list after a successful upload", async () => {
+    const hass = makeHass({
+      history: entries(),
+      jobs: [{ job_id: 42, state: "processing", reasons: [] }],
+    });
+    const card = await mount(hass);
+    const count = () => hass.calls.filter((m) => m.type === "home_print/history").length;
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(count()).toBe(0);
+    await openHistory(card);
+    expect(count()).toBe(1);
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    // Let the first job end so a second upload is allowed.
+    hass.callWS.mockImplementationOnce(async (msg) => {
+      hass.calls.push(msg);
+      throw { code: "job_gone", message: "gone" };
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    const afterJob = count();
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(count()).toBe(afterJob + 1);
+  });
+
+  it("reloads the open list when the followed job ends", async () => {
+    const hass = makeHass({
+      history: entries(),
+      jobs: [
+        { job_id: 42, state: "processing", reasons: [] },
+        { job_id: 42, state: "completed", reasons: [] },
+      ],
+    });
+    const card = await mount(hass);
+    const count = () => hass.calls.filter((m) => m.type === "home_print/history").length;
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await openHistory(card);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(count()).toBe(1);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Tamamlandı ✓");
+    expect(count()).toBe(2);
+  });
+
+  it("closes when the printer changes", async () => {
+    const printers = [deskjetPrinter(), deskjetPrinter({ entry_id: "laser", title: "Laser" })];
+    const card = await mount(makeHass({ printers, history: entries() }));
+    await openHistory(card);
+    const picker = role(card, "picker");
+    picker.value = "laser";
+    picker.dispatchEvent(new Event("change"));
+    await flush();
+    expect(dialog(card).open).toBe(false);
+  });
+
+  it("closes when the card is removed", async () => {
+    const card = await mount(makeHass({ history: entries() }));
+    await openHistory(card);
+    card.remove();
+    expect(dialog(card).open).toBe(false);
+  });
+
+  it("formatHistoryTime uses the language and local time", () => {
+    const f = HomePrintCard.helpers.formatHistoryTime;
+    const iso = "2026-11-16T15:52:00+00:00";
+    const expected = new Intl.DateTimeFormat("tr", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(iso));
+    expect(f("tr", iso)).toBe(expected);
+    expect(f("en", iso)).not.toBe("");
+    expect(f("tr", "not a date")).toBe("");
+    expect(f("??", iso)).not.toBe("");
+  });
+
+  it("historyStateIcon", () => {
+    const f = HomePrintCard.helpers.historyStateIcon;
+    expect(f("completed")).toBe("✓");
+    for (const state of ["aborted", "canceled", "error"]) expect(f(state)).toBe("✗");
+    expect(f("sent")).toBe("…");
+    expect(f(undefined)).toBe("…");
+  });
+});
+
+describe("preview", () => {
+  const PDF_ID = "1".repeat(32);
+  const items = (card) => [...card.shadowRoot.querySelectorAll('[data-role="history-item"]')];
+  const images = (card) => [...role(card, "preview-body").querySelectorAll("img")];
+  const signCalls = (hass) => hass.calls.filter((m) => m.type === "auth/sign_path");
+
+  async function openPreview(hass, index = 0) {
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    items(card)[index].querySelector('[data-role="history-open"]').click();
+    await flush();
+    return card;
+  }
+
+  it("opens over the history and shows every page as a signed lazy image", async () => {
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 3 })] });
+    const card = await openPreview(hass);
+    const preview = role(card, "preview-dialog");
+    expect(preview.open).toBe(true);
+    expect(role(card, "history-dialog").open).toBe(true);
+    expect(text(card, "preview-title")).toBe("rapor.pdf");
+    expect(signCalls(hass).map((m) => m.path)).toEqual(
+      [1, 2, 3].map((n) => `/api/home_print/history/deskjet/${PDF_ID}/page/${n}`),
+    );
+    expect(signCalls(hass)[0].expires).toBe(300);
+    const imgs = images(card);
+    expect(imgs).toHaveLength(3);
+    expect(imgs[2].getAttribute("src")).toBe(
+      `/api/home_print/history/deskjet/${PDF_ID}/page/3?authSig=sig`,
+    );
+    expect(imgs[0].getAttribute("loading")).toBe("lazy");
+    expect(imgs[0].getAttribute("alt")).toBe("Sayfa 1");
+    expect(getComputedStyle(role(card, "preview-body")).overflowY).toBe("auto");
+  });
+
+  it("returns to the history when closed", async () => {
+    const hass = makeHass({ history: [historyEntry({ pages: 1 })] });
+    let card = await openPreview(hass);
+    role(card, "preview-close").click();
+    expect(role(card, "preview-dialog").open).toBe(false);
+    expect(role(card, "history-dialog").open).toBe(true);
+
+    items(card)[0].querySelector('[data-role="history-open"]').click();
+    await flush();
+    role(card, "preview-dialog").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(role(card, "preview-dialog").open).toBe(false);
+    expect(role(card, "history-dialog").open).toBe(true);
+
+    items(card)[0].querySelector('[data-role="history-open"]').click();
+    await flush();
+    role(card, "preview-dialog").click();
+    expect(role(card, "preview-dialog").open).toBe(false);
+    expect(role(card, "history-dialog").open).toBe(true);
+  });
+
+  it("shows one image for a photo", async () => {
+    const hass = makeHass({
+      history: [historyEntry({ file_name: "foto.jpg", mime: "image/jpeg", pages: null })],
+    });
+    const card = await openPreview(hass);
+    expect(images(card)).toHaveLength(1);
+    images(card)[0].dispatchEvent(new Event("load"));
+    await flush();
+    expect(images(card)).toHaveLength(1);
+  });
+
+  it("with an unknown page count adds pages until one fails to load", async () => {
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: null })] });
+    const card = await openPreview(hass);
+    expect(images(card)).toHaveLength(1);
+    images(card)[0].dispatchEvent(new Event("load"));
+    await flush();
+    expect(images(card)).toHaveLength(2);
+    expect(images(card)[1].getAttribute("src")).toContain("/page/2?");
+    images(card)[1].dispatchEvent(new Event("error"));
+    await flush();
+    expect(images(card)).toHaveLength(1);
+    expect(signCalls(hass)).toHaveLength(2);
+    expect(text(card, "preview-body")).toBe("");
+  });
+
+  it("says a file that is no longer kept can't be shown", async () => {
+    const hass = makeHass({ history: [historyEntry({ file: false })] });
+    const card = await openPreview(hass);
+    expect(role(card, "preview-dialog").open).toBe(true);
+    expect(text(card, "preview-body")).toBe("Bu dosya artık saklanmıyor.");
+    expect(images(card)).toHaveLength(0);
+    expect(signCalls(hass)).toHaveLength(0);
+    document.body.innerHTML = "";
+    const en = await openPreview(
+      makeHass({ language: "en", history: [historyEntry({ file: false })] }),
+    );
+    expect(text(en, "preview-body")).toBe("This file is no longer kept.");
+  });
+
+  it("says when the preview can't be loaded", async () => {
+    const hass = makeHass({
+      history: [historyEntry({ pages: 2 })],
+      signError: { code: "unknown_error", message: "x" },
+    });
+    const card = await openPreview(hass);
+    expect(text(card, "preview-body")).toBe("Ön izleme yüklenemedi.");
+    expect(images(card)).toHaveLength(0);
+  });
+
+  it("puts a markup file name in the title as text", async () => {
+    const hass = makeHass({ history: [historyEntry({ file_name: "<b>x</b>.pdf", pages: 1 })] });
+    const card = await openPreview(hass);
+    expect(text(card, "preview-title")).toBe("<b>x</b>.pdf");
+    expect(card.shadowRoot.querySelector("b")).toBeNull();
   });
 });

@@ -3,7 +3,9 @@
  * A single, build-free Web Component. It lists printers through the
  * `home_print/printers` WebSocket command, uploads files to
  * `/api/home_print/upload/<entry_id>` with `hass.fetchWithAuth` and follows the
- * job with `home_print/job`.
+ * job with `home_print/job`. A clock button opens the print history
+ * (`home_print/history`, `home_print/history/delete`) and a page preview
+ * served by `/api/home_print/history/<entry_id>/<id>/page/<n>`.
  */
 
 const CARD_TYPE = "home-print-card";
@@ -23,6 +25,9 @@ const ACCEPT = "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png";
 // out photos; this second picker asks for images only (iOS hands Photos' HEIC
 // over as JPEG for it).
 const PHOTO_ACCEPT = "image/jpeg,image/png";
+const CAMERA_ACCEPT = "image/*";
+const FILE_INPUTS = ["input-file", "input-photo", "input-camera"];
+const PREVIEW_SIGN_SECONDS = 300;
 const DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
 const EXT_FORMATS = {
   pdf: "application/pdf",
@@ -59,11 +64,53 @@ const NOISE_REASONS = [
 ];
 const PRINTER_ERROR_LIMIT = 3;
 const KNOWN_STATES = ["idle", "processing", "stopped"];
+const HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
+
+// Material Design Icons paths (Apache 2.0), drawn inline so the card needs
+// no HA icon component.
+const ICONS = {
+  history:
+    "M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3",
+  delete:
+    "M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19M8,9H16V19H8V9M15.5,4L14.5,3H9.5L8.5,4H5V6H19V4H15.5Z",
+  close:
+    "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z",
+  paperclip:
+    "M16.5,6V17.5A4,4 0 0,1 12.5,21.5A4,4 0 0,1 8.5,17.5V5A2.5,2.5 0 0,1 11,2.5A2.5,2.5 0 0,1 13.5,5V15.5A1,1 0 0,1 12.5,16.5A1,1 0 0,1 11.5,15.5V6H10V15.5A2.5,2.5 0 0,0 12.5,18A2.5,2.5 0 0,0 15,15.5V5A4,4 0 0,0 11,1A4,4 0 0,0 7,5V17.5A5.5,5.5 0 0,0 12.5,23A5.5,5.5 0 0,0 18,17.5V6H16.5Z",
+  images:
+    "M22,16V4A2,2 0 0,0 20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16M11,12L13.03,14.71L16,11L20,16H8M2,6V20A2,2 0 0,0 4,22H18V20H4V6",
+  camera:
+    "M4,4H7L9,2H15L17,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M12,7A5,5 0 0,0 7,12A5,5 0 0,0 12,17A5,5 0 0,0 17,12A5,5 0 0,0 12,7M12,9A3,3 0 0,1 15,12A3,3 0 0,1 12,15A3,3 0 0,1 9,12A3,3 0 0,1 12,9Z",
+};
+
+const svg = (name) =>
+  `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="${ICONS[name]}"></path></svg>`;
 
 const STRINGS = {
   tr: {
     choose_file: "Dosya seç",
-    choose_photo: "Fotoğraf seç",
+    pick_file: "Dosyadan seç",
+    pick_photo: "Fotoğraf seç",
+    pick_camera: "Fotoğraf çek",
+    history: "Geçmiş",
+    close: "Kapat",
+    delete: "Sil",
+    history_loading: "Yükleniyor…",
+    history_empty: "Henüz baskı yok.",
+    history_failed: "Geçmiş alınamadı. Birazdan tekrar dene.",
+    delete_failed: "Silinemedi. Birazdan tekrar dene.",
+    delete_not_allowed: "Kayıtları yalnızca yöneticiler silebilir.",
+    history_pages_one: "1 sayfa",
+    history_pages: "{n} sayfa",
+    file_gone_tag: "dosya yok",
+    file_gone: "Bu dosya artık saklanmıyor.",
+    preview_failed: "Ön izleme yüklenemedi.",
+    preview_page: "Sayfa {n}",
+    history_state_sent: "Gönderildi",
+    history_state_completed: "Tamamlandı",
+    history_state_aborted: "Yarıda kaldı",
+    history_state_canceled: "İptal edildi",
+    history_state_error: "Hata verdi",
     editor_printer: "Yazıcı",
     editor_auto: "Otomatik (ilk yazıcı)",
     editor_not_found: "{id} (bulunamadı)",
@@ -84,8 +131,6 @@ const STRINGS = {
     ink_black: "Siyah",
     ink_color: "Renkli",
     percent: "%{value}",
-    last: "Son: {name} {mark} {time}",
-    last_user: " — {user}",
     picker: "Yazıcı",
     loading: "Yazıcılar yükleniyor…",
     load_failed:
@@ -134,7 +179,28 @@ const STRINGS = {
     editor_title: "Title",
     editor_show_ink: "Show ink levels",
     choose_file: "Choose file",
-    choose_photo: "Choose photo",
+    pick_file: "From files",
+    pick_photo: "Photo library",
+    pick_camera: "Take photo",
+    history: "History",
+    close: "Close",
+    delete: "Delete",
+    history_loading: "Loading…",
+    history_empty: "No prints yet.",
+    history_failed: "Couldn't load the history. Try again shortly.",
+    delete_failed: "Couldn't delete it. Try again shortly.",
+    delete_not_allowed: "Only administrators can delete history entries.",
+    history_pages_one: "1 page",
+    history_pages: "{n} pages",
+    file_gone_tag: "file not kept",
+    file_gone: "This file is no longer kept.",
+    preview_failed: "Couldn't load the preview.",
+    preview_page: "Page {n}",
+    history_state_sent: "Sent",
+    history_state_completed: "Completed",
+    history_state_aborted: "Aborted",
+    history_state_canceled: "Canceled",
+    history_state_error: "Failed",
     copies: "Copies",
     duplex: "Two-sided",
     color: "Colour",
@@ -150,8 +216,6 @@ const STRINGS = {
     ink_black: "Black",
     ink_color: "Colour",
     percent: "{value}%",
-    last: "Last: {name} {mark} {time}",
-    last_user: " — {user}",
     picker: "Printer",
     loading: "Loading printers…",
     load_failed:
@@ -325,13 +389,50 @@ function formatSize(bytes, lang) {
   return `${fmt(Math.max(bytes, 1) / 1024)} KB`;
 }
 
-function formatTime(iso, lang) {
+// iOS shows its own three-way sheet (Photo Library / Take Photo / Choose
+// File) for a plain file input, so the card's menu would be a second one.
+function isIOS(nav) {
+  if (!nav) return false;
+  return (
+    /iPad|iPhone|iPod/.test(String(nav.userAgent ?? "")) ||
+    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1)
+  );
+}
+
+// Local date and time in the user's language.
+function formatHistoryTime(lang, iso) {
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const locale = lang === "tr" ? "tr-TR" : "en-GB";
-  const time = date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-  if (date.toDateString() === new Date().toDateString()) return time;
-  return `${date.toLocaleDateString(locale, { day: "numeric", month: "short" })} ${time}`;
+  if (!iso || Number.isNaN(date.getTime())) return "";
+  const options = { dateStyle: "medium", timeStyle: "short" };
+  try {
+    return new Intl.DateTimeFormat(lang, options).format(date);
+  } catch (_err) {
+    return new Intl.DateTimeFormat("en", options).format(date);
+  }
+}
+
+function historyStateIcon(state) {
+  if (state === "completed") return "✓";
+  if (["aborted", "canceled", "error"].includes(state)) return "✗";
+  return "…";
+}
+
+function previewPath(entryId, recordId, page) {
+  return `/api/home_print/history/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/page/${page}`;
+}
+
+function svgIcon(name) {
+  const ns = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(ns, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "24");
+  icon.setAttribute("height", "24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", ICONS[name]);
+  icon.append(path);
+  return icon;
 }
 
 function markerBackground(color) {
@@ -368,6 +469,23 @@ const STYLE = `
   }
   .state { color: var(--secondary-text-color); }
   .picker-slot { margin-left: auto; }
+  svg { width: 24px; height: 24px; flex: none; fill: currentColor; }
+  .icon-button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--secondary-text-color);
+    cursor: pointer;
+  }
+  .icon-button:hover { color: var(--primary-text-color); }
+  .icon-button:disabled { opacity: 0.4; cursor: default; }
   select, input[type="number"], input[type="text"] {
     min-height: 44px;
     box-sizing: border-box;
@@ -398,27 +516,60 @@ const STYLE = `
   }
   .bar-fill { height: 100%; }
   .pct { color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
-  .file-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-  .file-button {
+  .file-row {
     position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .file-button {
     flex: none;
     display: inline-flex;
     align-items: center;
+    gap: 8px;
     min-height: 44px;
     padding: 0 16px;
     border-radius: 8px;
     border: 1px solid var(--primary-color);
+    font: inherit;
     color: var(--primary-color);
+    background: none;
     cursor: pointer;
   }
-  .file-button input {
+  .hidden-input {
     position: absolute;
     width: 1px;
     height: 1px;
     opacity: 0;
     overflow: hidden;
     clip: rect(0 0 0 0);
+    pointer-events: none;
   }
+  .pick-menu {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .pick-menu button {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 16px;
+    border: none;
+    background: none;
+    font: inherit;
+    text-align: start;
+    color: var(--primary-text-color);
+    cursor: pointer;
+  }
+  .pick-menu button + button { border-top: 1px solid var(--divider-color); }
+  .pick-menu button svg { color: var(--secondary-text-color); }
   .file-name {
     flex: 1 1 auto;
     min-width: 0;
@@ -454,13 +605,130 @@ const STYLE = `
     font-size: 0.85em;
     overflow-wrap: anywhere;
   }
-  .last {
-    color: var(--secondary-text-color);
-    font-size: 0.9em;
+
+  /* Dialogs: showModal() puts them in the top layer, so a dashboard layout
+     that contains fixed elements can't trap them inside the card. */
+  dialog {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--primary-text-color);
+    box-sizing: border-box;
+    overscroll-behavior: contain;
+  }
+  dialog[open] { display: flex; align-items: flex-end; justify-content: center; }
+  dialog::backdrop { background: var(--mdc-dialog-scrim-color, rgba(0, 0, 0, 0.32)); }
+  .sheet {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-height: 85vh;
+    min-width: 0;
+    box-sizing: border-box;
+    background: var(--card-background-color);
+    color: var(--primary-text-color);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.2);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  @media (min-width: 600px) {
+    dialog[open] { align-items: center; }
+    .sheet { max-width: 480px; border-radius: 16px; }
+  }
+  .sheet-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 8px 8px 16px;
+    border-bottom: 1px solid var(--divider-color);
+    min-width: 0;
+  }
+  .sheet-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 1.1em;
+    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .sheet-status { padding: 12px 16px; color: var(--secondary-text-color); overflow-wrap: anywhere; }
+  .sheet-status.error { color: var(--error-color); }
+  .history-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-right: 8px;
+    border-bottom: 1px solid var(--divider-color);
+    min-width: 0;
+  }
+  .history-open {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 8px 8px 8px 16px;
+    border: none;
+    background: none;
+    font: inherit;
+    text-align: start;
+    color: inherit;
+    cursor: pointer;
+  }
+  .history-mark { flex: none; width: 1.5em; text-align: center; font-weight: 500; }
+  .history-mark.ok { color: var(--success-color, var(--primary-color)); }
+  .history-mark.bad { color: var(--error-color); }
+  .history-mark.busy { color: var(--secondary-text-color); }
+  .history-text { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .history-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .history-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    color: var(--secondary-text-color);
+    font-size: 0.85em;
+  }
+  .tag {
+    padding: 0 6px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    font-size: 0.9em;
+  }
+  .preview-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+  .preview-body img {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  }
+  .preview-body .sheet-status { padding: 0; }
 `;
 
 const TEMPLATE = `
@@ -473,20 +741,32 @@ const TEMPLATE = `
         <span class="state" data-role="state-dash" aria-hidden="true">—</span>
         <span class="state" data-role="state"></span>
         <span class="picker-slot" data-role="picker-slot"></span>
+        <button type="button" class="icon-button" data-role="history-button" data-aria="history">
+          ${svg("history")}
+        </button>
       </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
       <div class="ink" data-role="ink"></div>
       <div class="file-row">
-        <label class="file-button">
-          <input type="file" data-role="file" accept="${ACCEPT}" />
-          <span data-t="choose_file"></span>
-        </label>
-        <label class="file-button">
-          <input type="file" data-role="photo" accept="${PHOTO_ACCEPT}" />
-          <span data-t="choose_photo"></span>
-        </label>
+        <button type="button" class="file-button" data-role="pick">
+          ${svg("paperclip")}<span data-t="choose_file"></span>
+        </button>
         <span class="file-name" data-role="file-name"></span>
         <span class="file-size" data-role="file-size"></span>
+        <div class="pick-menu" data-role="pick-menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-option="file">
+            ${svg("paperclip")}<span data-t="pick_file"></span>
+          </button>
+          <button type="button" role="menuitem" data-option="photo">
+            ${svg("images")}<span data-t="pick_photo"></span>
+          </button>
+          <button type="button" role="menuitem" data-option="camera">
+            ${svg("camera")}<span data-t="pick_camera"></span>
+          </button>
+        </div>
+        <input type="file" class="hidden-input" data-role="input-file" accept="${ACCEPT}" tabindex="-1" aria-hidden="true" />
+        <input type="file" class="hidden-input" data-role="input-photo" accept="${PHOTO_ACCEPT}" tabindex="-1" aria-hidden="true" />
+        <input type="file" class="hidden-input" data-role="input-camera" accept="${CAMERA_ACCEPT}" capture="environment" tabindex="-1" aria-hidden="true" />
       </div>
       <div class="options">
         <label class="option" data-opt="copies">
@@ -509,9 +789,31 @@ const TEMPLATE = `
       <button type="button" class="print" data-role="print" data-t="print"></button>
       <div class="message" data-role="message" aria-live="polite"></div>
       <div class="detail" data-role="detail" hidden></div>
-      <div class="last" data-role="last"></div>
     </div>
   </ha-card>
+  <dialog data-role="history-dialog" aria-labelledby="history-title">
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title" id="history-title" data-t="history"></span>
+        <button type="button" class="icon-button" data-role="history-close" data-aria="close">
+          ${svg("close")}
+        </button>
+      </div>
+      <div class="sheet-status" data-role="history-status" role="status"></div>
+      <ul class="history-list" data-role="history-list"></ul>
+    </div>
+  </dialog>
+  <dialog data-role="preview-dialog" aria-labelledby="preview-title">
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title" id="preview-title" data-role="preview-title"></span>
+        <button type="button" class="icon-button" data-role="preview-close" data-aria="close">
+          ${svg("close")}
+        </button>
+      </div>
+      <div class="preview-body" data-role="preview-body"></div>
+    </div>
+  </dialog>
 `;
 
 // ---------------------------------------------------------------- card
@@ -533,12 +835,30 @@ class HomePrintCard extends HTMLElement {
     this._job = null;
     this._refreshTimer = null;
     this._pollTimer = null;
+    // The printer whose history is open; null while the popup is closed.
+    this._historyEntryId = null;
+    this._historyEntries = [];
+    this._historyToken = 0;
+    this._previewToken = 0;
+    this._onDocumentClick = (ev) => this._closeMenuOutside(ev);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
-    for (const name of ["file", "photo"]) {
+    for (const name of FILE_INPUTS) {
       this._role(name).addEventListener("change", (ev) => this._onFile(ev));
     }
+    this._role("pick").addEventListener("click", () => this._onPickButton());
+    for (const option of this.shadowRoot.querySelectorAll("[data-option]")) {
+      option.addEventListener("click", () => this._onPickOption(option.dataset.option));
+    }
+    this._role("pick-menu").addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") this._closeMenu(true);
+    });
     this._role("print").addEventListener("click", () => this._onPrint());
+    this._role("history-button").addEventListener("click", () => this._openHistory());
+    this._role("history-close").addEventListener("click", () => this._closeHistory());
+    this._role("preview-close").addEventListener("click", () => this._closePreview());
+    this._wireDialog(this._role("history-dialog"), () => this._closeHistory());
+    this._wireDialog(this._role("preview-dialog"), () => this._closePreview());
   }
 
   static getConfigElement() {
@@ -581,6 +901,8 @@ class HomePrintCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._closeHistory();
+    this._closeMenu();
     clearInterval(this._refreshTimer);
     clearTimeout(this._pollTimer);
     this._refreshTimer = null;
@@ -668,6 +990,300 @@ class HomePrintCard extends HTMLElement {
     this._update();
   }
 
+  // ------------------------------------------------------------ file picker
+
+  _onPickButton() {
+    // iOS already offers Photo Library / Take Photo / Choose File itself.
+    if (isIOS(globalThis.navigator)) {
+      this._role("input-file").click();
+      return;
+    }
+    if (this._role("pick-menu").hidden) this._openMenu();
+    else this._closeMenu();
+  }
+
+  _onPickOption(option) {
+    this._closeMenu();
+    this._role(`input-${option}`)?.click();
+  }
+
+  _openMenu() {
+    this._role("pick-menu").hidden = false;
+    this._role("pick").setAttribute("aria-expanded", "true");
+    document.addEventListener("click", this._onDocumentClick, true);
+  }
+
+  _closeMenu(focusButton = false) {
+    const menu = this._role("pick-menu");
+    document.removeEventListener("click", this._onDocumentClick, true);
+    if (menu.hidden) return;
+    menu.hidden = true;
+    this._role("pick").setAttribute("aria-expanded", "false");
+    if (focusButton) this._role("pick").focus();
+  }
+
+  _closeMenuOutside(ev) {
+    const path = ev.composedPath();
+    if (path.includes(this._role("pick-menu")) || path.includes(this._role("pick"))) return;
+    this._closeMenu();
+  }
+
+  // ------------------------------------------------------------ dialogs
+
+  _wireDialog(dialog, close) {
+    // A tap on the dialog itself (not its sheet) is a tap on the backdrop.
+    dialog.addEventListener("click", (ev) => {
+      if (ev.target === dialog) close();
+    });
+    dialog.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    });
+    // The browser's own Escape handling; keep our state in step with it.
+    dialog.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      close();
+    });
+  }
+
+  _showDialog(dialog) {
+    if (dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
+
+  _hideDialog(dialog) {
+    if (!dialog.open) return;
+    if (typeof dialog.close === "function") dialog.close();
+    else dialog.removeAttribute("open");
+  }
+
+  _openHistory() {
+    const printer = this._printer();
+    if (!printer) return;
+    this._historyEntryId = printer.entry_id;
+    this._historyEntries = [];
+    this._renderHistory({ key: "history_loading" });
+    this._showDialog(this._role("history-dialog"));
+    this._loadHistory();
+  }
+
+  _closeHistory() {
+    this._closePreview();
+    this._historyEntryId = null;
+    this._historyToken += 1;
+    this._hideDialog(this._role("history-dialog"));
+  }
+
+  async _loadHistory() {
+    const entryId = this._historyEntryId;
+    if (!entryId || !this._hass) return;
+    const token = ++this._historyToken;
+    let result;
+    try {
+      result = await this._hass.callWS({ type: "home_print/history", entry_id: entryId });
+    } catch (_err) {
+      if (token !== this._historyToken) return;
+      // Keep rows already shown; a reload that fails only says so.
+      this._renderHistory({ key: "history_failed", error: true });
+      return;
+    }
+    if (token !== this._historyToken) return;
+    this._historyEntries = Array.isArray(result?.entries) ? result.entries : [];
+    this._renderHistory();
+  }
+
+  async _deleteHistory(record, button) {
+    const entryId = this._historyEntryId;
+    if (!entryId) return;
+    button.disabled = true;
+    try {
+      await this._hass.callWS({
+        type: "home_print/history/delete",
+        entry_id: entryId,
+        history_id: record.id,
+      });
+    } catch (err) {
+      button.disabled = false;
+      if (this._historyEntryId !== entryId) return;
+      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
+      this._renderHistory({ key, error: true });
+      return;
+    }
+    if (this._historyEntryId !== entryId) return;
+    // {"deleted": false} means it was already gone; either way the row goes.
+    this._historyEntries = this._historyEntries.filter((e) => e.id !== record.id);
+    this._renderHistory();
+  }
+
+  _renderHistory(status = null) {
+    const lang = pickLanguage(this._hass);
+    const entries = this._historyEntries;
+    const shown = status ?? (entries.length === 0 ? { key: "history_empty" } : null);
+    const statusEl = this._role("history-status");
+    statusEl.textContent = shown ? t(lang, shown.key) : "";
+    statusEl.hidden = !shown;
+    statusEl.classList.toggle("error", Boolean(shown?.error));
+    const canDelete = this._printer()?.can_print !== false;
+    this._role("history-list").replaceChildren(
+      ...entries.map((record) => this._historyRow(lang, record, canDelete)),
+    );
+  }
+
+  _historyRow(lang, record, canDelete) {
+    const row = document.createElement("li");
+    row.className = "history-item";
+    row.dataset.role = "history-item";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-open";
+    open.dataset.role = "history-open";
+    open.addEventListener("click", () => this._openPreview(record));
+
+    const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
+    const icon = historyStateIcon(state);
+    const mark = document.createElement("span");
+    mark.className = `history-mark ${icon === "✓" ? "ok" : icon === "✗" ? "bad" : "busy"}`;
+    mark.textContent = icon;
+    mark.title = t(lang, `history_state_${state}`);
+    mark.setAttribute("role", "img");
+    mark.setAttribute("aria-label", mark.title);
+
+    const textBox = document.createElement("span");
+    textBox.className = "history-text";
+    const name = document.createElement("span");
+    name.className = "history-name";
+    name.dataset.role = "history-name";
+    name.textContent = String(record.file_name ?? "");
+    name.title = name.textContent;
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    const pages = Number(record.pages);
+    const parts = [
+      formatHistoryTime(this._timeLanguage(), record.time),
+      record.user ? String(record.user) : "",
+      pages > 0 ? t(lang, pages === 1 ? "history_pages_one" : "history_pages", { n: pages }) : "",
+    ].filter(Boolean);
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      meta.append(span);
+    }
+    if (record.file === false) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = t(lang, "file_gone_tag");
+      meta.append(tag);
+    }
+    textBox.append(name, meta);
+    open.append(mark, textBox);
+    row.append(open);
+
+    if (canDelete) {
+      const trash = document.createElement("button");
+      trash.type = "button";
+      trash.className = "icon-button";
+      trash.dataset.role = "history-delete";
+      trash.setAttribute("aria-label", t(lang, "delete"));
+      trash.title = t(lang, "delete");
+      trash.append(svgIcon("delete"));
+      trash.addEventListener("click", () => this._deleteHistory(record, trash));
+      row.append(trash);
+    }
+    return row;
+  }
+
+  _timeLanguage() {
+    return String(this._hass?.locale?.language ?? this._hass?.language ?? "en");
+  }
+
+  _openPreview(record) {
+    const entryId = this._historyEntryId;
+    if (!entryId) return;
+    const lang = pickLanguage(this._hass);
+    const token = ++this._previewToken;
+    this._role("preview-title").textContent = String(record.file_name ?? "");
+    const body = this._role("preview-body");
+    body.replaceChildren();
+    body.scrollTop = 0;
+    this._showDialog(this._role("preview-dialog"));
+    if (record.file === false) {
+      this._previewNote(body, t(lang, "file_gone"));
+      return;
+    }
+    const isImage = String(record.mime ?? "").startsWith("image/");
+    const known = Number(record.pages) > 0 ? Number(record.pages) : null;
+    const count = isImage ? 1 : known;
+    this._loadPreview({ token, body, lang, entryId, recordId: record.id, count });
+  }
+
+  // `count` null: the page count is unknown, so pages are added one by one
+  // until one fails to load.
+  async _loadPreview({ token, body, lang, entryId, recordId, count }) {
+    const sign = (page) =>
+      this._hass.callWS({
+        type: "auth/sign_path",
+        path: previewPath(entryId, recordId, page),
+        expires: PREVIEW_SIGN_SECONDS,
+      });
+    const pages = count === null ? [1] : Array.from({ length: count }, (_v, i) => i + 1);
+    let signed;
+    try {
+      signed = await Promise.all(pages.map(sign));
+    } catch (_err) {
+      if (token === this._previewToken) this._previewNote(body, t(lang, "preview_failed"));
+      return;
+    }
+    if (token !== this._previewToken) return;
+    const addPage = (page, path) => {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = t(lang, "preview_page", { n: page });
+      img.addEventListener("error", () => {
+        if (token !== this._previewToken) return;
+        // Past the last page of an unknown count: just stop.
+        if (count === null && page > 1) img.remove();
+        else img.replaceWith(this._previewNote(null, t(lang, "preview_failed")));
+      });
+      if (count === null) {
+        img.addEventListener(
+          "load",
+          async () => {
+            if (token !== this._previewToken) return;
+            let next;
+            try {
+              next = await sign(page + 1);
+            } catch (_err) {
+              return;
+            }
+            if (token === this._previewToken) addPage(page + 1, next?.path);
+          },
+          { once: true },
+        );
+      }
+      img.src = String(path ?? "");
+      body.append(img);
+    };
+    signed.forEach((result, i) => addPage(pages[i], result?.path));
+  }
+
+  _previewNote(body, text) {
+    const note = document.createElement("div");
+    note.className = "sheet-status";
+    note.textContent = text;
+    if (body) body.replaceChildren(note);
+    return note;
+  }
+
+  _closePreview() {
+    this._previewToken += 1;
+    this._hideDialog(this._role("preview-dialog"));
+    this._role("preview-body").replaceChildren();
+  }
+
   async _onPrint() {
     const printer = this._printer();
     if (!this._canSubmit(printer)) return;
@@ -733,7 +1349,7 @@ class HomePrintCard extends HTMLElement {
     // clear the picked file so choosing the same one again fires "change".
     this._uploading = false;
     this._file = null;
-    for (const name of ["file", "photo"]) this._role(name).value = "";
+    for (const name of FILE_INPUTS) this._role(name).value = "";
     this._job = {
       entryId,
       jobId: body.job_id,
@@ -744,6 +1360,8 @@ class HomePrintCard extends HTMLElement {
     };
     this._setMessage(jobLabel(lang, { state: "pending" }));
     this._schedulePoll();
+    // The new record is at the top of the history now.
+    if (this._historyEntryId === entryId) this._loadHistory();
   }
 
   _options(printer) {
@@ -835,7 +1453,10 @@ class HomePrintCard extends HTMLElement {
     else {
       this._setMessage(t(lang, "job_checking"));
       if (this.isConnected) this._schedulePoll();
+      return;
     }
+    // The server has recorded the final state; show it in an open history.
+    if (this._historyEntryId === job.entryId) this._loadHistory();
   }
 
   _finish(text, kind, detail = "") {
@@ -871,6 +1492,10 @@ class HomePrintCard extends HTMLElement {
     for (const el of root.querySelectorAll("[data-t]")) {
       el.textContent = t(lang, el.dataset.t);
     }
+    for (const el of root.querySelectorAll("[data-aria]")) {
+      el.setAttribute("aria-label", t(lang, el.dataset.aria));
+      el.title = t(lang, el.dataset.aria);
+    }
     this._role("pages").placeholder = t(lang, "pages_placeholder");
 
     const printers = this._printers ?? [];
@@ -888,7 +1513,9 @@ class HomePrintCard extends HTMLElement {
     this._renderOptions(printer);
     this._renderFile(lang, printer);
     this._role("print").disabled = !this._canSubmit(printer);
-    this._renderLast(lang, printer);
+    this._role("history-button").hidden = !printer;
+    // The open history belongs to one printer; another one closes it.
+    if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
 
   _renderNotice(lang, printer, unknown, wanted) {
@@ -1032,29 +1659,6 @@ class HomePrintCard extends HTMLElement {
       }),
     );
   }
-
-  _renderLast(lang, printer) {
-    const last = this._role("last");
-    const entity = this._entityState(printer?.entities?.last_job);
-    const name = entity?.state;
-    if (!entity || !name || name === "unknown" || name === "unavailable") {
-      last.textContent = "";
-      last.hidden = true;
-      return;
-    }
-    const attrs = entity.attributes ?? {};
-    const mark =
-      attrs.state === "completed"
-        ? "✓"
-        : ["aborted", "canceled", "error"].includes(attrs.state)
-          ? "✗"
-          : "…";
-    let text = t(lang, "last", { name, mark, time: formatTime(attrs.time, lang) }).trim();
-    if (attrs.user) text += t(lang, "last_user", { user: attrs.user });
-    last.textContent = text;
-    last.title = text;
-    last.hidden = false;
-  }
 }
 
 HomePrintCard.helpers = Object.freeze({
@@ -1067,6 +1671,9 @@ HomePrintCard.helpers = Object.freeze({
   reasonLabel,
   visibleRawReasons,
   isProblemState,
+  isIOS,
+  formatHistoryTime,
+  historyStateIcon,
 });
 
 if (!customElements.get(CARD_TYPE)) {
