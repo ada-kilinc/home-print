@@ -259,4 +259,4 @@ async def test_printer_failure_drops_scanner_status(
     mock_escl.client.status.return_value = ScannerStatus("processing", False)
     mock_client.get_printer.side_effect = CannotConnect("off")
     await entry.runtime_data.coordinator.async_refresh()
-    assert scanner.status == ScannerStatus("idle", False)  # unchanged
+    assert scanner.status is None

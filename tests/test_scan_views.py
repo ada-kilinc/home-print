@@ -121,3 +121,14 @@ async def test_page_preview_of_scan_above_print_pixel_cap(
     resp = await client.get(page_url(entry.entry_id, record["id"], 1))
     assert resp.status == 200
     assert resp.content_type == "image/jpeg"
+
+
+async def test_missing_file_404_schedules_cleanup(hass, entry, hass_client, tmp_path):
+    record = await _add(entry)
+    await hass.async_block_till_done()
+    (tmp_path / "media" / record["path"]).unlink()
+    client = await hass_client()
+    resp = await client.get(file_url(entry.entry_id, record["id"]))
+    assert resp.status == 404
+    await hass.async_block_till_done()
+    assert entry.runtime_data.scanner.archive.entries() == []

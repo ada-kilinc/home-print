@@ -19,6 +19,8 @@ from .scanning import (
     ScanError,
     ScanRequest,
     active_state,
+    allowed_resolutions,
+    async_cancel_scan,
     async_start_scan,
     scan_defaults,
 )
@@ -39,6 +41,7 @@ def async_setup_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_history_delete)
     websocket_api.async_register_command(hass, ws_scan_start)
     websocket_api.async_register_command(hass, ws_scan_state)
+    websocket_api.async_register_command(hass, ws_scan_cancel)
     websocket_api.async_register_command(hass, ws_scans)
     websocket_api.async_register_command(hass, ws_scans_delete)
     websocket_api.async_register_command(hass, ws_scans_rename)
@@ -118,7 +121,8 @@ def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
         "sources": {
             name: {
                 "color_modes": list(src.color_modes),
-                "resolutions": list(src.resolutions),
+                # Only what can be saved (see SCAN_MAX_PIXELS).
+                "resolutions": list(allowed_resolutions(src)),
             }
             for name, src in scanner.caps.sources.items()
         },
@@ -387,19 +391,47 @@ async def ws_scan_state(
 
 
 @websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scan/cancel",
+        vol.Required("entry_id"): str,
+        vol.Required("scan_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_scan_cancel(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Cancel a running scan; the reply is its final state."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    if not _admin_ok(entry, connection, msg):
+        return
+    state = await async_cancel_scan(entry, msg["scan_id"])
+    if state is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Scan not found")
+        return
+    connection.send_result(msg["id"], {"scan": state.as_dict()})
+
+
+@websocket_api.websocket_command(
     {vol.Required("type"): "home_print/scans", vol.Required("entry_id"): str}
 )
 @websocket_api.async_response
 async def ws_scans(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Return the scan archive, newest first."""
+    """Return the scans whose file is still there, newest first.
+
+    Records whose file was deleted (e.g. from the Media browser) are left out
+    and an archive cleanup is started to drop them.
+    """
     if (entry := _scan_entry(hass, connection, msg)) is None:
         return
-    connection.send_result(
-        msg["id"],
-        {"entries": entry.runtime_data.scanner.archive.entries()},  # type: ignore[union-attr]
-    )
+    archive = entry.runtime_data.scanner.archive  # type: ignore[union-attr]
+    entries, missing = await archive.async_existing_entries()
+    if missing:
+        archive.async_schedule_cleanup()
+    connection.send_result(msg["id"], {"entries": entries})
 
 
 @websocket_api.websocket_command(

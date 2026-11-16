@@ -58,6 +58,9 @@ class HomePrintCoordinator(DataUpdateCoordinator[PrinterInfo]):
         except BaseException as err:
             if status_task is not None:
                 status_task.cancel()
+            if scanner is not None:
+                # An unreachable printer's scanner is unreachable too.
+                scanner.status = None
             if isinstance(err, CannotConnect):
                 raise UpdateFailed(f"Printer unreachable: {err}") from err
             if isinstance(err, HomePrintError):

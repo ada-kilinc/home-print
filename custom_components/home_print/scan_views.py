@@ -26,10 +26,14 @@ PREVIEW_CACHE_CONTROL = "private, max-age=300"
 DOWNLOAD_CACHE_CONTROL = "private, no-store"
 
 
-def _lookup(
+async def _lookup(
     hass: HomeAssistant, entry_id: str, record_id: str
 ) -> tuple[Path, dict] | None:
-    """The scan's file and record, or None for anything unknown or missing."""
+    """The scan's file and record, or None for anything unknown or missing.
+
+    The file checks run in the executor. A record whose file is gone (deleted
+    from the Media browser) starts an archive cleanup so it drops out.
+    """
     if not RECORD_ID_RE.fullmatch(record_id):
         return None
     entry = hass.config_entries.async_get_entry(entry_id)
@@ -41,9 +45,12 @@ def _lookup(
     ):
         return None
     archive = entry.runtime_data.scanner.archive
-    path = archive.file_path(record_id)
     record = archive.record(record_id)
-    if path is None or record is None:
+    if record is None:
+        return None
+    path = await archive.async_file_path(record_id)
+    if path is None:
+        archive.async_schedule_cleanup()
         return None
     return path, record
 
@@ -68,7 +75,7 @@ class ScanFileView(HomeAssistantView):
         self, request: web.Request, entry_id: str, record_id: str
     ) -> web.StreamResponse:
         """Return the file; 404 for anything unknown."""
-        found = _lookup(request.app[KEY_HASS], entry_id, record_id)
+        found = await _lookup(request.app[KEY_HASS], entry_id, record_id)
         if found is None:
             raise web.HTTPNotFound
         path, record = found
@@ -98,7 +105,7 @@ class ScanPreviewView(HomeAssistantView):
         hass = request.app[KEY_HASS]
         if not _PAGE_RE.fullmatch(page):
             raise web.HTTPNotFound
-        found = _lookup(hass, entry_id, record_id)
+        found = await _lookup(hass, entry_id, record_id)
         if found is None:
             raise web.HTTPNotFound
         path, _ = found

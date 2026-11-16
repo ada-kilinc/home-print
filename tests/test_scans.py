@@ -312,3 +312,17 @@ async def test_record_returns_a_copy_or_none(hass, tmp_path):
     copy["name"] = "changed"
     assert archive.record(record["id"])["name"] == record["name"]
     assert archive.record("0" * 32) is None
+
+
+async def test_async_file_path_and_existing_entries(hass, tmp_path):
+    archive = _setup(hass, tmp_path)
+    kept = await _add(archive, name="kept")
+    gone = await _add(archive, name="gone")
+    assert await archive.async_file_path(kept["id"]) == archive.file_path(kept["id"])
+    assert await archive.async_file_path("0" * 32) is None
+    assert await archive.async_file_path("../x") is None
+    (tmp_path / "media" / gone["path"]).unlink()
+    assert await archive.async_file_path(gone["id"]) is None
+    entries, missing = await archive.async_existing_entries()
+    assert [e["id"] for e in entries] == [kept["id"]]
+    assert missing is True

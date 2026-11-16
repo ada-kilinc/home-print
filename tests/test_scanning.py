@@ -374,3 +374,84 @@ async def test_unload_cancels_scan_before_archive_flush(hass, entry):
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert order == ["cancelled", "flush"]
     assert runtime.task.done()
+
+
+def test_resolutions_above_scan_pixel_cap_are_not_offered():
+    # 8.5x11.7 in platen: 1200 dpi is ~143 MP, over SCAN_MAX_PIXELS.
+    src = SourceCaps(0, 2550, 0, 3507, ("color",), (300, 600, 1200), ("image/jpeg",))
+    caps = ScannerCaps("2.0", None, None, {"platen": src})
+    assert scanning.allowed_resolutions(src) == (300, 600)
+    assert validate_request(caps, ScanRequest("platen", "color", 600, "pdf"))
+    with pytest.raises(ScanOptionError):
+        validate_request(caps, ScanRequest("platen", "color", 1200, "pdf"))
+    only_big = SourceCaps(0, 2550, 0, 3507, ("color",), (1200, 2400), ())
+    assert scanning.allowed_resolutions(only_big) == ()
+
+
+async def test_append_target_deleted_during_scan_saves_new_record(
+    hass, tmp_path, entry
+):
+    first = await _run(hass, entry, ScanRequest("platen", "color", 300, "pdf", "doc"))
+    gate = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        await gate.wait()
+        return [scan_jpeg(), scan_jpeg()]
+
+    runtime = entry.runtime_data.scanner
+    runtime.client.scan = scan
+    req = ScanRequest("platen", "color", 300, "pdf", append_to=first.record["id"])
+    state = await async_start_scan(hass, entry, req, "Ada")
+    assert await runtime.archive.async_delete(first.record["id"])
+    gate.set()
+    await runtime.task
+    assert state.state == "done"
+    assert state.record["id"] != first.record["id"]
+    assert state.record["pages"] == 2
+    assert state.record["mime"] == "application/pdf"
+    assert [r["id"] for r in runtime.archive.entries()] == [state.record["id"]]
+
+
+async def test_append_target_file_removed_during_scan_saves_new_record(
+    hass, tmp_path, entry
+):
+    first = await _run(hass, entry, ScanRequest("platen", "color", 300, "pdf", "doc"))
+    gate = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        await gate.wait()
+        return [scan_jpeg()]
+
+    runtime = entry.runtime_data.scanner
+    runtime.client.scan = scan
+    req = ScanRequest("platen", "color", 300, "pdf", append_to=first.record["id"])
+    state = await async_start_scan(hass, entry, req, None)
+    (tmp_path / "media" / first.record["path"]).unlink()
+    gate.set()
+    await runtime.task
+    assert state.state == "done"
+    assert state.record["id"] != first.record["id"]
+    assert state.record["pages"] == 1
+
+
+async def test_cancel_scan_sets_canceled(hass, entry):
+    started = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        started.set()
+        await asyncio.sleep(3600)
+
+    runtime = entry.runtime_data.scanner
+    runtime.client.scan = scan
+    events = async_capture_events(hass, EVENT_SCAN)
+    state = await async_start_scan(hass, entry, REQ, None)
+    await started.wait()
+    result = await scanning.async_cancel_scan(entry, state.scan_id)
+    assert result is state
+    assert state.state == "error"
+    assert state.error == "canceled"
+    assert runtime.task.done()
+    assert events[-1].data["result"] == "error"
+    # Cancelling again (or a finished scan) changes nothing.
+    assert await scanning.async_cancel_scan(entry, state.scan_id) is state
+    assert await scanning.async_cancel_scan(entry, "0" * 32) is None

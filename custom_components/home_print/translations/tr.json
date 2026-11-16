@@ -278,6 +278,9 @@
     "scan_error_scan_failed": {
       "message": "Beklenmeyen bir hata yüzünden tarama yapılamadı."
     },
+    "scan_error_canceled": {
+      "message": "Tarama iptal edildi."
+    },
     "scan_error_copy_failed": {
       "message": "Tarama kaydedildi ama {path} klasörüne kopyalanamadı."
     }

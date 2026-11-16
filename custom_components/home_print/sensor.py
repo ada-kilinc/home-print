@@ -17,6 +17,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import HomePrintConfigEntry
 from .coordinator import HomePrintCoordinator
 from .entity import HomePrintEntity
+from .scanning import active_state
 
 PARALLEL_UPDATES = 0
 
@@ -134,13 +135,25 @@ class ScannerStatusSensor(HomePrintEntity, SensorEntity):
     def __init__(self, coordinator: HomePrintCoordinator) -> None:
         super().__init__(coordinator, "scanner_status")
 
+    def _scan_running(self) -> bool:
+        """A scan of ours is running (the scanner may be too busy to answer)."""
+        scanner = self.coordinator.scanner
+        state = active_state(scanner) if scanner is not None else None
+        return state is not None and state.state in ("scanning", "saving")
+
     @property
     def available(self) -> bool:
         scanner = self.coordinator.scanner
-        return super().available and scanner is not None and scanner.status is not None
+        return (
+            super().available
+            and scanner is not None
+            and (scanner.status is not None or self._scan_running())
+        )
 
     @property
     def native_value(self) -> str | None:
+        if self._scan_running():
+            return "scanning"
         scanner = self.coordinator.scanner
         status = scanner.status if scanner else None
         if status is None:

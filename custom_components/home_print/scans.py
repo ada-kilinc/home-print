@@ -292,6 +292,32 @@ class ScanArchive:
         path = self._resolve(record)
         return path if path is not None and path.is_file() else None
 
+    async def async_file_path(self, record_id: str) -> Path | None:
+        """``file_path`` with the disk checks run in the executor."""
+        if not RECORD_ID_RE.fullmatch(record_id):
+            return None
+        record = self._find(record_id)
+        if record is None:
+            return None
+        return await self._hass.async_add_executor_job(
+            self._existing_file, str(record["path"])
+        )
+
+    async def async_existing_entries(self) -> tuple[list[dict[str, Any]], bool]:
+        """Records whose file is there (checked in the executor), newest first.
+
+        The flag is True when any record was left out because its file is gone.
+        """
+        entries = self.entries()
+        paths = [str(entry["path"]) for entry in entries]
+
+        def check() -> list[bool]:
+            return [self._existing_file(path) is not None for path in paths]
+
+        present = await self._hass.async_add_executor_job(check)
+        kept = [entry for entry, ok in zip(entries, present, strict=True) if ok]
+        return kept, len(kept) != len(entries)
+
     async def async_cleanup(self, now: datetime | None = None) -> None:
         """Drop expired records and ones whose file is gone; enforce the cap."""
         days = int(self._entry.options.get(CONF_SCAN_DAYS, DEFAULT_SCAN_DAYS))
@@ -353,8 +379,19 @@ class ScanArchive:
 
     def _resolve(self, record: dict[str, Any]) -> Path | None:
         """Absolute path of the record's file if it lies inside the scans folder."""
+        return self._resolve_rel(str(record["path"]))
+
+    def _existing_file(self, rel: str) -> Path | None:
+        """``_resolve_rel`` that also requires the file to exist (blocking)."""
+        path = self._resolve_rel(rel)
         try:
-            path = (self._root() / str(record["path"])).resolve()
+            return path if path is not None and path.is_file() else None
+        except OSError:
+            return None
+
+    def _resolve_rel(self, rel: str) -> Path | None:
+        try:
+            path = (self._root() / rel).resolve()
             scans = self._scans_dir().resolve()
         except (OSError, RuntimeError, ValueError):
             return None

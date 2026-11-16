@@ -13,9 +13,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import EVENT_SCAN
 from .convert.errors import InvalidDocument, TooManyPages
-from .convert.scan_doc import append_pdf, build_pdf, normalize_page
+from .convert.scan_doc import SCAN_MAX_PIXELS, append_pdf, build_pdf, normalize_page
 from .escl.errors import EsclError, ScannerBusy
-from .escl.models import ScannerCaps, ScanSettings
+from .escl.models import ScannerCaps, ScanSettings, SourceCaps
 from .scans import ScanArchive
 
 if TYPE_CHECKING:
@@ -90,11 +90,13 @@ class ScanJobState:
     record: dict[str, Any] | None = None
     user: str | None = None
     finished_at: float | None = None  # monotonic; None while running
+    cancel_requested: bool = False  # set by async_cancel_scan
 
     def as_dict(self) -> dict[str, Any]:
         """The state without internal bookkeeping."""
         data = asdict(self)
         del data["finished_at"]
+        del data["cancel_requested"]
         return data
 
 
@@ -103,20 +105,33 @@ def scan_mime(caps: ScannerCaps, source: str) -> str:
     return MIME_JPEG if MIME_JPEG in caps.sources[source].formats else MIME_PNG
 
 
+def allowed_resolutions(src: SourceCaps) -> tuple[int, ...]:
+    """Resolutions whose full-area page stays within ``SCAN_MAX_PIXELS``.
+
+    Higher ones would scan fine but be rejected as too large when saved.
+    """
+    return tuple(
+        r
+        for r in src.resolutions
+        if src.max_width * src.max_height * (r / 300) ** 2 <= SCAN_MAX_PIXELS
+    )
+
+
 def validate_request(
     caps: ScannerCaps, req: ScanRequest, archive: ScanArchive | None = None
 ) -> ScanSettings:
     """Check a request against the scanner; raise ``ScanOptionError``.
 
     With ``archive`` the ``append_to`` record is checked too: unknown is
-    ``not_found``, a record that is not a PDF is an invalid option.
+    ``not_found``, a record that is not a PDF is an invalid option. (Whether
+    its file still exists is checked by ``async_start_scan``, off the loop.)
     """
     src = caps.sources.get(req.source)
     if (
         req.format not in FORMATS
         or src is None
         or req.color_mode not in src.color_modes
-        or req.resolution not in src.resolutions
+        or req.resolution not in allowed_resolutions(src)
     ):
         raise ScanOptionError
     if req.append_to is not None:
@@ -124,7 +139,7 @@ def validate_request(
             raise ScanOptionError
         if archive is not None:
             record = archive.record(req.append_to)
-            if record is None or archive.file_path(req.append_to) is None:
+            if record is None:
                 raise ScanError("not_found")
             if record["mime"] != MIME_PDF:
                 raise ScanOptionError
@@ -191,30 +206,40 @@ async def _save(
     pages: list[bytes],
     state: ScanJobState,
 ) -> dict[str, Any]:
+    """Store the pages: appended to ``req.append_to``, or as a new record.
+
+    If the append target was deleted while scanning, the pages become a new
+    record instead of being lost.
+    """
     archive = runtime.archive
     base_pdf = None
     previous: dict[str, Any] | None = None
     if req.append_to is not None:
         previous = archive.record(req.append_to)
-        path = archive.file_path(req.append_to)
-        if previous is None or path is None:
-            raise ScanError("not_found")
-        base_pdf = await hass.async_add_executor_job(_read, path)
+        path = await archive.async_file_path(req.append_to)
+        if previous is not None and path is not None:
+            try:
+                base_pdf = await hass.async_add_executor_job(_read, path)
+            except OSError:
+                base_pdf = None
+        if base_pdf is None:
+            _LOGGER.info("Scan to append to is gone; saving the pages as a new scan")
+            previous = None
     data, mime = await hass.async_add_executor_job(
         _build_document, pages, req.format, req.resolution, base_pdf
     )
+    total = len(pages)
     if previous is not None:
-        record = await archive.async_replace_file(
-            previous["id"], data, previous["pages"] + len(pages)
-        )
-        if record is None:
-            raise ScanError("not_found")
-        return record
+        total = previous["pages"] + len(pages)
+        record = await archive.async_replace_file(previous["id"], data, total)
+        if record is not None:
+            return record
+        _LOGGER.info("Scan to append to is gone; saving the pages as a new scan")
     return await archive.async_add(
         name=req.name,
         data=data,
         mime=mime,
-        pages=len(pages),
+        pages=total,
         user=state.user,
         source=req.source,
         color_mode=req.color_mode,
@@ -244,7 +269,10 @@ async def _run(
         state.state = "done"
     except BaseException as err:
         state.state = "error"
-        state.error = "scan_failed" if _is_cancel(err) else _error_code(err)
+        if _is_cancel(err):
+            state.error = "canceled" if state.cancel_requested else "scan_failed"
+        else:
+            state.error = _error_code(err)
         if _is_cancel(err):
             raise
     finally:
@@ -280,6 +308,11 @@ async def async_start_scan(
     if runtime is None:
         raise ScanError("no_scanner")
     settings = validate_request(runtime.caps, req, runtime.archive)
+    if (
+        req.append_to is not None
+        and await runtime.archive.async_file_path(req.append_to) is None
+    ):
+        raise ScanError("not_found")
     if _is_running(runtime):
         raise ScannerBusy
     state = ScanJobState(scan_id=uuid4().hex, state="scanning", user=user)
@@ -289,6 +322,29 @@ async def async_start_scan(
         _run(hass, entry, runtime, req, settings, state),
         f"home_print scan {entry.entry_id}",
     )
+    return state
+
+
+async def async_cancel_scan(
+    entry: HomePrintConfigEntry, scan_id: str
+) -> ScanJobState | None:
+    """Cancel a running scan and wait until it has stopped; None if unknown.
+
+    The eSCL client closes the scanner job (DELETE) on the way out and the
+    state ends as ``error`` / ``canceled``. A scan that is already saving is
+    left to finish (stopping it then could leave a stray file); a finished
+    scan is returned as it is.
+    """
+    runtime = entry.runtime_data.scanner
+    state = active_state(runtime) if runtime is not None else None
+    if runtime is None or state is None or state.scan_id != scan_id:
+        return None
+    task = runtime.task
+    if task is not None and not task.done():
+        if state.state == "scanning":
+            state.cancel_requested = True
+            task.cancel()
+        await asyncio.wait({task})
     return state
 
 
@@ -312,9 +368,10 @@ def scan_defaults(caps: ScannerCaps) -> dict[str, Any]:
     """Defaults for the card: 300 dpi (or the closest), color, platen, PDF."""
     source = "platen" if "platen" in caps.sources else next(iter(caps.sources))
     src = caps.sources[source]
+    resolutions = allowed_resolutions(src)
     resolution = (
-        min(src.resolutions, key=lambda r: abs(r - PREFERRED_RESOLUTION))
-        if src.resolutions
+        min(resolutions, key=lambda r: abs(r - PREFERRED_RESOLUTION))
+        if resolutions
         else PREFERRED_RESOLUTION
     )
     return {

@@ -235,3 +235,25 @@ async def test_status_sensor_unavailable_without_status(
     await setup_entry(hass)
     sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
     assert sensor.state == STATE_UNAVAILABLE
+
+
+async def test_status_sensor_scanning_while_scan_runs_without_status(
+    hass, mock_client, mock_escl, mock_find_scanner
+):
+    from custom_components.home_print.scanning import ScanJobState
+
+    mock_find_scanner.return_value = (URL, CAPS)
+    entry = await setup_entry(hass)
+    scanner = entry.runtime_data.scanner
+    scanner.active = ScanJobState(scan_id="a" * 32, state="scanning")
+    mock_escl.client.status.side_effect = TimeoutError
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
+    assert sensor.state == "scanning"
+    scanner.active.state = "done"
+    scanner.active.finished_at = 0.0
+    entry.runtime_data.coordinator.async_update_listeners()
+    await hass.async_block_till_done()
+    sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
+    assert sensor.state == STATE_UNAVAILABLE

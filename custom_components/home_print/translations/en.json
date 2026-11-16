@@ -278,6 +278,9 @@
     "scan_error_scan_failed": {
       "message": "Scanning failed because of an unexpected error."
     },
+    "scan_error_canceled": {
+      "message": "The scan was canceled."
+    },
     "scan_error_copy_failed": {
       "message": "The scan was saved, but copying it to {path} failed."
     }

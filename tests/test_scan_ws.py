@@ -279,3 +279,76 @@ async def test_last_scan_reported_until_retention_ends(
     monkeypatch.setattr(scanning.time, "monotonic", lambda: state.finished_at + 601)
     msg = await send(hass, hass_ws_client, "printers")
     assert msg["result"]["printers"][0]["scanner"]["last_scan"] is None
+
+
+async def test_printers_hide_resolutions_over_pixel_cap(
+    hass, tmp_path, mock_client, mock_escl, mock_find_scanner, hass_ws_client
+):
+    from custom_components.home_print.escl.models import ScannerCaps, SourceCaps
+
+    src = SourceCaps(0, 2550, 0, 3507, ("color",), (300, 600, 1200), ("image/jpeg",))
+    await setup_scanner_entry(
+        hass, tmp_path, mock_find_scanner, ScannerCaps("2", None, None, {"platen": src})
+    )
+    msg = await send(hass, hass_ws_client, "printers")
+    scanner = msg["result"]["printers"][0]["scanner"]
+    assert scanner["sources"]["platen"]["resolutions"] == [300, 600]
+
+
+async def test_cancel_running_scan(hass, entry, hass_ws_client):
+    started = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        started.set()
+        await asyncio.sleep(3600)
+
+    entry.runtime_data.scanner.client.scan = scan
+    msg = await send(
+        hass, hass_ws_client, "scan/start", entry_id=entry.entry_id, **BODY
+    )
+    scan_id = msg["result"]["scan"]["scan_id"]
+    await started.wait()
+    msg = await send(
+        hass, hass_ws_client, "scan/cancel", entry_id=entry.entry_id, scan_id=scan_id
+    )
+    assert msg["result"]["scan"]["state"] == "error"
+    assert msg["result"]["scan"]["error"] == "canceled"
+    assert entry.runtime_data.scanner.task.done()
+    msg = await send(
+        hass, hass_ws_client, "scan/cancel", entry_id=entry.entry_id, scan_id="0" * 32
+    )
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_cancel_requires_admin_when_admin_only(
+    hass, tmp_path, mock_client, mock_escl, mock_find_scanner, hass_ws_client,
+    hass_read_only_access_token,
+):  # fmt: skip
+    entry = await setup_scanner_entry(
+        hass, tmp_path, mock_find_scanner, **{CONF_ADMIN_ONLY: True}
+    )
+    msg = await send(
+        hass, hass_ws_client, "scan/cancel", hass_read_only_access_token,
+        entry_id=entry.entry_id, scan_id="0" * 32,
+    )  # fmt: skip
+    assert msg["error"]["code"] == "unauthorized"
+
+
+async def test_scans_list_omits_missing_files_and_cleans_up(
+    hass, entry, hass_ws_client, tmp_path
+):
+    archive = entry.runtime_data.scanner.archive
+    kept = await archive.async_add(
+        name="a", data=b"%PDF-1", mime="application/pdf", pages=1, user=None,
+        source="platen", color_mode="color", resolution=300,
+    )  # fmt: skip
+    gone = await archive.async_add(
+        name="b", data=b"%PDF-1", mime="application/pdf", pages=1, user=None,
+        source="platen", color_mode="color", resolution=300,
+    )  # fmt: skip
+    await hass.async_block_till_done()
+    (tmp_path / "media" / gone["path"]).unlink()
+    msg = await send(hass, hass_ws_client, "scans", entry_id=entry.entry_id)
+    assert [e["id"] for e in msg["result"]["entries"]] == [kept["id"]]
+    await hass.async_block_till_done()
+    assert [e["id"] for e in archive.entries()] == [kept["id"]]
