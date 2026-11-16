@@ -34,6 +34,23 @@ def _loaded_entries(hass: HomeAssistant) -> list[HomePrintConfigEntry]:
     ]
 
 
+# Entries the card lists. A printer that was off while Home Assistant started
+# sits in SETUP_RETRY; the card shows it as unreachable instead of missing.
+_LISTED_STATES = (
+    ConfigEntryState.LOADED,
+    ConfigEntryState.SETUP_RETRY,
+    ConfigEntryState.SETUP_IN_PROGRESS,
+)
+
+
+def _listed_entries(hass: HomeAssistant) -> list[HomePrintConfigEntry]:
+    return [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.state in _LISTED_STATES
+    ]
+
+
 def _can_print(entry: HomePrintConfigEntry, connection: Any) -> bool:
     user = connection.user
     return not entry.options.get(CONF_ADMIN_ONLY) or bool(user and user.is_admin)
@@ -59,9 +76,30 @@ def _entities(hass: HomeAssistant, entry: HomePrintConfigEntry) -> dict[str, Any
     }
 
 
+def _defaults(entry: HomePrintConfigEntry) -> dict[str, Any]:
+    color_mode = entry.options.get(CONF_DEFAULT_COLOR_MODE)
+    return {
+        "sides": entry.options.get(CONF_DEFAULT_SIDES) or "one-sided",
+        "color_mode": None if color_mode in (None, COLOR_AUTO) else color_mode,
+    }
+
+
 def _printer(
     hass: HomeAssistant, entry: HomePrintConfigEntry, connection: Any
 ) -> dict[str, Any]:
+    if entry.state is not ConfigEntryState.LOADED:
+        # Not set up yet (printer off at start-up): no client, no data.
+        return {
+            "entry_id": entry.entry_id,
+            "title": entry.title,
+            "available": False,
+            "can_print": _can_print(entry, connection),
+            "state": None,
+            "entities": _entities(hass, entry),
+            "capabilities": None,
+            "defaults": _defaults(entry),
+            "max_file_mb": max_file_mb(entry),
+        }
     coordinator = entry.runtime_data.coordinator
     info = coordinator.data
     capabilities = None
@@ -74,7 +112,6 @@ def _printer(
             "copies_max": caps.copies_max,
             "page_ranges_passthrough": caps.page_ranges,
         }
-    color_mode = entry.options.get(CONF_DEFAULT_COLOR_MODE)
     return {
         "entry_id": entry.entry_id,
         "title": entry.title,
@@ -83,10 +120,7 @@ def _printer(
         "state": info.state if info is not None else None,
         "entities": _entities(hass, entry),
         "capabilities": capabilities,
-        "defaults": {
-            "sides": entry.options.get(CONF_DEFAULT_SIDES) or "one-sided",
-            "color_mode": None if color_mode in (None, COLOR_AUTO) else color_mode,
-        },
+        "defaults": _defaults(entry),
         "max_file_mb": max_file_mb(entry),
     }
 
@@ -96,12 +130,12 @@ def _printer(
 def ws_printers(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """List the loaded printers with what the card needs to render."""
+    """List the printers with what the card needs to render."""
     connection.send_result(
         msg["id"],
         {
             "printers": [
-                _printer(hass, entry, connection) for entry in _loaded_entries(hass)
+                _printer(hass, entry, connection) for entry in _listed_entries(hass)
             ]
         },
     )

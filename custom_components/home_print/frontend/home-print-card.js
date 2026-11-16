@@ -29,6 +29,8 @@ const WORD_TYPES = [
 ];
 const RUNNING_JOB_STATES = ["pending", "held", "processing", "stopped"];
 const FATAL_JOB_ERRORS = ["not_found", "unauthorized"];
+const PRINTER_ERROR_LIMIT = 3;
+const KNOWN_STATES = ["idle", "processing", "stopped"];
 
 const STRINGS = {
   tr: {
@@ -52,9 +54,12 @@ const STRINGS = {
     last_user: " — {user}",
     picker: "Yazıcı",
     loading: "Yazıcılar yükleniyor…",
-    load_failed: "Yazıcı listesi alınamadı. Home Print kurulu ve çalışıyor mu?",
-    no_printers: "Hiç yazıcı yok. Önce Home Print entegrasyonunu ekle.",
-    unknown_printer: "Kartta ayarlı yazıcı ({id}) bulunamadı. Kart ayarlarından başka bir yazıcı seç.",
+    load_failed:
+      "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Sürerse entegrasyonun kurulu olduğuna bak.",
+    no_printers:
+      "Yazıcı görünmüyor. Home Print hâlâ yükleniyor olabilir, birazdan tekrar bakarım. Hiç eklemediysen önce entegrasyonu ekle.",
+    unknown_printer:
+      "Kartta ayarlı yazıcı ({id}) şu an listede yok. Entegrasyon hâlâ yükleniyor olabilir; silindiyse kart ayarlarından başka bir yazıcı seç.",
     not_allowed: "Bu yazıcıyla yalnızca yöneticiler yazdırabilir.",
     word_file:
       "Word dosyalarını şimdilik yazdıramıyorum. Dosyayı önce PDF olarak kaydet (telefonda: Paylaş → PDF olarak yazdır/kaydet).",
@@ -74,6 +79,7 @@ const STRINGS = {
     job_reasons: " ({reasons})",
     job_checking: "Durum şu an alınamıyor, takip etmeye devam ediyorum…",
     job_lost: "İşin durumu alınamıyor.",
+    job_status_failed: "Durum alınamadı, yazıcıya bak.",
     job_timeout: "Durum bilinmiyor, yazıcıya bak.",
   },
   en: {
@@ -97,9 +103,12 @@ const STRINGS = {
     last_user: " — {user}",
     picker: "Printer",
     loading: "Loading printers…",
-    load_failed: "Couldn't load the printer list. Is Home Print installed and running?",
-    no_printers: "No printers yet. Add the Home Print integration first.",
-    unknown_printer: "The printer set for this card ({id}) wasn't found. Pick another one in the card settings.",
+    load_failed:
+      "Couldn't load the printer list. Home Print may still be loading; I'll try again shortly. If this persists, check that the integration is installed.",
+    no_printers:
+      "No printers listed. Home Print may still be loading; I'll check again shortly. If you haven't added one yet, add the integration first.",
+    unknown_printer:
+      "The printer set for this card ({id}) isn't listed right now. The integration may still be loading; if it was removed, pick another printer in the card settings.",
     not_allowed: "Only administrators can print on this printer.",
     word_file: "Word files can't be printed yet. Save the file as PDF first.",
     unsupported_type: "This file type can't be printed. Choose a PDF, JPEG or PNG.",
@@ -118,6 +127,7 @@ const STRINGS = {
     job_reasons: " ({reasons})",
     job_checking: "Can't get the status right now, still checking…",
     job_lost: "Can't get the job's status.",
+    job_status_failed: "Couldn't get the status, check the printer.",
     job_timeout: "Status unknown, check the printer.",
   },
 };
@@ -195,6 +205,16 @@ function jobLabel(lang, status) {
     default:
       return t(lang, "job_checking");
   }
+}
+
+// The two-sided value a checked box sends: the printer's own two-sided default
+// (so a short-edge default survives), else long edge, else any two-sided.
+function twoSided(printer) {
+  const sides = printer?.capabilities?.sides ?? [];
+  const preferred = printer?.defaults?.sides;
+  if (String(preferred ?? "").startsWith("two-sided") && sides.includes(preferred)) return preferred;
+  if (sides.includes("two-sided-long-edge")) return "two-sided-long-edge";
+  return sides.find((s) => s.startsWith("two-sided"));
 }
 
 function formatSize(bytes, lang) {
@@ -397,7 +417,7 @@ class HomePrintCard extends HTMLElement {
     this._appliedId = null;
     this._pickerKey = "";
     this._file = null;
-    this._busy = false;
+    this._uploading = false;
     this._message = null;
     this._job = null;
     this._refreshTimer = null;
@@ -501,7 +521,7 @@ class HomePrintCard extends HTMLElement {
 
   _canSubmit(printer) {
     return (
-      !this._busy &&
+      !this._uploading &&
       Boolean(printer) &&
       this._reachable(printer) &&
       printer.can_print !== false &&
@@ -513,7 +533,7 @@ class HomePrintCard extends HTMLElement {
 
   _onFile(ev) {
     this._file = ev.target.files?.[0] ?? null;
-    if (!this._busy) this._message = null;
+    if (!this._uploading && !this._job) this._message = null;
     this._update();
   }
 
@@ -532,7 +552,11 @@ class HomePrintCard extends HTMLElement {
       return;
     }
 
-    this._busy = true;
+    // A new upload replaces any job still being followed.
+    clearTimeout(this._pollTimer);
+    this._pollTimer = null;
+    this._job = null;
+    this._uploading = true;
     this._setMessage(t(lang, "uploading"));
     const entryId = printer.entry_id;
     const form = buildForm(this._file, { ...this._options(printer), page_ranges: pages });
@@ -566,7 +590,9 @@ class HomePrintCard extends HTMLElement {
       return;
     }
 
-    this._job = { entryId, jobId: body.job_id, started: Date.now() };
+    // The upload is confirmed: free the button and keep following the job.
+    this._uploading = false;
+    this._job = { entryId, jobId: body.job_id, started: Date.now(), printerErrors: 0 };
     this._setMessage(jobLabel(lang, { state: "pending" }));
     this._schedulePoll();
   }
@@ -580,12 +606,7 @@ class HomePrintCard extends HTMLElement {
       options.copies = Math.min(max, Math.max(1, Number.isNaN(copies) ? 1 : copies));
     }
     if (this._optionShown("duplex")) {
-      const sides = caps.sides ?? [];
-      options.sides = this._role("duplex").checked
-        ? sides.includes("two-sided-long-edge")
-          ? "two-sided-long-edge"
-          : sides.find((s) => s.startsWith("two-sided"))
-        : "one-sided";
+      options.sides = this._role("duplex").checked ? twoSided(printer) : "one-sided";
     }
     if (this._optionShown("color")) {
       options.color_mode = this._role("color").checked ? "color" : "monochrome";
@@ -626,12 +647,22 @@ class HomePrintCard extends HTMLElement {
         this._finish(t(lang, "job_lost"), "error");
         return;
       }
-      // printer_unavailable, printer_error, a dropped connection: try again.
+      if (err?.code === "printer_error") {
+        job.printerErrors += 1;
+        if (job.printerErrors >= PRINTER_ERROR_LIMIT) {
+          this._finish(t(lang, "job_status_failed"), "error");
+          return;
+        }
+      } else {
+        job.printerErrors = 0;
+      }
+      // printer_unavailable, a dropped connection, an occasional printer_error.
       this._setMessage(t(lang, "job_checking"));
       if (this.isConnected) this._schedulePoll();
       return;
     }
     if (this._job !== job) return;
+    job.printerErrors = 0;
     const label = jobLabel(lang, status);
     if (RUNNING_JOB_STATES.includes(status?.state)) {
       this._setMessage(label, status.state === "stopped" ? "error" : "info");
@@ -650,7 +681,7 @@ class HomePrintCard extends HTMLElement {
     clearTimeout(this._pollTimer);
     this._pollTimer = null;
     this._job = null;
-    this._busy = false;
+    this._uploading = false;
     this._setMessage(text, kind);
   }
 
@@ -715,8 +746,8 @@ class HomePrintCard extends HTMLElement {
   _statusText(lang, printer) {
     if (!this._reachable(printer)) return t(lang, "state_unreachable");
     const entity = this._entityState(printer.entities?.status)?.state;
-    const state = ["idle", "processing", "stopped"].includes(entity) ? entity : printer.state;
-    let text = state ? t(lang, `state_${state}`) : t(lang, "state_unknown");
+    const state = KNOWN_STATES.includes(entity) ? entity : printer.state;
+    let text = KNOWN_STATES.includes(state) ? t(lang, `state_${state}`) : t(lang, "state_unknown");
     if (this._entityState(printer.entities?.problem)?.state === "on") {
       text += ` · ${t(lang, "problem")}`;
     }
@@ -760,11 +791,9 @@ class HomePrintCard extends HTMLElement {
     if (!printer) return;
     const caps = printer.capabilities ?? {};
     const defaults = printer.defaults ?? {};
-    const modes = caps.color_modes ?? [];
     this._role("copies").value = "1";
     this._role("duplex").checked = String(defaults.sides ?? "").startsWith("two-sided");
-    this._role("color").checked =
-      defaults.color_mode === "color" || (modes.includes("color") && !modes.includes("monochrome"));
+    this._role("color").checked = defaults.color_mode === "color";
     this._role("pages").value = "";
   }
 
@@ -774,7 +803,10 @@ class HomePrintCard extends HTMLElement {
     this._row("copies").hidden = copiesMax <= 1;
     this._role("copies").max = String(Math.max(1, copiesMax));
     this._row("duplex").hidden = !(caps?.sides ?? []).some((s) => s.startsWith("two-sided"));
-    this._row("color").hidden = !(caps?.color_modes ?? []).includes("color");
+    // Only a real choice is shown: without both modes the printer's own
+    // default applies and no color_mode is sent.
+    const modes = caps?.color_modes ?? [];
+    this._row("color").hidden = !(modes.includes("color") && modes.includes("monochrome"));
     const format = this._file ? fileFormat(this._file) : "application/pdf";
     const pdfOk = (caps?.formats ?? []).includes("application/pdf");
     // PDFs always take a page range (conversion selects the pages); images

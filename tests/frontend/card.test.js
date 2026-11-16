@@ -111,17 +111,58 @@ describe("options from capabilities", () => {
     expect(optVisible(card, "duplex")).toBe(false);
   });
 
-  it("hides colour without color mode and pre-checks it without monochrome", async () => {
-    const mono = deskjetPrinter();
-    mono.capabilities.color_modes = ["monochrome"];
-    let card = await mount(makeHass({ printers: [mono] }));
-    expect(optVisible(card, "color")).toBe(false);
-    document.body.innerHTML = "";
+  it("shows colour only when both colour and monochrome exist, else sends none", async () => {
+    for (const modes of [["monochrome"], ["color"]]) {
+      const printer = deskjetPrinter();
+      printer.capabilities.color_modes = modes;
+      const hass = makeHass({ printers: [printer], jobs: [{ job_id: 42, state: "processing" }] });
+      const card = await mount(hass);
+      expect(optVisible(card, "color"), modes.join()).toBe(false);
+      await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+      await clickPrint(card);
+      expect(hass.fetchWithAuth.mock.calls[0][1].body.has("color_mode")).toBe(false);
+      document.body.innerHTML = "";
+    }
+  });
 
-    const colorOnly = deskjetPrinter();
-    colorOnly.capabilities.color_modes = ["color"];
-    card = await mount(makeHass({ printers: [colorOnly] }));
+  it("pre-checks colour for a colour default and sends color when checked", async () => {
+    const printer = deskjetPrinter();
+    printer.defaults.color_mode = "color";
+    const hass = makeHass({ printers: [printer], jobs: [{ job_id: 42, state: "processing" }] });
+    const card = await mount(hass);
     expect(role(card, "color").checked).toBe(true);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(hass.fetchWithAuth.mock.calls[0][1].body.get("color_mode")).toBe("color");
+  });
+
+  it("keeps a short-edge two-sided default", async () => {
+    const printer = deskjetPrinter();
+    printer.defaults.sides = "two-sided-short-edge";
+    const hass = makeHass({ printers: [printer], jobs: [{ job_id: 42, state: "processing" }] });
+    const card = await mount(hass);
+    expect(role(card, "duplex").checked).toBe(true);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(hass.fetchWithAuth.mock.calls[0][1].body.get("sides")).toBe("two-sided-short-edge");
+  });
+
+  it("sends one-sided when duplex is unchecked", async () => {
+    const hass = makeHass({ jobs: [{ job_id: 42, state: "processing" }] });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    setInput(card, "duplex", false);
+    await clickPrint(card);
+    expect(hass.fetchWithAuth.mock.calls[0][1].body.get("sides")).toBe("one-sided");
+  });
+
+  it("labels an unknown printer state as unknown", async () => {
+    const states = deskjetStates();
+    states["sensor.deskjet_status"].state = "unknown";
+    const card = await mount(
+      makeHass({ printers: [deskjetPrinter({ state: "warming-up" })], states }),
+    );
+    expect(text(card, "state")).toBe("Bilinmiyor");
   });
 
   it("hides pages for images unless the printer passes page ranges through", async () => {
@@ -223,7 +264,7 @@ describe("printing", () => {
     expect(form.get("page_ranges")).toBe("1-3");
   });
 
-  it("uploads once on a double click and disables the button while busy", async () => {
+  it("uploads once on a double click and disables the button while uploading", async () => {
     const hass = makeHass({ jobs: [{ job_id: 42, state: "processing", reasons: [] }] });
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
@@ -233,7 +274,9 @@ describe("printing", () => {
     expect(button.disabled).toBe(true);
     await flush();
     expect(hass.fetchWithAuth).toHaveBeenCalledTimes(1);
-    expect(role(card, "print").disabled).toBe(true);
+    // Upload confirmed: the button is free again while the job is followed.
+    expect(role(card, "print").disabled).toBe(false);
+    expect(text(card, "message")).toBe("Yazdırılıyor…");
   });
 
   it("follows the job until completed", async () => {
@@ -269,19 +312,88 @@ describe("printing", () => {
     expect(text(card, "message")).toContain("document-format-error");
   });
 
-  it("keeps polling through printer errors and stops after 10 minutes", async () => {
+  it("keeps polling an unreachable printer and stops after 10 minutes", async () => {
     const hass = makeHass({ jobs: [{ error: "printer_unavailable" }] });
     const card = await mount(hass);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     await clickPrint(card);
     await vi.advanceTimersByTimeAsync(9 * 60_000);
-    expect(role(card, "print").disabled).toBe(true);
+    expect(role(card, "print").disabled).toBe(false);
+    expect(text(card, "message")).toContain("Durum şu an alınamıyor");
+    const before = hass.calls.filter((m) => m.type === "home_print/job").length;
+    expect(before).toBeGreaterThan(100);
     await vi.advanceTimersByTimeAsync(60_000 + 3000);
     expect(text(card, "message")).toBe("Durum bilinmiyor, yazıcıya bak.");
     const count = hass.calls.filter((m) => m.type === "home_print/job").length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(hass.calls.filter((m) => m.type === "home_print/job")).toHaveLength(count);
     expect(role(card, "print").disabled).toBe(false);
+  });
+
+  it("stops after three printer_error answers in a row", async () => {
+    const hass = makeHass({
+      jobs: [
+        { error: "printer_error" },
+        { job_id: 42, state: "processing", reasons: [] },
+        { error: "printer_error" },
+        { error: "printer_error" },
+        { error: "printer_error" },
+        { job_id: 42, state: "completed", reasons: [] },
+      ],
+    });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await vi.advanceTimersByTimeAsync(4 * 3000);
+    expect(text(card, "message")).not.toBe("Durum alınamadı, yazıcıya bak.");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Durum alınamadı, yazıcıya bak.");
+    const count = hass.calls.filter((m) => m.type === "home_print/job").length;
+    expect(count).toBe(5);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(hass.calls.filter((m) => m.type === "home_print/job")).toHaveLength(count);
+    expect(role(card, "print").disabled).toBe(false);
+  });
+
+  it("stops and restarts its timers on disconnect and reconnect", async () => {
+    const hass = makeHass({ jobs: [{ job_id: 42, state: "processing", reasons: [] }] });
+    const card = await mount(hass);
+    const count = (type) => hass.calls.filter((m) => m.type === type).length;
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(count("home_print/job")).toBe(1);
+
+    card.remove();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(count("home_print/printers")).toBe(1);
+    expect(count("home_print/job")).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+
+    document.body.appendChild(card);
+    await flush();
+    expect(count("home_print/printers")).toBe(2);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(count("home_print/job")).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(count("home_print/printers")).toBe(3);
+  });
+
+  it("renders markup in file and entity names as text", async () => {
+    const states = deskjetStates();
+    states["sensor.deskjet_black_ink"].attributes = {
+      color: "#123456",
+      friendly_name: '<img src=x onerror="alert(1)">',
+    };
+    states["sensor.deskjet_last_job"].state = "<b>son</b>.pdf";
+    const card = await mount(makeHass({ states }));
+    const name = '<img src=x onerror="alert(1)">.pdf';
+    await selectFile(card, makeFile(name, "application/pdf"));
+    expect(role(card, "file-name").textContent).toBe(name);
+    expect(role(card, "ink").textContent).toContain('<img src=x onerror="alert(1)">');
+    expect(text(card, "last")).toContain("<b>son</b>.pdf");
+    expect(card.shadowRoot.querySelector("img")).toBeNull();
+    expect(card.shadowRoot.querySelector("b")).toBeNull();
   });
 
   it("shows the server's message verbatim", async () => {
@@ -342,6 +454,26 @@ describe("printer availability", () => {
     expect(role(card, "print").disabled).toBe(true);
   });
 
+  it("shows a printer still waiting for setup as unreachable", async () => {
+    const printer = deskjetPrinter({
+      available: false,
+      state: null,
+      capabilities: null,
+      defaults: { sides: "one-sided", color_mode: null },
+      entities: { status: null, problem: null, last_job: null, markers: [] },
+    });
+    const card = await mount(makeHass({ printers: [printer], states: {} }));
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    expect(text(card, "state")).toBe("Ulaşılamıyor");
+    expect(role(card, "print").disabled).toBe(true);
+    expect(role(card, "notice").hidden).toBe(true);
+  });
+
+  it("says the printer may still be loading when none are listed", async () => {
+    const card = await mount(makeHass({ printers: [] }));
+    expect(text(card, "notice")).toContain("yükleniyor");
+  });
+
   it("survives a failing printers call and missing entities", async () => {
     const card = await mount(
       makeHass({ printersError: { code: "unknown_command", message: "x" }, states: {} }),
@@ -394,7 +526,8 @@ describe("several printers", () => {
   it("warns about an unknown entry_id", async () => {
     const hass = makeHass();
     const card = await mount(hass, { entry_id: "gone" });
-    expect(text(card, "notice")).toContain("bulunamadı");
+    expect(text(card, "notice")).toContain("gone");
+    expect(text(card, "notice")).toContain("yükleniyor");
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     expect(role(card, "print").disabled).toBe(true);
   });

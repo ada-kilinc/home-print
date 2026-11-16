@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -99,6 +100,67 @@ async def test_printers_skips_unloaded_entries(hass, mock_client, hass_ws_client
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert await _printers(hass, hass_ws_client) == []
+
+
+async def test_printers_lists_setup_retry_entry(hass, mock_client, hass_ws_client):
+    """A printer that is off while HA starts is listed as unreachable."""
+    _setup_deskjet(mock_client)
+    entry = await setup_entry(hass, make_entry(**{CONF_MAX_FILE_MB: 10}))
+    reg = er.async_get(hass)
+    by_uid = {
+        e.unique_id: e.entity_id
+        for e in er.async_entries_for_config_entry(reg, entry.entry_id)
+    }
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    mock_client.get_printer.side_effect = CannotConnect("down")
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+
+    [printer] = await _printers(hass, hass_ws_client)
+    ident = entry.unique_id
+    assert printer == {
+        "entry_id": entry.entry_id,
+        "title": "Printer",
+        "available": False,
+        "can_print": True,
+        "state": None,
+        "entities": {
+            "status": by_uid[f"{ident}_status"],
+            "problem": by_uid[f"{ident}_problem"],
+            "last_job": by_uid[f"{ident}_last_job"],
+            "markers": [
+                by_uid[f"{ident}_marker_{i}"] for i in range(len(DESKJET.markers))
+            ],
+        },
+        "capabilities": None,
+        "defaults": {"sides": "one-sided", "color_mode": None},
+        "max_file_mb": 10,
+    }
+
+    ws = await hass_ws_client(hass)
+    await ws.send_json(
+        {"id": 2, "type": "home_print/job", "entry_id": entry.entry_id, "job_id": 1}
+    )
+    msg = await ws.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_printers_never_loaded_retry_entry(hass, mock_client, hass_ws_client):
+    mock_client.get_printer.side_effect = CannotConnect("down")
+    entry = await setup_entry(hass)
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    [printer] = await _printers(hass, hass_ws_client)
+    assert printer["available"] is False
+    assert printer["capabilities"] is None
+    assert printer["entities"] == {
+        "status": None,
+        "problem": None,
+        "last_job": None,
+        "markers": [],
+    }
 
 
 async def test_printers_admin_only_non_admin_can_print_false(
