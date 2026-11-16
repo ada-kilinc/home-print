@@ -84,7 +84,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     entry.async_on_unload(
-        async_track_time_interval(hass, history.async_cleanup, HISTORY_CLEANUP_INTERVAL)
+        async_track_time_interval(
+            hass, history.async_schedule_cleanup, HISTORY_CLEANUP_INTERVAL
+        )
     )
     return True
 

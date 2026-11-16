@@ -1342,7 +1342,48 @@ describe("preview", () => {
   const PDF_ID = "1".repeat(32);
   const items = (card) => [...card.shadowRoot.querySelectorAll('[data-role="history-item"]')];
   const images = (card) => [...role(card, "preview-body").querySelectorAll("img")];
+  const pages = (card) => [...role(card, "preview-body").querySelectorAll("[data-page]")];
   const signCalls = (hass) => hass.calls.filter((m) => m.type === "auth/sign_path");
+
+  // A stand-in IntersectionObserver the tests drive by hand.
+  let observers;
+  let realObserver;
+  class FakeObserver {
+    constructor(callback, options) {
+      this.callback = callback;
+      this.options = options;
+      this.targets = new Set();
+      this.disconnected = false;
+      observers.push(this);
+    }
+    observe(el) {
+      this.targets.add(el);
+    }
+    unobserve(el) {
+      this.targets.delete(el);
+    }
+    disconnect() {
+      this.targets.clear();
+      this.disconnected = true;
+    }
+  }
+  const observer = () => observers[observers.length - 1];
+  async function show(card, page) {
+    const el = pages(card).find((p) => p.dataset.page === String(page));
+    const io = observer();
+    expect(io.targets.has(el), `page ${page} observed`).toBe(true);
+    io.callback([{ target: el, isIntersecting: true }], io);
+    await flush();
+  }
+
+  beforeEach(() => {
+    observers = [];
+    realObserver = window.IntersectionObserver;
+    window.IntersectionObserver = FakeObserver;
+  });
+  afterEach(() => {
+    window.IntersectionObserver = realObserver;
+  });
 
   async function openPreview(hass, index = 0) {
     const card = await mount(hass);
@@ -1353,30 +1394,89 @@ describe("preview", () => {
     return card;
   }
 
-  it("opens over the history and shows every page as a signed lazy image", async () => {
+  it("opens over the history with a placeholder per page and signs none up front", async () => {
     const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 3 })] });
     const card = await openPreview(hass);
-    const preview = role(card, "preview-dialog");
-    expect(preview.open).toBe(true);
+    expect(role(card, "preview-dialog").open).toBe(true);
     expect(role(card, "history-dialog").open).toBe(true);
     expect(text(card, "preview-title")).toBe("rapor.pdf");
+    expect(pages(card)).toHaveLength(3);
+    expect(images(card)).toHaveLength(0);
+    expect(signCalls(hass)).toHaveLength(0);
+    expect(observer().options.root).toBe(role(card, "preview-body"));
+    expect(observer().options.rootMargin).toContain("800px");
+    expect(getComputedStyle(role(card, "preview-body")).overflowY).toBe("auto");
+  });
+
+  it("signs and loads a page only when it nears the viewport", async () => {
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 3 })] });
+    const card = await openPreview(hass);
+    await show(card, 1);
+    await show(card, 2);
     expect(signCalls(hass).map((m) => m.path)).toEqual(
-      [1, 2, 3].map((n) => `/api/home_print/history/deskjet/${PDF_ID}/page/${n}`),
+      [1, 2].map((n) => `/api/home_print/history/deskjet/${PDF_ID}/page/${n}`),
     );
     expect(signCalls(hass)[0].expires).toBe(300);
     const imgs = images(card);
-    expect(imgs).toHaveLength(3);
-    expect(imgs[2].getAttribute("src")).toBe(
-      `/api/home_print/history/deskjet/${PDF_ID}/page/3?authSig=sig`,
+    expect(imgs).toHaveLength(2);
+    expect(imgs[1].getAttribute("src")).toBe(
+      `/api/home_print/history/deskjet/${PDF_ID}/page/2?authSig=sig`,
     );
-    expect(imgs[0].getAttribute("loading")).toBe("lazy");
     expect(imgs[0].getAttribute("alt")).toBe("Sayfa 1");
-    expect(getComputedStyle(role(card, "preview-body")).overflowY).toBe("auto");
+    expect(observer().targets.has(pages(card)[0])).toBe(false);
+    expect(observer().targets.has(pages(card)[2])).toBe(true);
+  });
+
+  it("signs a page seen after more than 240 s afresh", async () => {
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 2 })] });
+    const card = await openPreview(hass);
+    await show(card, 1);
+    await vi.advanceTimersByTimeAsync(241_000);
+    const before = signCalls(hass).length;
+    await show(card, 2);
+    expect(signCalls(hass)).toHaveLength(before + 1);
+    expect(signCalls(hass).at(-1).path).toContain("/page/2");
+  });
+
+  it("re-signs when the signature got old before the image could load", async () => {
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 1 })] });
+    let release;
+    const original = hass.callWS.getMockImplementation();
+    hass.callWS.mockImplementation(async (msg) => {
+      const result = await original(msg);
+      if (msg.type === "auth/sign_path" && !release) {
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      return result;
+    });
+    const card = await openPreview(hass);
+    await show(card, 1);
+    await vi.advanceTimersByTimeAsync(241_000);
+    release();
+    await flush();
+    expect(signCalls(hass)).toHaveLength(2);
+    expect(images(card)).toHaveLength(1);
+  });
+
+  it("disconnects the observer when the preview closes", async () => {
+    const hass = makeHass({ history: [historyEntry({ pages: 2 })] });
+    const card = await openPreview(hass);
+    const io = observer();
+    role(card, "preview-close").click();
+    expect(io.disconnected).toBe(true);
+    items(card)[0].querySelector('[data-role="history-open"]').click();
+    await flush();
+    const second = observer();
+    expect(second).not.toBe(io);
+    card.remove();
+    expect(second.disconnected).toBe(true);
   });
 
   it("returns to the history when closed", async () => {
     const hass = makeHass({ history: [historyEntry({ pages: 1 })] });
-    let card = await openPreview(hass);
+    const card = await openPreview(hass);
     role(card, "preview-close").click();
     expect(role(card, "preview-dialog").open).toBe(false);
     expect(role(card, "history-dialog").open).toBe(true);
@@ -1396,30 +1496,52 @@ describe("preview", () => {
     expect(role(card, "history-dialog").open).toBe(true);
   });
 
-  it("shows one image for a photo", async () => {
+  it("shows one page for a photo", async () => {
     const hass = makeHass({
       history: [historyEntry({ file_name: "foto.jpg", mime: "image/jpeg", pages: null })],
     });
     const card = await openPreview(hass);
-    expect(images(card)).toHaveLength(1);
+    expect(pages(card)).toHaveLength(1);
+    await show(card, 1);
     images(card)[0].dispatchEvent(new Event("load"));
     await flush();
-    expect(images(card)).toHaveLength(1);
+    expect(pages(card)).toHaveLength(1);
+    expect(signCalls(hass)).toHaveLength(1);
   });
 
   it("with an unknown page count adds pages until one fails to load", async () => {
     const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: null })] });
     const card = await openPreview(hass);
-    expect(images(card)).toHaveLength(1);
+    expect(pages(card)).toHaveLength(1);
+    await show(card, 1);
     images(card)[0].dispatchEvent(new Event("load"));
     await flush();
-    expect(images(card)).toHaveLength(2);
+    expect(pages(card)).toHaveLength(2);
+    expect(signCalls(hass)).toHaveLength(1);
+    await show(card, 2);
     expect(images(card)[1].getAttribute("src")).toContain("/page/2?");
     images(card)[1].dispatchEvent(new Event("error"));
     await flush();
-    expect(images(card)).toHaveLength(1);
+    expect(pages(card)).toHaveLength(1);
     expect(signCalls(hass)).toHaveLength(2);
     expect(text(card, "preview-body")).toBe("");
+  });
+
+  it("loads pages one after another without IntersectionObserver", async () => {
+    window.IntersectionObserver = undefined;
+    const hass = makeHass({ history: [historyEntry({ id: PDF_ID, pages: 3 })] });
+    const card = await openPreview(hass);
+    expect(signCalls(hass)).toHaveLength(1);
+    expect(images(card)).toHaveLength(1);
+    images(card)[0].dispatchEvent(new Event("load"));
+    await flush();
+    expect(signCalls(hass)).toHaveLength(2);
+    images(card)[1].dispatchEvent(new Event("load"));
+    await flush();
+    images(card)[2].dispatchEvent(new Event("load"));
+    await flush();
+    expect(signCalls(hass)).toHaveLength(3);
+    expect(images(card)).toHaveLength(3);
   });
 
   it("says a file that is no longer kept can't be shown", async () => {
@@ -1442,8 +1564,10 @@ describe("preview", () => {
       signError: { code: "unknown_error", message: "x" },
     });
     const card = await openPreview(hass);
+    await show(card, 1);
     expect(text(card, "preview-body")).toBe("Ön izleme yüklenemedi.");
     expect(images(card)).toHaveLength(0);
+    expect(observer().disconnected).toBe(true);
   });
 
   it("puts a markup file name in the title as text", async () => {
@@ -1451,5 +1575,160 @@ describe("preview", () => {
     const card = await openPreview(hass);
     expect(text(card, "preview-title")).toBe("<b>x</b>.pdf");
     expect(card.shadowRoot.querySelector("b")).toBeNull();
+  });
+});
+
+describe("fix round 1", () => {
+  const items = (card) => [...card.shadowRoot.querySelectorAll('[data-role="history-item"]')];
+  const ANDROID = {
+    userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile",
+    platform: "Linux armv8l",
+    maxTouchPoints: 5,
+  };
+  function fakeNavigator(props) {
+    for (const [key, value] of Object.entries(props)) {
+      Object.defineProperty(navigator, key, { value, configurable: true });
+    }
+    return () => {
+      for (const key of Object.keys(props)) delete navigator[key];
+    };
+  }
+  function fakeValue(input, initial) {
+    let value = initial;
+    Object.defineProperty(input, "value", {
+      get: () => value,
+      set: (next) => {
+        value = next;
+      },
+      configurable: true,
+    });
+    return () => value;
+  }
+
+  it("stops the page behind from scrolling while a dialog is open", async () => {
+    document.documentElement.style.overflow = "scroll";
+    try {
+      const card = await mount(makeHass({ history: [historyEntry({ pages: 1 })] }));
+      role(card, "history-button").click();
+      await flush();
+      expect(document.documentElement.style.overflow).toBe("hidden");
+      items(card)[0].querySelector('[data-role="history-open"]').click();
+      await flush();
+      role(card, "preview-close").click();
+      expect(document.documentElement.style.overflow).toBe("hidden");
+      role(card, "history-close").click();
+      expect(document.documentElement.style.overflow).toBe("scroll");
+      role(card, "history-button").click();
+      await flush();
+      card.remove();
+      expect(document.documentElement.style.overflow).toBe("scroll");
+    } finally {
+      document.documentElement.style.overflow = "";
+    }
+  });
+
+  it("lets the same file be picked again through another picker", async () => {
+    const restore = fakeNavigator(ANDROID);
+    try {
+      const card = await mount(makeHass());
+      const file = role(card, "input-file");
+      const photo = role(card, "input-photo");
+      vi.spyOn(file, "click").mockImplementation(() => {});
+      const fileValue = fakeValue(file, "C:\\fakepath\\a.jpg");
+      const photoValue = fakeValue(photo, "");
+      // Picking through the photo input clears the file input...
+      Object.defineProperty(photo, "files", {
+        value: [makeFile("a.jpg", "image/jpeg")],
+        configurable: true,
+      });
+      photo.value = "C:\\fakepath\\a.jpg";
+      photo.dispatchEvent(new Event("change"));
+      await flush();
+      expect(fileValue()).toBe("");
+      expect(photoValue()).toBe("C:\\fakepath\\a.jpg");
+      // ...and opening a picker clears its own value first.
+      file.value = "C:\\fakepath\\a.jpg";
+      role(card, "pick").click();
+      $(card, '[data-option="file"]').click();
+      expect(fileValue()).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not bring a deleted row back from a reload already under way", async () => {
+    const hass = makeHass({
+      history: [historyEntry({ id: "1".repeat(32) }), historyEntry({ id: "2".repeat(32) })],
+      jobs: [{ job_id: 42, state: "processing", reasons: [] }],
+    });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    const original = hass.callWS.getMockImplementation();
+    let release;
+    hass.callWS.mockImplementation(async (msg) => {
+      const result = await original(msg);
+      if (msg.type === "home_print/history") {
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      return result;
+    });
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(release).toBeTypeOf("function");
+    items(card)[0].querySelector('[data-role="history-delete"]').click();
+    await flush();
+    expect(items(card)).toHaveLength(1);
+    release();
+    await flush();
+    expect(items(card)).toHaveLength(1);
+    expect(items(card)[0].textContent).toContain("rapor.pdf");
+  });
+
+  it("moves focus to the next trash button after a delete, else to close", async () => {
+    const hass = makeHass({
+      history: [historyEntry({ id: "1".repeat(32) }), historyEntry({ id: "2".repeat(32) })],
+    });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    items(card)[0].querySelector('[data-role="history-delete"]').click();
+    await flush();
+    const next = items(card)[0].querySelector('[data-role="history-delete"]');
+    expect(card.shadowRoot.activeElement).toBe(next);
+    next.click();
+    await flush();
+    expect(card.shadowRoot.activeElement).toBe(role(card, "history-close"));
+  });
+
+  it("has an accessible menu with focus and arrow keys", async () => {
+    const restore = fakeNavigator(ANDROID);
+    try {
+      const card = await mount(makeHass());
+      const pick = role(card, "pick");
+      expect(pick.getAttribute("aria-haspopup")).toBe("menu");
+      expect(pick.getAttribute("aria-expanded")).toBe("false");
+      pick.click();
+      const options = [...card.shadowRoot.querySelectorAll("[data-option]")];
+      expect(card.shadowRoot.activeElement).toBe(options[0]);
+      const key = (k) =>
+        card.shadowRoot.activeElement.dispatchEvent(
+          new KeyboardEvent("keydown", { key: k, bubbles: true }),
+        );
+      key("ArrowDown");
+      expect(card.shadowRoot.activeElement).toBe(options[1]);
+      key("ArrowDown");
+      key("ArrowDown");
+      expect(card.shadowRoot.activeElement).toBe(options[0]);
+      key("ArrowUp");
+      expect(card.shadowRoot.activeElement).toBe(options[2]);
+      key("Escape");
+      expect(role(card, "pick-menu").hidden).toBe(true);
+      expect(card.shadowRoot.activeElement).toBe(pick);
+    } finally {
+      restore();
+    }
   });
 });

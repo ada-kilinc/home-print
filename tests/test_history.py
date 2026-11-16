@@ -1,5 +1,6 @@
 """Tests for the persisted print history."""
 
+import asyncio
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -368,3 +369,34 @@ async def test_removing_entry_deletes_files(hass, mock_client):
     await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
     assert not folder.exists()
+
+
+async def test_flush_waits_for_a_running_periodic_cleanup(hass, mock_client, freezer):
+    entry = await setup_entry(hass)
+    history = entry.runtime_data.history
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = []
+
+    async def slow_cleanup(now=None):
+        started.set()
+        await release.wait()
+        finished.append(True)
+
+    with patch.object(history, "async_cleanup", slow_cleanup):
+        freezer.tick(timedelta(hours=6, seconds=1))
+        async_fire_time_changed(hass)
+        # Time is frozen here, so wait by yielding rather than sleeping.
+        for _ in range(20):
+            await asyncio.sleep(0)
+        started_ok = started.is_set()
+        flush = hass.async_create_task(history.async_flush())
+        for _ in range(20):
+            await asyncio.sleep(0)
+        flushed_early = flush.done()
+        release.set()
+        await flush
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert started_ok
+        assert not flushed_early
+        assert finished == [True]

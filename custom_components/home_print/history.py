@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -263,6 +263,11 @@ class PrintHistory:
                 changed = True
         if changed:
             self._schedule_save()
+
+    @callback
+    def async_schedule_cleanup(self, _now: datetime | None = None) -> None:
+        """Start a cleanup as a tracked task, so async_flush waits for it."""
+        self._create_task(self.async_cleanup())
 
     async def async_flush(self) -> None:
         """Finish pending file work and write the records now (on unload)."""

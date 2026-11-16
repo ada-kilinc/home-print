@@ -1,7 +1,11 @@
 """Tests for the history page preview endpoint."""
 
+import asyncio
 import io
+import threading
+import time
 from datetime import timedelta
+from unittest.mock import patch
 
 from homeassistant.components.http.auth import async_sign_path
 from PIL import Image
@@ -144,3 +148,29 @@ async def test_unloaded_entry_not_found(hass, mock_client, hass_client):
     client = await hass_client()
     resp = await client.get(url(entry.entry_id, record["id"], 1))
     assert resp.status == 404
+
+
+async def test_at_most_two_renders_run_at_once(hass, mock_client, hass_client):
+    entry = await setup_entry(hass)
+    record = await _record(hass, entry, blank_pdf(3))
+    lock = threading.Lock()
+    running = 0
+    peak = 0
+
+    def slow_render(folder, path, page):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.3)
+        with lock:
+            running -= 1
+        return b"\xff\xd8jpeg"
+
+    client = await hass_client()
+    with patch("custom_components.home_print.preview._render", slow_render):
+        responses = await asyncio.gather(
+            *(client.get(url(entry.entry_id, record["id"], n)) for n in (1, 2, 3))
+        )
+    assert [r.status for r in responses] == [200, 200, 200]
+    assert peak == 2

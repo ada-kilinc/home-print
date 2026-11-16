@@ -8,12 +8,14 @@ path signed with ``auth/sign_path``, which HA accepts for any view with
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
 from aiohttp import web
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .convert.errors import InvalidDocument, TooManyPages
@@ -22,6 +24,17 @@ from .history import RECORD_ID_RE, files_dir
 
 _PAGE_RE = re.compile(r"^[1-9][0-9]{0,3}$")
 CACHE_CONTROL = "private, max-age=300"
+# Rendering a page takes a worker thread and some memory; a fast scroll
+# through a long PDF must not take every executor thread at once.
+MAX_RENDERS = 2
+_RENDER_LIMIT = f"{DOMAIN}_preview_renders"
+
+
+def _render_limit(hass: HomeAssistant) -> asyncio.Semaphore:
+    """The per-instance semaphore that caps concurrent renders."""
+    if (limit := hass.data.get(_RENDER_LIMIT)) is None:
+        limit = hass.data[_RENDER_LIMIT] = asyncio.Semaphore(MAX_RENDERS)
+    return limit
 
 
 def _render(folder: Path, path: Path, page: int) -> bytes | None:
@@ -63,7 +76,8 @@ class HomePrintPreviewView(HomeAssistantView):
         folder = files_dir(hass, entry.entry_id)
         if path is None or path.parent != folder:
             raise web.HTTPNotFound
-        body = await hass.async_add_executor_job(_render, folder, path, int(page))
+        async with _render_limit(hass):
+            body = await hass.async_add_executor_job(_render, folder, path, int(page))
         if body is None:
             raise web.HTTPNotFound
         return web.Response(

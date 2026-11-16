@@ -28,6 +28,9 @@ const PHOTO_ACCEPT = "image/jpeg,image/png";
 const CAMERA_ACCEPT = "image/*";
 const FILE_INPUTS = ["input-file", "input-photo", "input-camera"];
 const PREVIEW_SIGN_SECONDS = 300;
+// A signature older than this is renewed before its image is requested.
+const PREVIEW_RESIGN_MS = 240 * 1000;
+const PREVIEW_MARGIN = "800px 0px";
 const DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
 const EXT_FORMATS = {
   pdf: "application/pdf",
@@ -630,6 +633,7 @@ const STYLE = `
     flex-direction: column;
     width: 100%;
     max-height: 85vh;
+    max-height: 85dvh;
     min-width: 0;
     box-sizing: border-box;
     background: var(--card-background-color);
@@ -721,6 +725,13 @@ const STYLE = `
     overscroll-behavior: contain;
     min-height: 0;
   }
+  .page {
+    width: 100%;
+    aspect-ratio: 210 / 297;
+    flex: none;
+    background: var(--secondary-background-color);
+  }
+  .page.loaded { aspect-ratio: auto; background: none; }
   .preview-body img {
     display: block;
     width: 100%;
@@ -840,6 +851,9 @@ class HomePrintCard extends HTMLElement {
     this._historyEntries = [];
     this._historyToken = 0;
     this._previewToken = 0;
+    this._preview = null;
+    this._deletedIds = new Set();
+    this._savedOverflow = null;
     this._onDocumentClick = (ev) => this._closeMenuOutside(ev);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
@@ -850,9 +864,7 @@ class HomePrintCard extends HTMLElement {
     for (const option of this.shadowRoot.querySelectorAll("[data-option]")) {
       option.addEventListener("click", () => this._onPickOption(option.dataset.option));
     }
-    this._role("pick-menu").addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") this._closeMenu(true);
-    });
+    this._role("pick-menu").addEventListener("keydown", (ev) => this._onMenuKey(ev));
     this._role("print").addEventListener("click", () => this._onPrint());
     this._role("history-button").addEventListener("click", () => this._openHistory());
     this._role("history-close").addEventListener("click", () => this._closeHistory());
@@ -981,6 +993,12 @@ class HomePrintCard extends HTMLElement {
 
   _onFile(ev) {
     this._file = ev.target.files?.[0] ?? null;
+    // Only the input just used holds a file, so any picker fires "change"
+    // again for the same file later.
+    for (const name of FILE_INPUTS) {
+      const input = this._role(name);
+      if (input !== ev.target) input.value = "";
+    }
     if (!this._uploading && !this._job) this._message = null;
     this._update();
   }
@@ -995,7 +1013,7 @@ class HomePrintCard extends HTMLElement {
   _onPickButton() {
     // iOS already offers Photo Library / Take Photo / Choose File itself.
     if (isIOS(globalThis.navigator)) {
-      this._role("input-file").click();
+      this._openInput("input-file");
       return;
     }
     if (this._role("pick-menu").hidden) this._openMenu();
@@ -1004,13 +1022,40 @@ class HomePrintCard extends HTMLElement {
 
   _onPickOption(option) {
     this._closeMenu();
-    this._role(`input-${option}`)?.click();
+    this._openInput(`input-${option}`);
+  }
+
+  _openInput(name) {
+    const input = this._role(name);
+    if (!input) return;
+    // Cleared first, so picking the file already chosen still fires "change".
+    input.value = "";
+    input.click();
   }
 
   _openMenu() {
     this._role("pick-menu").hidden = false;
     this._role("pick").setAttribute("aria-expanded", "true");
     document.addEventListener("click", this._onDocumentClick, true);
+    this._menuItems()[0]?.focus();
+  }
+
+  _menuItems() {
+    return [...this.shadowRoot.querySelectorAll("[data-option]")];
+  }
+
+  _onMenuKey(ev) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      this._closeMenu(true);
+      return;
+    }
+    const step = { ArrowDown: 1, ArrowUp: -1 }[ev.key];
+    if (!step) return;
+    ev.preventDefault();
+    const items = this._menuItems();
+    const index = items.indexOf(this.shadowRoot.activeElement);
+    items[(index + step + items.length) % items.length].focus();
   }
 
   _closeMenu(focusButton = false) {
@@ -1048,16 +1093,31 @@ class HomePrintCard extends HTMLElement {
     });
   }
 
+  _anyDialogOpen() {
+    return this._role("history-dialog").open || this._role("preview-dialog").open;
+  }
+
   _showDialog(dialog) {
     if (dialog.open) return;
+    // The page behind stays put while a dialog is open.
+    if (this._savedOverflow === null) {
+      const root = document.documentElement;
+      this._savedOverflow = root.style.overflow;
+      root.style.overflow = "hidden";
+    }
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
   }
 
   _hideDialog(dialog) {
-    if (!dialog.open) return;
-    if (typeof dialog.close === "function") dialog.close();
-    else dialog.removeAttribute("open");
+    if (dialog.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+    if (this._savedOverflow !== null && !this._anyDialogOpen()) {
+      document.documentElement.style.overflow = this._savedOverflow;
+      this._savedOverflow = null;
+    }
   }
 
   _openHistory() {
@@ -1065,6 +1125,7 @@ class HomePrintCard extends HTMLElement {
     if (!printer) return;
     this._historyEntryId = printer.entry_id;
     this._historyEntries = [];
+    this._deletedIds = new Set();
     this._renderHistory({ key: "history_loading" });
     this._showDialog(this._role("history-dialog"));
     this._loadHistory();
@@ -1091,7 +1152,9 @@ class HomePrintCard extends HTMLElement {
       return;
     }
     if (token !== this._historyToken) return;
-    this._historyEntries = Array.isArray(result?.entries) ? result.entries : [];
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    // A reload sent before a delete finished may still list the record.
+    this._historyEntries = entries.filter((e) => !this._deletedIds.has(e.id));
     this._renderHistory();
   }
 
@@ -1114,8 +1177,13 @@ class HomePrintCard extends HTMLElement {
     }
     if (this._historyEntryId !== entryId) return;
     // {"deleted": false} means it was already gone; either way the row goes.
+    this._deletedIds.add(record.id);
+    const index = this._historyEntries.findIndex((e) => e.id === record.id);
     this._historyEntries = this._historyEntries.filter((e) => e.id !== record.id);
     this._renderHistory();
+    // Focus moves on to the row that took its place, else to the close button.
+    const rows = this._role("history-list").querySelectorAll('[data-role="history-delete"]');
+    (rows[Math.max(index, 0)] ?? this._role("history-close")).focus();
   }
 
   _renderHistory(status = null) {
@@ -1200,11 +1268,13 @@ class HomePrintCard extends HTMLElement {
     return String(this._hass?.locale?.language ?? this._hass?.language ?? "en");
   }
 
+  // Pages are signed just before they load: a signed path lives 300 s, and a
+  // request with an expired one is a 401 that HA counts as a failed login.
   _openPreview(record) {
     const entryId = this._historyEntryId;
     if (!entryId) return;
+    this._stopPreview();
     const lang = pickLanguage(this._hass);
-    const token = ++this._previewToken;
     this._role("preview-title").textContent = String(record.file_name ?? "");
     const body = this._role("preview-body");
     body.replaceChildren();
@@ -1216,58 +1286,95 @@ class HomePrintCard extends HTMLElement {
     }
     const isImage = String(record.mime ?? "").startsWith("image/");
     const known = Number(record.pages) > 0 ? Number(record.pages) : null;
-    const count = isImage ? 1 : known;
-    this._loadPreview({ token, body, lang, entryId, recordId: record.id, count });
+    const preview = {
+      token: this._previewToken,
+      body,
+      lang,
+      entryId,
+      recordId: record.id,
+      // null: unknown, pages are added one by one until one is missing.
+      count: isImage ? 1 : known,
+      observer: null,
+    };
+    this._preview = preview;
+    const Observer = globalThis.IntersectionObserver;
+    if (typeof Observer === "function") {
+      preview.observer = new Observer(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            preview.observer?.unobserve(entry.target);
+            this._loadPage(preview, entry.target);
+          }
+        },
+        { root: body, rootMargin: PREVIEW_MARGIN },
+      );
+    }
+    const first = preview.count ?? 1;
+    for (let page = 1; page <= first; page += 1) this._addPlaceholder(preview, page);
+    // Without an observer, pages load in turn, each after the one before.
+    if (!preview.observer) this._loadPage(preview, body.querySelector("[data-page]"));
   }
 
-  // `count` null: the page count is unknown, so pages are added one by one
-  // until one fails to load.
-  async _loadPreview({ token, body, lang, entryId, recordId, count }) {
-    const sign = (page) =>
-      this._hass.callWS({
-        type: "auth/sign_path",
-        path: previewPath(entryId, recordId, page),
-        expires: PREVIEW_SIGN_SECONDS,
-      });
-    const pages = count === null ? [1] : Array.from({ length: count }, (_v, i) => i + 1);
-    let signed;
+  _addPlaceholder(preview, page) {
+    const box = document.createElement("div");
+    box.className = "page";
+    box.dataset.page = String(page);
+    preview.body.append(box);
+    preview.observer?.observe(box);
+    return box;
+  }
+
+  async _signPage(preview, page) {
+    const result = await this._hass.callWS({
+      type: "auth/sign_path",
+      path: previewPath(preview.entryId, preview.recordId, page),
+      expires: PREVIEW_SIGN_SECONDS,
+    });
+    return String(result?.path ?? "");
+  }
+
+  async _loadPage(preview, box) {
+    if (!box || box.dataset.state) return;
+    box.dataset.state = "loading";
+    const live = () => preview.token === this._previewToken && box.isConnected;
+    const page = Number(box.dataset.page);
+    let path;
     try {
-      signed = await Promise.all(pages.map(sign));
+      // A signature that got old while waiting is never used.
+      let signedAt;
+      do {
+        signedAt = Date.now();
+        path = await this._signPage(preview, page);
+        if (!live()) return;
+      } while (Date.now() - signedAt > PREVIEW_RESIGN_MS);
     } catch (_err) {
-      if (token === this._previewToken) this._previewNote(body, t(lang, "preview_failed"));
+      if (!live()) return;
+      this._stopPreview();
+      this._previewNote(preview.body, t(preview.lang, "preview_failed"));
       return;
     }
-    if (token !== this._previewToken) return;
-    const addPage = (page, path) => {
-      const img = document.createElement("img");
-      img.loading = "lazy";
-      img.alt = t(lang, "preview_page", { n: page });
-      img.addEventListener("error", () => {
-        if (token !== this._previewToken) return;
-        // Past the last page of an unknown count: just stop.
-        if (count === null && page > 1) img.remove();
-        else img.replaceWith(this._previewNote(null, t(lang, "preview_failed")));
-      });
-      if (count === null) {
-        img.addEventListener(
-          "load",
-          async () => {
-            if (token !== this._previewToken) return;
-            let next;
-            try {
-              next = await sign(page + 1);
-            } catch (_err) {
-              return;
-            }
-            if (token === this._previewToken) addPage(page + 1, next?.path);
-          },
-          { once: true },
-        );
-      }
-      img.src = String(path ?? "");
-      body.append(img);
-    };
-    signed.forEach((result, i) => addPage(pages[i], result?.path));
+    const img = document.createElement("img");
+    img.alt = t(preview.lang, "preview_page", { n: page });
+    img.addEventListener("load", () => {
+      if (!live()) return;
+      box.classList.add("loaded");
+      const next = page + 1;
+      const more = preview.count === null || next <= preview.count;
+      if (!more) return;
+      let nextBox = preview.body.querySelector(`[data-page="${next}"]`);
+      if (!nextBox) nextBox = this._addPlaceholder(preview, next);
+      if (!preview.observer) this._loadPage(preview, nextBox);
+    });
+    img.addEventListener("error", () => {
+      if (!live()) return;
+      // The path was signed a moment ago, so a later page of an unknown count
+      // that fails is past the end of the document.
+      if (preview.count === null && page > 1) box.remove();
+      else box.replaceChildren(this._previewNote(null, t(preview.lang, "preview_failed")));
+    });
+    img.src = path;
+    box.append(img);
   }
 
   _previewNote(body, text) {
@@ -1278,8 +1385,14 @@ class HomePrintCard extends HTMLElement {
     return note;
   }
 
-  _closePreview() {
+  _stopPreview() {
     this._previewToken += 1;
+    this._preview?.observer?.disconnect();
+    this._preview = null;
+  }
+
+  _closePreview() {
+    this._stopPreview();
     this._hideDialog(this._role("preview-dialog"));
     this._role("preview-body").replaceChildren();
   }
@@ -1514,6 +1627,14 @@ class HomePrintCard extends HTMLElement {
     this._renderFile(lang, printer);
     this._role("print").disabled = !this._canSubmit(printer);
     this._role("history-button").hidden = !printer;
+    const pick = this._role("pick");
+    if (isIOS(globalThis.navigator)) {
+      pick.removeAttribute("aria-haspopup");
+      pick.removeAttribute("aria-expanded");
+    } else {
+      pick.setAttribute("aria-haspopup", "menu");
+      pick.setAttribute("aria-expanded", String(!this._role("pick-menu").hidden));
+    }
     // The open history belongs to one printer; another one closes it.
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
