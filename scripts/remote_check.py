@@ -41,17 +41,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import aiohttp
-from pyipp import IPP
-from pyipp.enums import IppOperation, IppStatus, IppTag
-from pyipp.exceptions import (
-    IPPConnectionError,
-    IPPConnectionUpgradeRequired,
-    IPPError,
-    IPPResponseError,
-)
-from pyipp.parser import parse as parse_ipp
-from pyipp.tags import ATTRIBUTE_TAG_MAP
+try:
+    import aiohttp
+    from pyipp import IPP
+    from pyipp.enums import IppOperation, IppStatus, IppTag
+    from pyipp.exceptions import (
+        IPPConnectionError,
+        IPPConnectionUpgradeRequired,
+        IPPError,
+        IPPResponseError,
+    )
+    from pyipp.parser import parse as parse_ipp
+    from pyipp.tags import ATTRIBUTE_TAG_MAP
+except ImportError as _missing:  # clean message instead of a traceback
+    sys.stderr.write(
+        f"❌ {_missing.name or _missing} yüklü değil. Sanal ortama kur:\n"
+        "  ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp "
+        "pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2\n"
+        "(Python 3.11 ya da üstü lazım; ayrıntı: docs/testing/plan-1-manual.md)\n"
+    )
+    raise SystemExit(1) from None
 
 # Same as custom_components/home_print/client.py: pyipp's serializer silently
 # drops attributes it has no tag for, so register the ones we send.
@@ -77,6 +86,7 @@ JOB_NAME_2 = "Home Print test 2/2 — PDF çift taraf"
 USER_NAME = "HomePrint"
 HIDDEN = "<gizlendi>"
 FORMAT_SKIP = "yazıcı bu formatı desteklemiyor — Plan 3"
+MAX_SHEETS = 2  # --print never uses more paper than this
 PDF_FMT = "application/pdf"
 JPEG_FMT = "image/jpeg"
 PWG_FMT = "image/pwg-raster"
@@ -119,6 +129,13 @@ class Convert:
 
     def options(self, **kwargs: Any) -> Any:
         return self.models.PrintOptions(**kwargs)
+
+    def safe_capabilities(self, attrs: dict[str, Any]) -> tuple[Any, str]:
+        """(caps, "") or (None, reason): odd attributes must not crash the run."""
+        try:
+            return self.capabilities(attrs), ""
+        except Exception as err:  # noqa: BLE001 - report, never crash
+            return None, f"yazıcı özellikleri okunamadı: {type(err).__name__}: {err}"
 
 
 def _purge_standalone() -> None:
@@ -320,20 +337,19 @@ def sample_pdf(pages: list[list[tuple[str, str, int]]]) -> bytes:
     return out.getvalue()
 
 
-def duplex_test_pdf() -> bytes:
-    """The two pages of print 2/2: front and back of one sheet."""
-    return sample_pdf(
+def duplex_test_pdf(*, front_only: bool = False) -> bytes:
+    """The pages of print 2/2: front and back of one sheet (or just front)."""
+    pages = [
         [
-            [
-                ("Home Print test", "Home Print test", 120),
-                ("2/2 — ön yüz", "2/2 - ON YUZ", 150),
-            ],
-            [
-                ("Home Print test", "Home Print test", 120),
-                ("2/2 — arka yüz", "2/2 - ARKA YUZ", 150),
-            ],
-        ]
-    )
+            ("Home Print test", "Home Print test", 120),
+            ("2/2 — ön yüz", "2/2 - ON YUZ", 150),
+        ],
+        [
+            ("Home Print test", "Home Print test", 120),
+            ("2/2 — arka yüz", "2/2 - ARKA YUZ", 150),
+        ],
+    ]
+    return sample_pdf(pages[:1] if front_only else pages)
 
 
 def conversion_test_pdf(count: int = 3) -> bytes:
@@ -859,12 +875,14 @@ def _cases(
         ("4o", "siyah-beyaz", {"print-color-mode": "monochrome"}, "", True),
         ("4p", "renkli", {"print-color-mode": "color"}, _color_skip(attrs), False),
     ]
-    caps = conv.capabilities(attrs) if conv is not None else None
+    caps, caps_error = (None, conv_reason)
+    if conv is not None:
+        caps, caps_error = conv.safe_capabilities(attrs)
     for num, label, job_attrs, skip, gray in converted:
         title = f"Validate-Job dönüştürülmüş PDF {label}"
         target = None
-        if conv is None:
-            skip = skip or conv_reason
+        if conv is None or caps is None:
+            skip = skip or caps_error
         else:
             target = conv.pipeline.choose_target(pdf, caps, gray=gray)
             if target is None:
@@ -1141,7 +1159,9 @@ async def check_conversion(
     title = "Dönüştürme denemesi (3 sayfa PDF, baskısız)"
     if conv is None:
         return Result("6", title, SKIP, conv_reason)
-    caps = conv.capabilities(attrs)
+    caps, caps_error = conv.safe_capabilities(attrs)
+    if caps is None:
+        return Result("6", title, FAIL, caps_error)
     duplex = LONG_EDGE in caps.sides
     options = conv.options(
         sides=LONG_EDGE if duplex else "one-sided", color_mode="monochrome"
@@ -1196,8 +1216,8 @@ class PlannedJob:
 def _plan_jpeg_job(attrs: dict[str, Any], conv: Convert | None) -> PlannedJob | Result:
     num, title = "7a", "Gerçek baskı 1/2: JPEG tek sayfa"
     data = sample_jpeg()
-    if conv is not None:
-        caps = conv.capabilities(attrs)
+    caps = conv.safe_capabilities(attrs)[0] if conv is not None else None
+    if conv is not None and caps is not None:
         try:
             prepared = conv.pipeline.prepare(data, JPEG_FMT, caps, conv.options())
         except Exception as err:  # noqa: BLE001 - NoConversionRoute etc.
@@ -1208,36 +1228,52 @@ def _plan_jpeg_job(attrs: dict[str, Any], conv: Convert | None) -> PlannedJob | 
         if formats and JPEG_FMT not in formats:
             return Result(num, title, SKIP, "yazıcı JPEG almıyor, dönüştürme de yok")
         fmt = JPEG_FMT
-    return PlannedJob(num, title, JOB_NAME_1, fmt, data, {}, sheets=1)
+    return PlannedJob(num, title, JOB_NAME_1, fmt, data, {"copies": 1}, sheets=1)
 
 
 def _plan_duplex_job(
-    attrs: dict[str, Any], conv: Convert | None, conv_reason: str
+    attrs: dict[str, Any],
+    conv: Convert | None,
+    conv_reason: str,
+    *,
+    front_only_reason: str = "",
 ) -> PlannedJob | Result:
+    """Print 2/2: both pages on one sheet, or only the front page.
+
+    Without long-edge duplex (not advertised, or the printer ignores
+    ``sides``) only page 1 is sent, so 2/2 never takes more than 1 sheet.
+    """
     num, title = "7b", "Gerçek baskı 2/2: PDF çift yüz, siyah-beyaz"
     if conv is None:
         return Result(num, title, SKIP, conv_reason)
-    caps = conv.capabilities(attrs)
-    duplex = LONG_EDGE in caps.sides
+    caps, caps_error = conv.safe_capabilities(attrs)
+    if caps is None:
+        return Result(num, title, SKIP, caps_error)
+    if not front_only_reason and LONG_EDGE not in caps.sides:
+        front_only_reason = "sides-supported içinde two-sided-long-edge yok"
+    duplex = not front_only_reason
     mono = "monochrome" in caps.color_modes
     options = conv.options(
         sides=LONG_EDGE if duplex else "one-sided",
         color_mode="monochrome" if mono else None,
     )
+    document = duplex_test_pdf() if duplex else duplex_test_pdf(front_only=True)
     try:
-        prepared = conv.pipeline.prepare(duplex_test_pdf(), PDF_FMT, caps, options)
+        prepared = conv.pipeline.prepare(document, PDF_FMT, caps, options)
     except Exception as err:  # noqa: BLE001 - NoConversionRoute etc.
         return Result(
             num, title, SKIP, f"PDF hazırlanamadı: {type(err).__name__}: {err}"
         )
-    job_attrs: dict[str, Any] = {}
+    job_attrs: dict[str, Any] = {"copies": 1}
     if duplex:
         job_attrs["sides"] = LONG_EDGE
     if mono:
         job_attrs["print-color-mode"] = "monochrome"
+    side_text = (
+        "çift yüz" if duplex else f"sadece ön yüz, 1 kağıt ({front_only_reason})"
+    )
     title = (
-        f"Gerçek baskı 2/2: PDF → {prepared.document_format}, "
-        f"{'çift yüz' if duplex else 'tek yüz (çift yüz yok)'}"
+        f"Gerçek baskı 2/2: PDF → {prepared.document_format}, {side_text}"
         f"{', siyah-beyaz' if mono else ''}"
     )
     return PlannedJob(
@@ -1247,8 +1283,8 @@ def _plan_duplex_job(
         prepared.document_format,
         prepared.data,
         job_attrs,
-        sheets=1 if duplex else 2,
-        expect_impressions=2,
+        sheets=1,
+        expect_impressions=2 if duplex else 1,
     )
 
 
@@ -1293,8 +1329,8 @@ async def _printer_not_ready(ipp: IPP) -> str:
         await asyncio.sleep(POLL_INTERVAL)
 
 
-async def _validate_planned(ipp: IPP, job: PlannedJob) -> tuple[str, str]:
-    """(status, detail) of Validate-Job with exactly the job's attributes."""
+async def _validate_planned(ipp: IPP, job: PlannedJob) -> tuple[str, str, set[str]]:
+    """(status, detail, unsupported names) of Validate-Job for the job."""
     try:
         response = await ipp_call(
             ipp,
@@ -1302,8 +1338,12 @@ async def _validate_planned(ipp: IPP, job: PlannedJob) -> tuple[str, str]:
             build_validate_message(job.document_format, job.job_attrs, job.job_name),
         )
     except IppCallError as err:
-        return FAIL, str(err)
-    return _validate_outcome(response)
+        return FAIL, str(err), set()
+    status, detail = _validate_outcome(response)
+    unsupported = {
+        k for group in response.get("unsupported-attributes") or [] for k in group
+    }
+    return status, detail, unsupported
 
 
 async def _send_and_wait(
@@ -1396,13 +1436,13 @@ async def run_print_tests(
     conv_reason: str,
     report: dict[str, Any],
 ) -> None:
-    """All real prints in one go: at most 2 jobs, at most 2 sheets."""
+    """All real prints in one go: at most 2 jobs, at most MAX_SHEETS sheets."""
     planned = [
         _plan_jpeg_job(attrs, conv),
         _plan_duplex_job(attrs, conv, conv_reason),
     ]
     jobs = [j for j in planned if isinstance(j, PlannedJob)]
-    sheets = sum(j.sheets for j in jobs)
+    sheets = min(sum(j.sheets for j in jobs), MAX_SHEETS)
     print(
         f"⚠️  DİKKAT: --print verildi. {len(jobs)} iş, en fazla {sheets} kağıt "
         "gerçekten basılacak:",
@@ -1416,6 +1456,7 @@ async def run_print_tests(
         )
     ipp = make_ipp(args, session, IPP_TIMEOUT)
     ops = _as_list(attrs.get("operations-supported"))
+    used = 0
     for job in planned:
         if isinstance(job, Result):
             emit(report, job)
@@ -1428,7 +1469,20 @@ async def run_print_tests(
         if ops and IppOperation.VALIDATE_JOB not in ops:
             note = " (yazıcı Validate-Job bildirmiyor, kontrolsüz gönderildi)"
         else:
-            status, detail = await _validate_planned(ipp, job)
+            status, detail, unsupported = await _validate_planned(ipp, job)
+            if status == PASS and "sides" in unsupported and "sides" in job.job_attrs:
+                # successful-ok-ignored: duplex would silently become 2 sheets
+                replanned = _plan_duplex_job(
+                    attrs,
+                    conv,
+                    conv_reason,
+                    front_only_reason="yazıcı sides'ı yok saydı",
+                )
+                if isinstance(replanned, Result):
+                    emit(report, replanned)
+                    continue
+                job = replanned
+                status, detail, unsupported = await _validate_planned(ipp, job)
             if status == FAIL:
                 emit(
                     report,
@@ -1442,6 +1496,18 @@ async def run_print_tests(
                 continue
             if status == SKIP:
                 note = f" (Validate-Job uygulanmıyor: {detail})"
+        if used + job.sheets > MAX_SHEETS:
+            emit(
+                report,
+                Result(
+                    job.num,
+                    job.title,
+                    SKIP,
+                    f"gönderilmedi: en fazla {MAX_SHEETS} kağıt sınırı aşılırdı",
+                ),
+            )
+            continue
+        used += job.sheets
         result = await _send_and_wait(args, session, job)
         result.detail += note
         emit(report, result)

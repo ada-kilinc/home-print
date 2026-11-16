@@ -8,25 +8,26 @@ Evde değilsin, çıkan kağıdı göremiyorsun. O yüzden bu test sadece yazıc
 
 ## 1. Kurulum (bir kere)
 
-- Python 3.10 ya da üstü lazım. Kontrol: `python3 --version`.
+- Python 3.11 ya da üstü lazım (numpy 2.3.2 3.10'a kurulmuyor). Mac'teki Homebrew Python'u (`/opt/homebrew/bin/python3`, 3.14) yeter. Kontrol: `/opt/homebrew/bin/python3 --version`.
+- O dosya yoksa Homebrew'la (`brew install python`) ya da python.org'dan 3.11+ kur.
 - Repo'yu Mac'e al. Script tek başına yetmez, dönüştürme kodunu repo'dan okuyor (`scripts/` ile `custom_components/` yan yana durmalı).
   - Şimdilik: Claude sohbette repo'nun zip'ini gönderecek. İndir, `~/home-print` klasörüne aç:
 
 ```bash
 mkdir -p ~/home-print && unzip ~/Downloads/home-print.zip -d ~/home-print
-ls ~/home-print/scripts/remote_check.py   # bu dosya görünmeli
 ```
 
-  - Zip içinde tek bir üst klasör varsa (`home-print-plan3/` gibi) `ls` ile bak, aşağıdaki komutlarda yolu ona göre yaz.
+  - Zip'te dosyalar doğrudan en üstte, ayrı bir klasör yok: `~/home-print/scripts/remote_check.py` oluşmalı.
   - GitHub deposu açılınca: `git clone https://github.com/adakilinc/home-print.git ~/home-print`, sonraki güncellemeler için `git pull`.
 - Ayrı bir sanal ortam kur. Paket sürümleri integration'ın manifest'iyle aynı:
 
 ```bash
-python3 -m venv ~/homeprint-venv && ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2
+/opt/homebrew/bin/python3 -m venv ~/homeprint-venv && ~/homeprint-venv/bin/pip install pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2
 ```
 
 - Komutları repo klasöründe çalıştır: `cd ~/home-print`.
-- Paketlerden biri eksikse script çökmez. 4m-4p, 6 ve 7b `⏭ ATLANDI` olur, yanında hangi paketin eksik olduğu yazar.
+- `pyipp` ya da `aiohttp` eksikse script hiç başlamaz, hangi paketin eksik olduğunu ve pip satırını yazıp çıkar.
+- Dönüştürme paketlerinden (`pypdfium2`, `Pillow`, `numpy`) biri eksikse script yine çalışır. 4m-4p, 6 ve 7b `⏭ ATLANDI` olur, yanında eksik paketin adı yazar.
 
 ## 2. Tailscale'i aç
 
@@ -112,11 +113,12 @@ cd ~/home-print
 - İşler sırayla gider:
   - 7a: JPEG tek sayfa, iş adı "Home Print test 1/2 — JPEG".
   - 7b: 2 sayfalık örnek PDF, dönüştürülmüş (DeskJet'te `image/pwg-raster`), çift yüz (uzun kenar), siyah-beyaz, tek kağıt. İş adı "Home Print test 2/2 — PDF çift taraf".
+  - İki işte de `copies: 1` açıkça gönderilir.
 - Her işten önce yazıcının boşta olduğuna ve iş kabul ettiğine bakılır. Meşgulse en fazla 60 sn beklenir. Durmuşsa, iş kabul etmiyorsa ya da Validate-Job o işin ayarlarını reddederse iş hiç gönderilmez, `⏭ ATLANDI` olur.
 - Script her 3 sn'de işin durumunu sorar, iş başına en fazla 180 sn bekler.
 - Sadece yazıcı `completed` derse GEÇTİ. `aborted`, `canceled` ya da süre dolarsa KALDI.
 - 7b'de `impressions: 2` görmen lazım: kağıdın iki yüzüne de basıldı demek. Farklıysa satırda `FARKLI` yazar.
-- Çift yüz desteklenmiyorsa 7b tek yüz basar ve 2 kağıt harcar. Uyarı satırındaki kağıt sayısı buna göre yazılır.
+- Toplam asla 2 kağıdı geçmez. Yazıcı çift yüz bildirmiyorsa ya da Validate-Job `sides`'ı yok saydığını söylerse 7b sadece ön yüzü basar (1 kağıt). Satırda `sadece ön yüz, 1 kağıt` ve nedeni yazar, beklenen impressions 1 olur.
 - KALDI olursa komutu hemen tekrar çalıştırma. İş yine de basılmış olabilir, önce çıktıdaki `job-state-reasons`'a bak.
 - Evde biri varsa kağıtlara bakabilir ama gerekmiyor: her sayfada büyük harfle test numarası ve üstte "↑ ÜST" oku var.
 
@@ -140,11 +142,14 @@ Telefondan ya da panelden `POST /api/home_print/upload/<entry_id>` isteği atın
 | 403 | `admin_required` | Yazıcı "Sadece yöneticiler yazdırabilsin" modunda, token sahibi yönetici değil. |
 | 404 | `entry_not_found` | `entry_id` yanlış ya da yazıcı henüz yüklenmedi. |
 | 413 | `file_too_large` | Dosya sınırı aştı (varsayılan 25 MB, seçeneklerden değişir). |
-| 422 | `format_not_supported` | Yazıcı bu dosya biçimini kabul etmiyor. |
+| 400 | `invalid_document` | Dosya bozuk, şifreli ya da boş; ya da seçilen sayfa aralığı geçersiz. |
+| 400 | `too_many_pages` | Dönüştürülecek sayfa sayısı sınırı aşıyor. |
+| 422 | `format_not_supported` | Yazıcı ne bu biçimi ne de dönüştürülebilecek bir biçimi (PDF, PWG raster, URF, JPEG) alıyor. PDF almayan yazıcıya PDF artık dönüştürülüp gönderiliyor, bu hata o durumda çıkmaz. |
 | 422 | `option_not_supported` | Yazıcı istediğin ayarı (örnek çift yüz) desteklemiyor. |
 | 422 | `printer_rejected` | Yazıcı işi reddetti, mesajda durum kodu var. |
 | 502 | `printer_unavailable` | Yazıcıya ulaşılamıyor (kapalı, uykuda ya da ağda değil). |
 | 502 | `print_failed` | Yazıcıda beklenmedik hata. HA günlüğüne bak. |
+| 504 | `print_timeout` | Yazıcı işe zamanında cevap vermedi. İş yine de basılmış olabilir. |
 
 Script'in 5d ve 5e kontrolleri bu tablonun 401 ve 400 satırlarını kullanıyor.
 

@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,7 @@ DESKJET = json.loads(
     (Path(__file__).parent / "fixtures" / "printer_hp_deskjet_4670.json").read_text()
 )
 _PARSED = b"<parsed printer attributes>"
+LONG_EDGE = "two-sided-long-edge"
 
 
 class FakeIPP:
@@ -107,6 +109,7 @@ class FakeIPP:
         self.parsed = False  # True: hand ``printer`` to the script as parsed
         self.validate_status = validate_status
         self.by_format = by_format or {}
+        self.unsupported_by_format: dict[str, dict[str, Any]] = {}
         self.next_job_id = 7
 
     def use_deskjet(self) -> None:
@@ -124,7 +127,10 @@ class FakeIPP:
             return ipp_response(0, printer=self.printer)
         if operation == IppOperation.VALIDATE_JOB:
             fmt = message["operation-attributes-tag"]["document-format"]
-            return ipp_response(self.by_format.get(fmt, self.validate_status))
+            return ipp_response(
+                self.by_format.get(fmt, self.validate_status),
+                unsupported=self.unsupported_by_format.get(fmt),
+            )
         if operation == IppOperation.PRINT_JOB:
             job_id = self.next_job_id
             self.next_job_id += 1
@@ -260,6 +266,8 @@ async def test_deskjet_print_sends_jpeg_then_converted_duplex_pdf(fake_ipp, caps
     attrs2 = second["job-attributes-tag"]
     assert attrs2["sides"] == "two-sided-long-edge"
     assert attrs2["print-color-mode"] == "monochrome"
+    assert first["job-attributes-tag"]["copies"] == 1
+    assert attrs2["copies"] == 1
     assert second["data"][:4] == b"RaS2"
     assert "page-ranges" not in attrs2
     # validated with the same attributes right before sending
@@ -557,3 +565,74 @@ def test_load_convert_missing_dependency_names_it():
         assert rc.STANDALONE not in sys.modules  # half-loaded package removed
     assert conv is None
     assert "pypdfium2 yüklü değil" in reason
+
+
+def _second_job_pages(fake_ipp) -> int:
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert len(jobs) == 2
+    second = jobs[1]
+    assert "sides" not in second["job-attributes-tag"]
+    assert second["operation-attributes-tag"]["document-format"] == "image/pwg-raster"
+    return rc.count_raster_pages(second["data"], "image/pwg-raster")
+
+
+async def test_no_duplex_advertised_prints_front_page_only(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    fake_ipp.printer["sides-supported"] = ["one-sided"]
+    code = await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    out = capsys.readouterr().out
+    assert _second_job_pages(fake_ipp) == 1  # 1 sheet, never 2
+    assert "en fazla 2 kağıt" in out
+    assert "sadece ön yüz" in _by_num(out)["7b"]
+    assert code == 0
+
+
+async def test_sides_ignored_by_validate_prints_front_page_only(fake_ipp, capsys):
+    fake_ipp.use_deskjet()
+    fake_ipp.by_format = {"image/pwg-raster": 0x0001}
+    fake_ipp.unsupported_by_format = {"image/pwg-raster": {"sides": LONG_EDGE}}
+    await rc.run(rc.parse_args(["--printer", "h", "--print"]))
+    out = capsys.readouterr().out
+    assert _second_job_pages(fake_ipp) == 1
+    line = _by_num(out)["7b"]
+    assert line.startswith("✅ GEÇTİ")
+    assert "sadece ön yüz" in line
+
+
+async def test_capabilities_error_does_not_crash_run(fake_ipp, tmp_path, capsys):
+    fake_ipp.use_deskjet()
+    out_json = tmp_path / "out.json"
+
+    def broken(self, attrs):
+        raise ValueError("garip özellik")
+
+    with patch.object(rc.Convert, "capabilities", broken):
+        code = await rc.run(
+            rc.parse_args(["--printer", "h", "--print", "--json", str(out_json)])
+        )
+    out = capsys.readouterr().out
+    assert "Özet" in out
+    results = {r["num"]: r for r in json.loads(out_json.read_text())["results"]}
+    assert results["6"]["status"] == rc.FAIL
+    assert "garip özellik" in results["6"]["detail"]
+    assert results["4m"]["status"] == rc.SKIP
+    assert results["7b"]["status"] == rc.SKIP
+    jobs = fake_ipp.sent(IppOperation.PRINT_JOB)
+    assert [j["operation-attributes-tag"]["document-format"] for j in jobs] == [
+        "image/jpeg"
+    ]
+    assert code == 1
+
+
+def test_missing_pyipp_gives_clean_turkish_error():
+    code = (
+        "import runpy, sys; sys.modules['pyipp'] = None; "
+        f"sys.argv = ['remote_check.py', '--help']; runpy.run_path({str(SCRIPT)!r})"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+    assert "pyipp yüklü değil" in proc.stderr
+    assert "pip install" in proc.stderr
