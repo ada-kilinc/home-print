@@ -54,6 +54,7 @@ If your printer has a scanner, Home Print finds it on the printer's own address 
   - **Scanner address:** leave empty to find it automatically, or enter an address like `http://192.168.1.20/eSCL` if the scanner isn't found (`http://` and `/eSCL` are added when left out). If no scanner answers at start-up (printer asleep), Home Print looks again after 1, 5 and 30 minutes, then hourly.
   - **Keep scans (days):** default 30, 0 keeps them forever.
   - **Max space for scans (MB):** default 2000, 0 means no limit. When it's exceeded, the oldest scans are deleted.
+- **HTTPS certificate:** if the printer was added over plain IPP, the scanner's https address (HP printers use a self-signed certificate) is used without checking its certificate; for printers added over IPPS the **verify SSL** setting applies.
 - **Sensor:** `Scanner status` on the printer's device.
 - **Action** for automations:
 
@@ -124,6 +125,7 @@ Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bul
   - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa `http://192.168.1.20/eSCL` gibi elle yaz (`http://` ve `/eSCL` yazmazsan eklenir). Açılışta tarayıcı yanıt vermezse (yazıcı uykudaysa) Home Print 1, 5 ve 30 dakika sonra, sonra da saatte bir yeniden bakar.
   - **Taramaları sakla (gün):** varsayılan 30, 0 hiç silme demek.
   - **Taramalar için en fazla alan (MB):** varsayılan 2000, 0 sınırsız demek. Aşılırsa en eski taramalar silinir.
+- **HTTPS sertifikası:** Yazıcı düz IPP ile eklendiyse tarayıcının https adresi (HP yazıcılar kendinden imzalı sertifika kullanır) sertifikası kontrol edilmeden kullanılır. IPPS ile eklenen yazıcılarda **SSL doğrula** ayarı geçerlidir.
 - **Sensör:** Yazıcı cihazında `Tarayıcı durumu`.
 - **Servis** (otomasyonlar için):
 

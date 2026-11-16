@@ -50,6 +50,16 @@ class ScannerRuntime:
     task: asyncio.Task[Any] | None = None
 
 
+def scanner_verify_ssl(entry: ConfigEntry) -> bool:
+    """Whether to verify the scanner's https certificate.
+
+    HP printers answer eSCL over https (or redirect there) with a self-signed
+    certificate. An entry that prints over plain IPP never chose https, so its
+    scanner's certificate is not verified; an IPPS entry keeps its setting.
+    """
+    return bool(entry.data[CONF_SSL]) and bool(entry.data[CONF_VERIFY_SSL])
+
+
 async def _async_detect(
     entry: ConfigEntry, session: aiohttp.ClientSession, warn: bool
 ) -> tuple[EsclClient, ScannerCaps] | None:
@@ -58,7 +68,7 @@ async def _async_detect(
     A printer without a scanner is normal and silent. Only an address the
     user typed in is worth a warning (``warn``) when it doesn't answer.
     """
-    verify_ssl = bool(entry.data[CONF_VERIFY_SSL])
+    verify_ssl = scanner_verify_ssl(entry)
     manual = str(entry.options.get(CONF_SCANNER_URL) or "").strip()
     try:
         if manual:

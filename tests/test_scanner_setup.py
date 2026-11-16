@@ -5,6 +5,7 @@ import logging
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import entity_registry as er
@@ -12,7 +13,12 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.home_print.client import CannotConnect
-from custom_components.home_print.const import CONF_SCANNER_URL, DOMAIN
+from custom_components.home_print.const import (
+    CONF_SCANNER_URL,
+    CONF_SSL,
+    CONF_VERIFY_SSL,
+    DOMAIN,
+)
 from custom_components.home_print.escl.errors import ScannerUnavailable
 from custom_components.home_print.escl.models import ScannerStatus
 from custom_components.home_print.scanner import DETECT_TIMEOUT
@@ -43,7 +49,8 @@ async def test_setup_finds_scanner_on_printer_host(
     assert scanner.active is None
     assert entry.runtime_data.coordinator.scanner is scanner
     args = mock_find_scanner.call_args.args
-    assert args[1:] == ("192.168.1.50", False, True)
+    # Plain-IPP entry: the scanner's (self-signed) https cert isn't verified.
+    assert args[1:] == ("192.168.1.50", False, False)
     assert mock_escl.call_args.args[0] == URL
     assert hass.states.get(SCANNER_ENTITY).state == "idle"
     assert er.async_get(hass).async_get_entity_id(
@@ -260,3 +267,41 @@ async def test_printer_failure_drops_scanner_status(
     mock_client.get_printer.side_effect = CannotConnect("off")
     await entry.runtime_data.coordinator.async_refresh()
     assert scanner.status is None
+
+
+@pytest.mark.parametrize(
+    ("ssl", "verify", "expected"),
+    [
+        (False, True, False),
+        (False, False, False),
+        (True, True, True),
+        (True, False, False),
+    ],
+)
+async def test_scanner_cert_verification_follows_entry(
+    hass, mock_client, mock_escl, mock_find_scanner, ssl, verify, expected
+):
+    mock_find_scanner.return_value = (URL, CAPS)
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_SSL: ssl, CONF_VERIFY_SSL: verify}
+    )
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_find_scanner.call_args.args[3] is expected
+    assert mock_escl.call_args.args[2] is expected
+
+
+@pytest.mark.parametrize(("ssl", "expected"), [(False, False), (True, True)])
+async def test_manual_https_scanner_url_cert_rule(
+    hass, mock_client, mock_escl, ssl, expected
+):
+    entry = make_entry(**{CONF_SCANNER_URL: "https://192.168.1.50/eSCL"})
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_SSL: ssl, CONF_VERIFY_SSL: True}
+    )
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_escl.call_args.args[2] is expected
