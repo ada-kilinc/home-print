@@ -2195,6 +2195,151 @@ describe("scan", () => {
     expect(row.querySelector('[data-role="scan-row-delete"]')).toBe(null);
   });
 
+  it("disconnect stops scan polling and resumes on reconnect", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStates: [scanState({ pages: 0 })] });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    card.remove();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+    document.body.appendChild(card);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(1);
+  });
+
+  it("disconnect disarms a pending delete", async () => {
+    const { card } = await scanToDone();
+    const button = role(card, "scan-delete");
+    button.click();
+    expect(button.textContent.trim()).toBe("Emin misin?");
+    card.remove();
+    expect(button.textContent.trim()).toBe("Sil");
+  });
+
+  it("printer switch resets the panel", async () => {
+    const other = scanPrinter({}, { entry_id: "other", title: "Other" });
+    const hass = makeHass({ printers: [scanPrinter(), other], scanStates: [scanState()] });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    expect(role(card, "scan-start").disabled).toBe(true);
+    setInput(card, "picker", "other");
+    await flush();
+    expect(visible(card, "scan-panel")).toBe(false);
+    expect(role(card, "scan-toggle").getAttribute("aria-expanded")).toBe("false");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+    await openPanel(card);
+    expect(role(card, "scan-start").disabled).toBe(false);
+    expect(text(card, "scan-message")).toBe("");
+  });
+
+  it("fatal poll error stops polling", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStates: [{ code: "not_found" }] });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card, "scan-message")).toContain("Taramanın durumu alınamıyor");
+    expect(role(card, "scan-message").classList.contains("error")).toBe(true);
+    expect(role(card, "scan-start").disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(1);
+  });
+
+  it("start reply without scan_id is handled", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStart: scanState({ scan_id: null }) });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    expect(text(card, "scan-message")).toBe("Tarama yapılamadı. Birazdan tekrar dene.");
+    expect(role(card, "scan-start").disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
+  });
+
+  it("done without record points to the Scans list", async () => {
+    const hass = makeHass({
+      printers: [scanPrinter()],
+      scanStates: [scanState({ state: "done", pages: 1 })],
+    });
+    const card = await mount(hass);
+    await openPanel(card);
+    role(card, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card, "scan-message")).toBe("Tarama kaydedildi. Geçmiş > Taramalar'da bulabilirsin.");
+    expect(text(card, "scan-message")).not.toContain("✓");
+    expect(visible(card, "scan-result")).toBe(false);
+  });
+
+  it("a resumed scan opens its result on the last page", async () => {
+    const record = scanRecord({ pages: 3 });
+    const hass = makeHass({
+      printers: [scanPrinter({ active_scan_id: "s9" })],
+      scanStates: [scanState({ scan_id: "s9", state: "done", pages: 3, record })],
+    });
+    const card = await mount(hass);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(card, "scan-page-label")).toBe("Sayfa 3/3");
+  });
+
+  it("an older rename reply doesn't undo a newer one", async () => {
+    const { hass, card } = await scanToDone();
+    const replies = [];
+    const original = hass.callWS.getMockImplementation();
+    hass.callWS.mockImplementation((msg) => {
+      if (msg.type !== "home_print/scans/rename") return original(msg);
+      hass.calls.push(msg);
+      return new Promise((resolve) => replies.push({ msg, resolve }));
+    });
+    const input = role(card, "scan-name");
+    const enter = () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    input.value = "birinci";
+    enter();
+    input.value = "ikinci";
+    enter();
+    expect(replies).toHaveLength(2);
+    // The newer one answers first, then the older one.
+    replies[1].resolve({ entry: scanRecord({ name: "ikinci" }) });
+    await flush();
+    replies[0].resolve({ entry: scanRecord({ name: "birinci" }) });
+    await flush();
+    expect(input.value).toBe("ikinci");
+    input.dispatchEvent(new Event("blur"));
+    await flush();
+    expect(replies).toHaveLength(2);
+  });
+
+  it("history tabs are linked to their panel", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    role(card, "history-button").click();
+    await flush();
+    const panel = role(card, "history-panel");
+    expect(panel.getAttribute("role")).toBe("tabpanel");
+    for (const name of ["tab-prints", "tab-scans"]) {
+      expect(role(card, name).getAttribute("aria-controls")).toBe(panel.id);
+    }
+    expect(panel.getAttribute("aria-labelledby")).toBe(role(card, "tab-prints").id);
+    role(card, "tab-scans").click();
+    await flush();
+    expect(role(card, "tab-scans").getAttribute("aria-selected")).toBe("true");
+    expect(role(card, "tab-prints").getAttribute("aria-selected")).toBe("false");
+    expect(panel.getAttribute("aria-labelledby")).toBe(role(card, "tab-scans").id);
+
+    document.body.innerHTML = "";
+    const plain = await mount(makeHass());
+    role(plain, "history-button").click();
+    await flush();
+    expect(role(plain, "history-panel").hasAttribute("role")).toBe(false);
+  });
+
   it("has English scan texts", async () => {
     const card = await mount(makeHass({ language: "en", printers: [scanPrinter()] }));
     expect(role(card, "scan-toggle").textContent.trim()).toBe("Scan");

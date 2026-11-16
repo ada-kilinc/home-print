@@ -226,6 +226,7 @@ const STRINGS = {
     scan_scanning_page: "Taranıyor… ({n}. sayfa)",
     scan_saving: "Kaydediliyor…",
     scan_done: "Tarama hazır ✓",
+    scan_saved: "Tarama kaydedildi. Geçmiş > Taramalar'da bulabilirsin.",
     scan_deleted: "Tarama silindi.",
     scan_lost: "Taramanın durumu alınamıyor. Taramalar listesine bak.",
     scan_timeout: "Tarama çok uzun sürdü, yazıcıya bak.",
@@ -356,6 +357,7 @@ const STRINGS = {
     scan_scanning_page: "Scanning… (page {n})",
     scan_saving: "Saving…",
     scan_done: "Scan ready ✓",
+    scan_saved: "Scan saved. You'll find it under History > Scans.",
     scan_deleted: "Scan deleted.",
     scan_lost: "Can't get the scan's status. Check the Scans list.",
     scan_timeout: "The scan took too long, check the printer.",
@@ -952,6 +954,7 @@ const STYLE = `
     color: var(--error-color);
     white-space: nowrap;
   }
+  .history-panel { display: flex; flex-direction: column; min-height: 0; }
   .tabs { display: flex; border-bottom: 1px solid var(--divider-color); }
   .tab {
     flex: 1 1 0;
@@ -1085,11 +1088,13 @@ const TEMPLATE = `
         </button>
       </div>
       <div class="tabs" role="tablist" data-role="history-tabs" hidden>
-        <button type="button" role="tab" class="tab" data-role="tab-prints" data-tab="prints" data-t="tab_prints"></button>
-        <button type="button" role="tab" class="tab" data-role="tab-scans" data-tab="scans" data-t="tab_scans"></button>
+        <button type="button" role="tab" class="tab" id="tab-prints" data-role="tab-prints" data-tab="prints" data-t="tab_prints" aria-controls="history-panel" aria-selected="true"></button>
+        <button type="button" role="tab" class="tab" id="tab-scans" data-role="tab-scans" data-tab="scans" data-t="tab_scans" aria-controls="history-panel" aria-selected="false"></button>
       </div>
-      <div class="sheet-status" data-role="history-status" role="status"></div>
-      <ul class="history-list" data-role="history-list"></ul>
+      <div class="history-panel" id="history-panel" data-role="history-panel">
+        <div class="sheet-status" data-role="history-status" role="status"></div>
+        <ul class="history-list" data-role="history-list"></ul>
+      </div>
     </div>
   </dialog>
   <dialog data-role="preview-dialog" aria-labelledby="preview-title">
@@ -1234,6 +1239,7 @@ class HomePrintCard extends HTMLElement {
     clearInterval(this._refreshTimer);
     clearTimeout(this._pollTimer);
     clearTimeout(this._scanTimer);
+    this._disarmAll();
     this._refreshTimer = null;
     this._pollTimer = null;
     this._scanTimer = null;
@@ -1453,7 +1459,12 @@ class HomePrintCard extends HTMLElement {
     if (!printer) return;
     this._historyEntryId = printer.entry_id;
     this._historyTab = "prints";
-    this._role("history-tabs").hidden = !printer.scanner;
+    // Without a scanner there are no tabs, so the list is no tab panel.
+    const tabbed = Boolean(printer.scanner);
+    this._role("history-tabs").hidden = !tabbed;
+    const panel = this._role("history-panel");
+    if (tabbed) panel.setAttribute("role", "tabpanel");
+    else panel.removeAttribute("role");
     this._historyEntries = [];
     this._deletedIds = new Set();
     this._renderHistory({ key: "history_loading" });
@@ -1557,6 +1568,7 @@ class HomePrintCard extends HTMLElement {
       const selected = tab.dataset.tab === this._historyTab;
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
+      if (selected) this._role("history-panel").setAttribute("aria-labelledby", tab.id);
     }
     const empty = scans ? "scans_empty" : "history_empty";
     const shown = status ?? (entries.length === 0 ? { key: empty } : null);
@@ -2116,7 +2128,15 @@ class HomePrintCard extends HTMLElement {
     const id = printer.scanner?.active_scan_id;
     if (!id || this._scan || this._scanSeen.has(id) || printer.can_print === false) return;
     this._scanSeen.add(id);
-    this._scan = { entryId: printer.entry_id, scanId: id, started: Date.now(), appendPages: null };
+    // Whether it adds pages to an earlier PDF is unknown here, so its result
+    // opens on the last page: the newest one either way.
+    this._scan = {
+      entryId: printer.entry_id,
+      scanId: id,
+      started: Date.now(),
+      appendPages: null,
+      resumed: true,
+    };
     this._clearScanResult();
     this._scanOpen = true;
     this._scanMessage = { text: t(pickLanguage(this._hass), "scan_scanning"), kind: "info" };
@@ -2169,10 +2189,14 @@ class HomePrintCard extends HTMLElement {
         const record = state.record;
         if (record) {
           // After an added page, show the first new one.
-          const page = scan.appendPages === null ? 1 : scan.appendPages + 1;
+          let page = 1;
+          if (scan.appendPages !== null) page = scan.appendPages + 1;
+          else if (scan.resumed) page = Number(record.pages) || 1;
           this._showScanResult(scan.entryId, record, page);
+          this._endScan(t(lang, "scan_done"), "success");
+        } else {
+          this._endScan(t(lang, "scan_saved"), "info");
         }
-        this._endScan(t(lang, "scan_done"), "success");
         this._reloadScans(scan.entryId);
         return;
       }
@@ -2224,6 +2248,7 @@ class HomePrintCard extends HTMLElement {
       record,
       page: Math.min(Math.max(1, page), total),
       pendingName: null,
+      renameSeq: 0,
       deleting: false,
     };
     this._role("scan-name").value = String(record.name ?? "");
@@ -2301,6 +2326,8 @@ class HomePrintCard extends HTMLElement {
     // Enter and the blur after it would otherwise send the same name twice.
     if (name === (result.pendingName ?? result.record.name)) return;
     result.pendingName = name;
+    // Only the newest request settles the field; an older reply is stale.
+    const seq = ++result.renameSeq;
     let entry;
     try {
       entry = (
@@ -2313,6 +2340,7 @@ class HomePrintCard extends HTMLElement {
       )?.entry;
     } catch (err) {
       if (this._scanResult !== result) return;
+      if (seq !== result.renameSeq) return;
       result.pendingName = null;
       input.value = String(result.record.name ?? "");
       const key = err?.code === "unauthorized" ? "edit_not_allowed" : "rename_failed";
@@ -2320,7 +2348,7 @@ class HomePrintCard extends HTMLElement {
       this._update();
       return;
     }
-    if (this._scanResult !== result) return;
+    if (this._scanResult !== result || seq !== result.renameSeq) return;
     result.pendingName = null;
     if (!entry) {
       // Deleted elsewhere meanwhile.
