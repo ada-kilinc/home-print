@@ -333,3 +333,18 @@ def test_square_content_is_not_rotated():
     assert not _needs_rotation(500, 500, 800, 600)
     assert not _needs_rotation(500, 500, 600, 800)
     assert _needs_rotation(600, 500, 600, 800)
+
+
+def test_pages_record_whether_content_was_rotated():
+    """Encoders need this for duplex back sides (Ruling O)."""
+    portrait = samples.page_image(*samples.A4_PT)
+    landscape = samples.page_image(*reversed(samples.A4_PT))
+    pdf = samples.pdf_from_images([portrait, landscape])
+    first, second = iter_pages(pdf, PDF, A4_100, None)
+    assert first.info["home_print_rotated"] is False
+    assert second.info["home_print_rotated"] is True
+
+    for size, rotated in (((600, 400), True), ((400, 600), False)):
+        png = samples.image_bytes(samples.page_image(*size), "PNG")
+        (page,) = iter_pages(png, "image/png", A4_100, None)
+        assert page.info["home_print_rotated"] is rotated

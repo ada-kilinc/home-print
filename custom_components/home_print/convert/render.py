@@ -191,8 +191,10 @@ def _pdf_pages(
     try:
         for number in selected:
             with _PDFIUM_LOCK:
-                content = _render_pdf_page(pdf, number - 1, box_w, box_h, spec.gray)
-            yield _compose(content, spec)
+                content, rotated = _render_pdf_page(
+                    pdf, number - 1, box_w, box_h, spec.gray
+                )
+            yield _compose(content, spec, rotated)
             del content
     finally:
         with _PDFIUM_LOCK:
@@ -201,8 +203,11 @@ def _pdf_pages(
 
 def _render_pdf_page(
     pdf: pdfium.PdfDocument, index: int, box_w: int, box_h: int, gray: bool
-) -> Image.Image:
-    """Render a page scaled to fit the box, rotated if orientations differ."""
+) -> tuple[Image.Image, bool]:
+    """Render a page scaled to fit the box, rotated if orientations differ.
+
+    Returns the image and whether it was rotated.
+    """
     try:
         page = pdf[index]
     except pdfium.PdfiumError as err:
@@ -233,7 +238,7 @@ def _render_pdf_page(
             bitmap.close()
     finally:
         page.close()
-    return image
+    return image, rotate
 
 
 def _image_pages(image: Image.Image, spec: PageSpec) -> Iterator[Image.Image]:
@@ -250,12 +255,13 @@ def _image_pages(image: Image.Image, spec: PageSpec) -> Iterator[Image.Image]:
     finally:
         image.close()
     # Duplex back-side transforms are applied by the encoders (Tasks 3/4).
-    if _needs_rotation(flat.width, flat.height, box_w, box_h):
+    rotated = _needs_rotation(flat.width, flat.height, box_w, box_h)
+    if rotated:
         flat = flat.transpose(Image.Transpose.ROTATE_90)  # counter-clockwise
     size = _fit_size(flat.width, flat.height, box_w, box_h)
     if size != flat.size:
         flat = flat.resize(size, Image.Resampling.LANCZOS)
-    yield _compose(flat, spec)
+    yield _compose(flat, spec, rotated)
 
 
 def _needs_rotation(width: float, height: float, box_w: int, box_h: int) -> bool:
@@ -276,7 +282,13 @@ def _fit_size(width: int, height: int, box_w: int, box_h: int) -> tuple[int, int
     )
 
 
-def _compose(content: Image.Image, spec: PageSpec) -> Image.Image:
+# Set on every sheet from iter_pages: True when the content was turned 90°
+# to fit (landscape content on portrait paper). Encoders use it to pick the
+# duplex back-side transform (the binding edge swaps with the content).
+ROTATED_INFO_KEY = "home_print_rotated"
+
+
+def _compose(content: Image.Image, spec: PageSpec, rotated: bool) -> Image.Image:
     """Centre ``content`` in the printable area of a white sheet."""
     left, top, right, bottom = spec.printable
     box_w, box_h = right - left, bottom - top
@@ -292,6 +304,7 @@ def _compose(content: Image.Image, spec: PageSpec) -> Image.Image:
         content,
         (left + (box_w - content.width) // 2, top + (box_h - content.height) // 2),
     )
+    sheet.info[ROTATED_INFO_KEY] = rotated
     return sheet
 
 
