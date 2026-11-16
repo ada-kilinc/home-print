@@ -19,6 +19,22 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+@pytest.fixture(autouse=True)
+def stub_frontend_component():
+    """Stub HA's frontend setup (the hass_frontend wheel is not installed)."""
+    from homeassistant.components.frontend import (
+        DATA_EXTRA_MODULE_URL,
+        UrlManager,
+    )
+
+    async def _setup(hass, config):
+        hass.data[DATA_EXTRA_MODULE_URL] = UrlManager(lambda *args: None, [])
+        return True
+
+    with patch("homeassistant.components.frontend.async_setup", _setup):
+        yield
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

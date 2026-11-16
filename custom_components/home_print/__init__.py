@@ -21,6 +21,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import HomePrintCoordinator
+from .frontend import async_register_frontend
 from .http import HomePrintUploadView
 from .services import async_setup_services
 from .websocket import async_setup_websocket
@@ -46,6 +47,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_setup_services(hass)
     async_setup_websocket(hass)
     hass.http.register_view(HomePrintUploadView())
+    await async_register_frontend(hass)
     return True
 
 
