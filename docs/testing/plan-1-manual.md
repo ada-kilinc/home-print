@@ -156,14 +156,17 @@ Script'in 5d ve 5e kontrolleri bu tablonun 401 ve 400 satırlarını kullanıyor
 
 ## Kartı ana sayfaya ekle
 
+En kolayı görsel düzenleyici, YAML yazman gerekmez:
+
 - Ana sayfa (Dashboard) → sağ üstten **Düzenle** → **Kart ekle** → arama kutusuna "Home Print" yaz, kartı seç.
-- Görsel düzenleyiciden yazıcıyı seç (boş bırakırsan ilk yazıcı kullanılır), istersen başlık yaz, mürekkep seviyelerini göstermek ya da gizlemek için anahtarı kullan.
-- YAML ile eklemek istersen:
+- Düzenleyicide yazıcıyı listeden seç. Boş bırakırsan ("Otomatik") ilk yazıcı kullanılır. İstersen başlık yaz, mürekkep seviyelerini göstermek ya da gizlemek için anahtarı kullan.
+- `entry_id`'yi bilmen gerekmez: listeden yazıcı seçince düzenleyici onu kendisi yazar. Tek yazıcın varsa hiç seçmesen de olur.
+
+YAML ile eklemek istersen hepsi isteğe bağlı:
 
 ```yaml
 type: custom:home-print-card
-# hepsi isteğe bağlı
-entry_id: <yazıcının entry_id değeri>
+entry_id: <yazıcının entry_id değeri>  # yoksa ilk yazıcı
 title: Ofis yazıcısı
 show_ink: true
 ```

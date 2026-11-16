@@ -79,7 +79,7 @@ const STRINGS = {
     picker: "Yazıcı",
     loading: "Yazıcılar yükleniyor…",
     load_failed:
-      "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Sürerse entegrasyonun kurulu olduğuna bak.",
+      "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Böyle sürerse entegrasyonun kurulu olup olmadığına bak.",
     no_printers:
       "Yazıcı görünmüyor. Home Print hâlâ yükleniyor olabilir, birazdan tekrar bakarım. Hiç eklemediysen önce entegrasyonu ekle.",
     unknown_printer:

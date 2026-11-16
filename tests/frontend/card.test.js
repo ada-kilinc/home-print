@@ -635,7 +635,9 @@ describe("printer availability", () => {
       makeHass({ printersError: { code: "unknown_command", message: "x" }, states: {} }),
     );
     expect(role(card, "print").disabled).toBe(true);
-    expect(text(card, "notice")).not.toBe("");
+    expect(text(card, "notice")).toContain(
+      "Böyle sürerse entegrasyonun kurulu olup olmadığına bak.",
+    );
   });
 
   it("disables printing with an explanation when can_print is false", async () => {
