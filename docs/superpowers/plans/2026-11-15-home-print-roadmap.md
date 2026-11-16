@@ -12,3 +12,7 @@ Spec birbirinden bağımsız test edilebilen birkaç alt sistemi kapsıyor. Bu y
 | 4 | Tarama: eSCL, arşiv, kartın Tara sekmesi | Tarama, ön izleme, indirme, "Son taramalar" listesi, `home_print.scan` | 7.5 |
 | 5 | Home Print Server: CUPS + SANE köprüsü + OCR | Eski/USB cihazlar ve aranabilir PDF; HA eklentisi ve bağımsız Docker imajı | 7.4, 7.5 (SANE/OCR) |
 | 6 | Yayın | İsim çakışma kontrolü, README (tr+en, tek tık düğmeleri), CI (hassfest, HACS, eklenti derlemesi), ilk sürüm | 10, 11, 12 |
+
+## Durum notu (2026-11-16)
+
+Plan 4 (tarama) uygulandı: eSCL istemcisi, arşiv, `home_print.scan`, kartta Tara düğmesi ve geçmişte Taramalar sekmesi, `scripts/remote_check.py --scan-info/--scan`, sürüm 0.3.0. Ertelenenler: yalnızca tarayıcı olan cihazlar (ayrı giriş türü) ve `_uscan._tcp` keşfi. Gerçek yazıcının eSCL yanıtı henüz alınmadı, fixture'lar sentetik.

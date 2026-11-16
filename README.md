@@ -13,8 +13,9 @@ Print to your network printer from the Home Assistant dashboard, from anywhere y
 - **Prints PDF, JPEG and PNG.** If the printer doesn't take a format directly, Home Print converts it to PWG Raster, Apple Raster (URF) or JPEG first. Duplex, copies, colour/mono and page ranges are supported where the printer supports them.
 - **Dashboard card** to pick a file or photo on your phone, choose options and follow the job until it's done.
 - **`home_print.print_file` action** for automations.
+- **Scans** with the printer's scanner (eSCL / AirScan): a **Scan** button on the card, an archive in the Media panel and a `home_print.scan` action. See [Scanning](#scanning).
 
-Not yet: scanning, Word/ODF files (save as PDF first), very old or USB-only printers (a helper add-on with CUPS is planned).
+Not yet: Word/ODF files (save as PDF first), very old or USB-only printers (a helper add-on with CUPS is planned).
 
 ## Install
 
@@ -42,6 +43,38 @@ Per printer (**Configure**): default duplex and colour mode, maximum file size (
 
 **Privacy:** the original of every printed file is kept for that many days under `<config>/home_print/<entry_id>/`, so the history can show a preview. These files are included in Home Assistant backups, and deleting an entry from the history doesn't remove it from backups already taken. Any logged-in Home Assistant user can see the history list and the previews: "only admins can print" limits printing and deleting, not viewing. Set **Keep files (days)** to 0 to keep no files.
 
+## Scanning
+
+If your printer has a scanner, Home Print finds it on the printer's own address (eSCL, also known as AirScan). Nothing extra to set up.
+
+- **Card:** the **Scan** button sits under **Print**. It opens the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
+- **History:** the clock icon in the card header opens a window with two tabs, **Prints** and **Scans**.
+- **Where files go:** every scan is saved as `/media/home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
+- **Options** (per printer, **Configure**):
+  - **Scanner address:** leave empty to find it automatically, or enter an address if the scanner isn't found.
+  - **Keep scans (days):** default 30, 0 keeps them forever.
+  - **Max space for scans (MB):** default 2000, 0 means no limit. When it's exceeded, the oldest scans are deleted.
+- **Sensor:** `Scanner status` on the printer's device.
+- **Action** for automations:
+
+```yaml
+action: home_print.scan
+data:
+  config_entry_id: <printer entry id>
+  source: platen        # platen | adf | adf_duplex
+  color_mode: gray      # color | gray | bw
+  resolution: 300
+  format: pdf           # pdf | jpeg
+  file_name: invoice    # optional, date and time if empty
+  folder: /media/documents   # optional extra copy; must be a folder HA may write to
+response_variable: scan
+# scan.path, scan.copy, scan.name, scan.pages
+```
+
+Not yet: scanner-only devices without a printer entry, SANE for old USB scanners and OCR (searchable PDF) come with the Home Print Server in a later release.
+
+**Privacy:** scans are visible to every logged-in Home Assistant user (list, preview and download). "Only admins can print" limits starting, renaming and deleting scans, not viewing them. The files live in your media folder, so they are included in Home Assistant backups if you back up media, and deleting a scan doesn't remove it from backups already taken. Removing the printer entry deletes the archive records but leaves the files in the media folder alone. Set **Keep scans (days)** low if you scan sensitive documents.
+
 ## Contributing
 
 This started as a small weekend project to print at home from a phone, and it would be great to see it grow. If you have a printer that behaves differently, an idea for a feature, or a fix (big or tiny), please open an issue or send a pull request. You don't need to ask first. Typos, translations and "this didn't work on my printer" reports are just as welcome as code.
@@ -56,7 +89,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements_test.txt
 npm install && npm test      # card tests
 ```
 
-`scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs).
+`scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`). Run it from the repo folder.
 
 ---
 
@@ -70,6 +103,7 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 - Durum, mürekkep seviyesi ve sorun (kâğıt bitti, sıkıştı, kapak açık) sensörleri.
 - PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir.
 - Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
+- Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** düğmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
 
 **Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
 
@@ -77,7 +111,41 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 
 **Gizlilik:** Ön izleme gösterebilmek için yazdırılan her dosyanın aslı bu süre boyunca `<config>/home_print/<entry_id>/` altında durur. Bu dosyalar Home Assistant yedeklerine de girer. Geçmişten sildiğin bir kayıt, önceden alınmış yedeklerde kalır. Geçmiş listesini ve ön izlemeleri Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği görmeyi değil, yazdırmayı ve silmeyi kısıtlar. Hiç dosya saklanmasın istiyorsan **Dosyaları sakla (gün)** değerini 0 yap.
 
-Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor. Tarama özelliği sonraki sürümde gelecek.
+Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor.
+
+### Tarama
+
+Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bulur (eSCL, diğer adıyla AirScan). Ayrıca kurulum gerekmez.
+
+- **Kart:** **Tara** düğmesi **Yazdır**'ın altında. Basınca tarama paneli açılır: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
+- **Geçmiş:** Kartın başlığındaki saat simgesi **Baskılar** ve **Taramalar** diye iki sekmeli bir pencere açar.
+- **Dosyalar nerede:** Her tarama `/media/home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
+- **Ayarlar** (her yazıcının **Yapılandır** ekranında):
+  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa adresi elle yaz.
+  - **Taramaları sakla (gün):** varsayılan 30, 0 hiç silme demek.
+  - **Taramalar için en fazla alan (MB):** varsayılan 2000, 0 sınırsız demek. Aşılırsa en eski taramalar silinir.
+- **Sensör:** Yazıcı cihazında `Tarayıcı durumu`.
+- **Servis** (otomasyonlar için):
+
+```yaml
+action: home_print.scan
+data:
+  config_entry_id: <yazıcı girişi>
+  source: platen        # platen | adf | adf_duplex
+  color_mode: gray      # color | gray | bw
+  resolution: 300
+  format: pdf           # pdf | jpeg
+  file_name: fatura     # isteğe bağlı, boşsa tarih ve saat
+  folder: /media/belgeler   # isteğe bağlı ek kopya; HA'nın yazabildiği bir klasör olmalı
+response_variable: tarama
+# tarama.path, tarama.copy, tarama.name, tarama.pages
+```
+
+Henüz yok: yazıcı girişi olmayan, yalnızca tarayıcı olan cihazlar, eski USB tarayıcılar için SANE ve OCR (aranabilir PDF). Bunlar sonraki sürümde Home Print Server ile gelecek.
+
+**Tarama gizliliği:** Taramaları (liste, ön izleme, indirme) Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği taramayı başlatmayı, adını değiştirmeyi ve silmeyi kısıtlar, görmeyi kısıtlamaz. Dosyalar medya klasöründe durur, medyayı yedekliyorsan Home Assistant yedeklerine de girer. Sildiğin tarama önceden alınmış yedeklerde kalır. Yazıcı girişini silersen arşiv kayıtları gider ama medya klasöründeki dosyalara dokunulmaz. Hassas belge tarıyorsan **Taramaları sakla (gün)** değerini düşük tut.
+
+Uzaktan kontrol scripti `scripts/remote_check.py` ile `--scan-info` tarayıcıyı bulup yeteneklerini yazdırır (kâğıt harcamaz), `--scan` ise camdan 75 dpi gri tek sayfa deneme taraması yapıp `scan_test.jpg` kaydeder. Repo klasöründen çalıştır.
 
 ### Katkı
 

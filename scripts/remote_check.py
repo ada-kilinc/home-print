@@ -4,12 +4,20 @@
 Kullanım:
     python3 scripts/remote_check.py --printer HOST [--port 631] [--path /ipp/print]
         [--tls] [--ha URL --token TOKEN] [--print] [--json OUT.json]
+    python3 scripts/remote_check.py --printer HOST --scan-info [--scan]
 
 Varsayılan olarak HİÇ baskı yapmaz. Validate-Job ile yazıcıya "bu işi
 basabilir miydin?" diye sorar; yazıcı iş oluşturmaz. Örnek bir PDF'i
 bilgisayarda dönüştürüp sayfalarını sayar, yazıcıya göndermez. Gerçek baskı
 sadece ``--print`` ile: 2 iş, en fazla 2 kağıt (önce çift yüzlü dönüştürülmüş
 PDF, sonra JPEG tek sayfa; JPEG sadece PDF'in 1 kağıt kullandığı kesinse gider).
+
+Tarayıcı kontrolü: ``--scan-info`` yazıcının adresinde eSCL tarayıcıyı bulur,
+yeteneklerini yazdırır, ham XML'i ``escl_capabilities.xml`` ve
+``escl_status.xml`` olarak kaydeder (``--json`` verilmişse onun klasörüne,
+yoksa bulunduğun klasöre). Kağıt harcamaz. Bu kipte yazıcı (IPP) kontrolleri
+çalışmaz. ``--scan`` ek olarak camdan 75 dpi gri tek sayfa tarar ve
+``scan_test.jpg`` kaydeder; ``--print`` ile birlikte kullanılamaz.
 
 Bağımlılıklar: ``pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0
 numpy==2.3.2``. Repo içinden çalıştırılır (``scripts/`` ile
@@ -765,6 +773,121 @@ async def check_escl(host: str, tls: bool) -> list[Result]:
     if found:
         return [Result("3", title, PASS, "var: " + ", ".join(found))]
     return [Result("3", title, SKIP, "bulunamadı; " + "; ".join(tried))]
+
+
+# --- scanner check (--scan-info / --scan) ------------------------------------------
+
+ESCL_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "home_print"
+SCAN_TEST_DPI = 75
+
+
+def load_escl() -> Any | None:
+    """Import the integration's HA-free ``escl`` package by path, or None."""
+    if not (ESCL_DIR / "escl" / "client.py").is_file():
+        return None
+    if str(ESCL_DIR) not in sys.path:
+        sys.path.insert(0, str(ESCL_DIR))
+    try:
+        import escl.client  # noqa: F401
+        import escl.parse  # noqa: F401
+    except ImportError:
+        return None
+    return sys.modules["escl"]
+
+
+def _scan_out_dir(args: argparse.Namespace) -> Path:
+    if args.json:
+        return Path(args.json).expanduser().resolve().parent
+    return Path.cwd()
+
+
+def _inches(length: int) -> str:
+    return f"{length / 300:.1f}".rstrip("0").rstrip(".")
+
+
+async def run_scan_check(args: argparse.Namespace) -> int:
+    escl = load_escl()
+    if escl is None:
+        print(
+            "❌ eSCL kodu yüklenemedi. Scripti repo klasöründen çalıştır "
+            "(scripts/ ile custom_components/ yan yana olmalı).",
+            flush=True,
+        )
+        return 1
+    from escl.client import EsclClient, EsclError, find_scanner
+    from escl.models import ScanSettings
+    from escl.parse import parse_capabilities, parse_status
+
+    out_dir = _scan_out_dir(args)
+    timeout = aiohttp.ClientTimeout(total=PRINT_TIMEOUT)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        base = await find_scanner(session, args.printer, args.tls, False)
+        if base is None:
+            print(
+                f"❌ {args.printer} adresinde tarayıcı bulunamadı "
+                "(eSCL yanıt vermedi). Yazıcı açık mı, adres doğru mu?",
+                flush=True,
+            )
+            return 1
+        client = EsclClient(base, session, False)
+        try:
+            caps_xml = await client._get_xml("ScannerCapabilities")  # noqa: SLF001
+            caps = parse_capabilities(caps_xml)
+        except EsclError as err:
+            print(f"❌ Tarayıcı yetenekleri okunamadı: {err}", flush=True)
+            return 1
+        (out_dir / "escl_capabilities.xml").write_bytes(caps_xml)
+        print(f"✅ Tarayıcı bulundu: {base}", flush=True)
+        print(f"   Model: {caps.make_model or '?'}  (eSCL {caps.version})", flush=True)
+        names = {"platen": "cam", "adf": "belge besleyici", "adf_duplex": "çift yüzlü"}
+        for key, src in caps.sources.items():
+            print(
+                f"   {names.get(key, key)}: renk {'/'.join(src.color_modes)}; "
+                f"çözünürlük {'/'.join(map(str, src.resolutions))} dpi; "
+                f"biçim {'/'.join(src.formats)}; "
+                f"en büyük alan {_inches(src.max_width)}x{_inches(src.max_height)} inç",
+                flush=True,
+            )
+        try:
+            status_xml = await client._get_xml("ScannerStatus")  # noqa: SLF001
+            status = parse_status(status_xml)
+            (out_dir / "escl_status.xml").write_bytes(status_xml)
+            adf = {True: "dolu", False: "boş", None: "bilinmiyor"}[status.adf_loaded]
+            print(f"   Durum: {status.state}; besleyici: {adf}", flush=True)
+        except EsclError as err:
+            print(f"⚠ Durum okunamadı: {err}", flush=True)
+        print(f"   XML dosyaları: {out_dir}", flush=True)
+
+        if not args.scan:
+            return 0
+        src = caps.sources.get("platen")
+        if src is None or "gray" not in src.color_modes:
+            print("❌ Camdan gri tarama desteklenmiyor, deneme yapılamadı.", flush=True)
+            return 1
+        dpi = (
+            SCAN_TEST_DPI
+            if SCAN_TEST_DPI in src.resolutions
+            else min(src.resolutions, default=SCAN_TEST_DPI)
+        )
+        print(f"Tarıyor: cam, gri, {dpi} dpi (tek sayfa)...", flush=True)
+        try:
+            pages = await client.scan(
+                caps, ScanSettings("platen", "gray", dpi, "image/jpeg")
+            )
+        except EsclError as err:
+            print(f"❌ Tarama başarısız: {err}", flush=True)
+            return 1
+        target = out_dir / "scan_test.jpg"
+        target.write_bytes(pages[0])
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(pages[0])) as img:
+                size = f"{img.width}x{img.height} piksel"
+        except Exception:  # noqa: BLE001
+            size = f"{len(pages[0])} bayt (boyut okunamadı)"
+        print(f"✅ Tarama tamam: {target} ({size}, {len(pages)} sayfa)", flush=True)
+        return 0
 
 
 # --- 4. Validate-Job ---------------------------------------------------------------
@@ -1568,6 +1691,8 @@ async def run_print_tests(
 
 
 async def run(args: argparse.Namespace) -> int:
+    if args.scan_info:
+        return await run_scan_check(args)
     report: dict[str, Any] = {"results": [], "printer_attributes": None, "ha": {}}
     attrs: dict[str, Any] | None = None
     unreachable = "yazıcıya erişilemedi"
@@ -1670,9 +1795,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="GERÇEKTEN bas: 2 iş, en fazla 2 kağıt (yoksa hiç baskı yapılmaz)",
     )
     p.add_argument(
+        "--scan-info",
+        action="store_true",
+        help="yalnızca tarayıcıyı bul ve özetle (kağıt harcamaz, IPP kontrolü yok)",
+    )
+    p.add_argument(
+        "--scan",
+        action="store_true",
+        help="--scan-info + camdan 75 dpi gri tek sayfa tara (scan_test.jpg)",
+    )
+    p.add_argument(
         "--json", metavar="OUT.json", help="sonuçları JSON dosyasına yaz (gizlenmiş)"
     )
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.scan:
+        args.scan_info = True
+    if args.scan_info and args.print:
+        p.error("--scan-info/--scan ile --print birlikte kullanılamaz")
+    return args
 
 
 def main() -> int:

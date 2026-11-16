@@ -698,3 +698,134 @@ def test_sheets_used():
     # Not finished: it may still print more.
     running = {"job-state": 5, "job-media-sheets-completed": 0}
     assert rc.sheets_used(duplex, running) is None
+
+
+# --- scanner check (--scan-info / --scan) -----------------------------------------
+
+ESCL_FIX = Path(__file__).parent / "fixtures" / "escl"
+
+
+class _FakeScanner:
+    """Minimal eSCL server on loopback; ``present=False`` answers 404 everywhere."""
+
+    def __init__(self, present: bool = True) -> None:
+        import io
+
+        from aiohttp import web
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("L", (64, 96), 128).save(buf, "JPEG")
+        self.jpeg = buf.getvalue()
+        self.present = present
+        self.posted: list[bytes] = []
+        self.pages = [self.jpeg]
+        self.app = web.Application()
+        self.app.router.add_get("/eSCL/ScannerCapabilities", self.caps)
+        self.app.router.add_get("/eSCL/ScannerStatus", self.status)
+        self.app.router.add_post("/eSCL/ScanJobs", self.create)
+        self.app.router.add_get("/eSCL/ScanJobs/j1/NextDocument", self.next_doc)
+        self.app.router.add_delete("/eSCL/ScanJobs/j1", self.delete)
+        self._web = web
+
+    async def caps(self, request):
+        if not self.present:
+            return self._web.Response(status=404)
+        return self._web.Response(
+            body=(ESCL_FIX / "hp_capabilities_platen.xml").read_bytes()
+        )
+
+    async def status(self, request):
+        return self._web.Response(body=(ESCL_FIX / "status_idle.xml").read_bytes())
+
+    async def create(self, request):
+        self.posted.append(await request.read())
+        return self._web.Response(status=201, headers={"Location": "/eSCL/ScanJobs/j1"})
+
+    async def next_doc(self, request):
+        if self.pages:
+            return self._web.Response(body=self.pages.pop(0), content_type="image/jpeg")
+        return self._web.Response(status=404)
+
+    async def delete(self, request):
+        return self._web.Response(status=200)
+
+
+@pytest.fixture
+async def scanner(socket_enabled):
+    from aiohttp.test_utils import TestServer
+
+    servers = []
+
+    async def make(present: bool = True):
+        fake = _FakeScanner(present)
+        server = TestServer(fake.app)
+        await server.start_server()
+        servers.append(server)
+        return fake, f"127.0.0.1:{server.port}"
+
+    yield make
+    for server in servers:
+        await server.close()
+
+
+async def test_scan_info_saves_xml_and_prints_summary(scanner, tmp_path, capsys):
+    _, host = await scanner()
+    out_json = tmp_path / "report.json"
+    code = await rc.run(
+        rc.parse_args(["--printer", host, "--scan-info", "--json", str(out_json)])
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert (tmp_path / "escl_capabilities.xml").read_bytes().startswith(b"<?xml")
+    assert b"ScannerStatus" in (tmp_path / "escl_status.xml").read_bytes()
+    assert "cam" in out and "300" in out and "idle" in out
+    assert not (tmp_path / "scan_test.jpg").exists()
+
+
+async def test_scan_info_no_scanner_message(scanner, tmp_path, capsys):
+    _, host = await scanner(present=False)
+    code = await rc.run(
+        rc.parse_args(
+            ["--printer", host, "--scan-info", "--json", str(tmp_path / "r.json")]
+        )
+    )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "tarayıcı bulunamadı" in out
+    assert not list(tmp_path.glob("escl_*.xml"))
+
+
+async def test_scan_flag_writes_jpeg(scanner, tmp_path, capsys):
+    fake, host = await scanner()
+    code = await rc.run(
+        rc.parse_args(["--printer", host, "--scan", "--json", str(tmp_path / "r.json")])
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert (tmp_path / "scan_test.jpg").read_bytes() == fake.jpeg
+    assert "64x96" in out
+    assert fake.posted and b"Grayscale8" in fake.posted[0]
+
+
+async def test_scan_flag_without_escl_package_exits_nonzero(tmp_path, capsys):
+    with patch.object(rc, "ESCL_DIR", tmp_path / "missing"):
+        code = await rc.run(rc.parse_args(["--printer", "127.0.0.1", "--scan-info"]))
+    assert code == 1
+    assert "repo klasöründen" in capsys.readouterr().out
+
+
+async def test_scan_info_skips_printer_checks(scanner, tmp_path):
+    _, host = await scanner()
+    with patch.object(rc, "check_tcp", AsyncMock(side_effect=AssertionError)):
+        code = await rc.run(
+            rc.parse_args(
+                ["--printer", host, "--scan-info", "--json", str(tmp_path / "r.json")]
+            )
+        )
+    assert code == 0
+
+
+def test_scan_flags_conflict_with_print():
+    with pytest.raises(SystemExit):
+        rc.parse_args(["--printer", "x", "--scan-info", "--print"])
