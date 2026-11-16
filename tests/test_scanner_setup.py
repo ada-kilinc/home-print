@@ -3,7 +3,6 @@
 import logging
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import entity_registry as er
@@ -11,25 +10,11 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.home_print.client import CannotConnect
 from custom_components.home_print.const import CONF_SCANNER_URL, DOMAIN
 from custom_components.home_print.escl.errors import ScannerUnavailable
-from custom_components.home_print.escl.models import (
-    ScannerCaps,
-    ScannerStatus,
-    SourceCaps,
-)
+from custom_components.home_print.escl.models import ScannerStatus
 
-from .common import UUID, make_entry, setup_entry
+from .common import CAPS, URL, UUID, make_entry, setup_entry
 
 SCANNER_ENTITY = "sensor.generic_ippe_4000_series_scanner_status"
-URL = "http://192.168.1.50/eSCL"
-
-CAPS = ScannerCaps(
-    version="2.63",
-    make_model="Test Scanner",
-    uuid=None,
-    sources={
-        "platen": SourceCaps(0, 2550, 0, 3507, ("color",), (300,), ("image/jpeg",))
-    },
-)
 
 
 def _warnings(caplog):
@@ -38,18 +23,6 @@ def _warnings(caplog):
         for r in caplog.records
         if r.levelno >= logging.WARNING and r.name.startswith("custom_components")
     ]
-
-
-@pytest.fixture
-def mock_escl():
-    """Replace the scanner's eSCL client with one mocked instance."""
-    with patch("custom_components.home_print.scanner.EsclClient") as cls:
-        client = AsyncMock()
-        client.capabilities.return_value = CAPS
-        client.status.return_value = ScannerStatus("idle", False)
-        cls.return_value = client
-        cls.client = client
-        yield cls
 
 
 async def test_setup_finds_scanner_on_printer_host(
@@ -127,7 +100,7 @@ async def test_detection_crash_never_fails_setup(hass, mock_client, mock_find_sc
 
 
 async def test_status_failure_keeps_printer_data(
-    hass, mock_client, mock_escl, mock_find_scanner, freezer
+    hass, mock_client, mock_escl, mock_find_scanner
 ):
     mock_find_scanner.return_value = URL
     entry = await setup_entry(hass)
@@ -183,3 +156,39 @@ async def test_unload_flushes_and_remove_deletes_archive(
     ) as remove:
         await hass.config_entries.async_remove(entry.entry_id)
     remove.assert_awaited_once()
+
+
+async def test_archive_load_failure_never_fails_setup(
+    hass, mock_client, mock_escl, mock_find_scanner
+):
+    mock_find_scanner.return_value = URL
+    with patch(
+        "custom_components.home_print.scanner.ScanArchive.async_load",
+        new=AsyncMock(side_effect=OSError("disk")),
+    ):
+        entry = await setup_entry(hass)
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.scanner is None
+
+
+async def test_unexpected_status_error_gives_none(
+    hass, mock_client, mock_escl, mock_find_scanner
+):
+    mock_find_scanner.return_value = URL
+    entry = await setup_entry(hass)
+    mock_escl.client.status.side_effect = RuntimeError("boom")
+    await entry.runtime_data.coordinator.async_refresh()
+    assert entry.runtime_data.coordinator.last_update_success is True
+    assert entry.runtime_data.scanner.status is None
+
+
+async def test_printer_failure_drops_scanner_status(
+    hass, mock_client, mock_escl, mock_find_scanner
+):
+    mock_find_scanner.return_value = URL
+    entry = await setup_entry(hass)
+    scanner = entry.runtime_data.scanner
+    mock_escl.client.status.return_value = ScannerStatus("processing", False)
+    mock_client.get_printer.side_effect = CannotConnect("off")
+    await entry.runtime_data.coordinator.async_refresh()
+    assert scanner.status == ScannerStatus("idle", False)  # unchanged

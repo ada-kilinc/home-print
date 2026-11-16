@@ -66,16 +66,28 @@ async def async_setup_scanner(
         _LOGGER.debug("Unexpected error while setting up the scanner", exc_info=True)
         return None
 
-    archive = ScanArchive(hass, entry)
-    await archive.async_load()
-    await archive.async_cleanup()
+    try:
+        archive = ScanArchive(hass, entry)
+        await archive.async_load()
+        await archive.async_cleanup()
+    except Exception as err:  # noqa: BLE001 - a scanner must never fail the entry
+        _LOGGER.warning("Scan archive of the scanner could not be loaded: %s", err)
+        return None
     return ScannerRuntime(client=client, caps=caps, archive=archive)
+
+
+async def async_fetch_status(scanner: ScannerRuntime) -> ScannerStatus | None:
+    """Read the scanner status; any failure gives None."""
+    try:
+        async with asyncio.timeout(STATUS_TIMEOUT):
+            return await scanner.client.status()
+    except _ERRORS:
+        return None
+    except Exception:  # noqa: BLE001 - scanner trouble must not reach the printer
+        _LOGGER.debug("Unexpected error while reading scanner status", exc_info=True)
+        return None
 
 
 async def async_refresh_status(scanner: ScannerRuntime) -> None:
     """Update ``scanner.status``; any failure leaves it None."""
-    try:
-        async with asyncio.timeout(STATUS_TIMEOUT):
-            scanner.status = await scanner.client.status()
-    except _ERRORS:
-        scanner.status = None
+    scanner.status = await async_fetch_status(scanner)

@@ -47,6 +47,7 @@ from .const import (
     DOMAIN,
     MAX_HISTORY_DAYS,
     MAX_SCAN_DAYS,
+    MAX_SCAN_MB,
 )
 from .models import PrinterInfo, normalize_uuid
 
@@ -285,7 +286,7 @@ class HomePrintOptionsFlow(OptionsFlow):
                     default=opts.get(CONF_SCAN_MAX_MB, DEFAULT_SCAN_MAX_MB),
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=0, max=100000, step=1, mode=NumberSelectorMode.BOX
+                        min=0, max=MAX_SCAN_MB, step=1, mode=NumberSelectorMode.BOX
                     )
                 ),
             }

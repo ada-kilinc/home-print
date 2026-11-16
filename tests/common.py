@@ -10,6 +10,17 @@ from custom_components.home_print.const import (
     CONF_VERIFY_SSL,
     DOMAIN,
 )
+from custom_components.home_print.escl.models import ScannerCaps, SourceCaps
+
+URL = "http://192.168.1.50/eSCL"
+CAPS = ScannerCaps(
+    version="2.63",
+    make_model="Test Scanner",
+    uuid=None,
+    sources={
+        "platen": SourceCaps(0, 2550, 0, 3507, ("color",), (300,), ("image/jpeg",))
+    },
+)
 
 UUID = "0a1b2c3d-4e5f-6789-abcd-0123456789ef"
 

@@ -93,3 +93,22 @@ def mock_find_scanner():
         new=AsyncMock(return_value=None),
     ) as find:
         yield find
+
+
+@pytest.fixture
+def mock_escl():
+    """Replace the scanner's eSCL client with one mocked instance.
+
+    ``mock_escl`` is the patched class; ``mock_escl.client`` the instance.
+    """
+    from custom_components.home_print.escl.models import ScannerStatus
+
+    from .common import CAPS
+
+    with patch("custom_components.home_print.scanner.EsclClient") as cls:
+        client = AsyncMock()
+        client.capabilities.return_value = CAPS
+        client.status.return_value = ScannerStatus("idle", False)
+        cls.return_value = client
+        cls.client = client
+        yield cls

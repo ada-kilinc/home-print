@@ -36,6 +36,7 @@ MAX_HISTORY_DAYS = 90
 CONF_SCAN_DAYS = "scan_days"
 DEFAULT_SCAN_DAYS = 30
 MAX_SCAN_DAYS = 3650
+MAX_SCAN_MB = 100000
 # Total size of archived scans in MB; oldest go first when exceeded; 0 = no cap.
 CONF_SCAN_MAX_MB = "scan_max_mb"
 DEFAULT_SCAN_MAX_MB = 2000
@@ -68,6 +69,7 @@ __all__ = [
     "EVENT_SCAN",
     "MAX_HISTORY_DAYS",
     "MAX_SCAN_DAYS",
+    "MAX_SCAN_MB",
     "PRINT_TIMEOUT",
     "PRINT_TIMEOUT_PER_PAGE",
 ]
