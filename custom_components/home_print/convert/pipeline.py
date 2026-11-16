@@ -34,6 +34,7 @@ __all__ = [
     "NoConversionRoute",
     "OutputTooLarge",
     "PreparedJob",
+    "accepted_formats",
     "choose_target",
     "is_gray",
     "prepare",
@@ -129,6 +130,19 @@ def choose_target(
             continue
         return target
     return None
+
+
+def accepted_formats(caps: Capabilities) -> frozenset[str]:
+    """Source formats the printer can take, natively or after conversion.
+
+    A format counts when a route exists for either a colour or a gray job.
+    """
+    return frozenset(
+        fmt
+        for fmt in (PDF, JPEG, PNG)
+        if choose_target(fmt, caps) is not None
+        or choose_target(fmt, caps, gray=True) is not None
+    )
 
 
 def _closest_to_default(values: set[int] | tuple[int, ...]) -> int:

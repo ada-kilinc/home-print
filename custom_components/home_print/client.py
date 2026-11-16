@@ -19,7 +19,7 @@ from pyipp.tags import ATTRIBUTE_TAG_MAP
 
 from .const import PRINT_TIMEOUT
 from .ipp_parse import parse_printer
-from .models import JobResult, PrinterInfo, PrintOptions
+from .models import JobResult, JobStatus, PrinterInfo, PrintOptions
 
 # pyipp's serializer silently drops attributes it has no tag for.
 # This mutates pyipp's module-level map, so it is process-wide; that is
@@ -271,4 +271,36 @@ class HomePrintClient:
         return JobResult(
             job_id=int(job["job-id"]),
             state=_JOB_STATES.get(int(job.get("job-state", 3)), "pending"),
+        )
+
+    async def get_job(self, job_id: int) -> JobStatus:
+        """Fetch the live state of one job (short status timeout)."""
+        response = await self._execute(
+            IppOperation.GET_JOB_ATTRIBUTES,
+            {
+                "operation-attributes-tag": {
+                    "job-id": job_id,
+                    "requested-attributes": [
+                        "job-state",
+                        "job-state-reasons",
+                        "job-impressions-completed",
+                        "job-media-sheets-completed",
+                    ],
+                }
+            },
+        )
+        job = next(iter(response.get("jobs") or []), None)
+        if not job or "job-state" not in job:
+            raise HomePrintError("Printer returned no job attributes")
+        reasons = job.get("job-state-reasons") or ()
+        if isinstance(reasons, str):
+            reasons = (reasons,)
+        impressions = job.get("job-impressions-completed")
+        sheets = job.get("job-media-sheets-completed")
+        return JobStatus(
+            job_id=job_id,
+            state=_JOB_STATES.get(int(job["job-state"]), "pending"),
+            reasons=tuple(str(r) for r in reasons if str(r) != "none"),
+            impressions=None if impressions is None else int(impressions),
+            sheets=None if sheets is None else int(sheets),
         )

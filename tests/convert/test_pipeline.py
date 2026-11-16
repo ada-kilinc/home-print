@@ -21,6 +21,7 @@ from custom_components.home_print.convert.errors import (
 )
 from custom_components.home_print.convert.pipeline import (
     PreparedJob,
+    accepted_formats,
     choose_target,
     prepare,
 )
@@ -66,6 +67,14 @@ def test_choose_target_deskjet():
     assert choose_target(PDF, DESKJET) == PWG
     assert choose_target(PNG, DESKJET) == JPEG
     assert choose_target(JPEG, DESKJET) == JPEG
+
+
+def test_accepted_formats_deskjet():
+    assert accepted_formats(DESKJET) == {PDF, JPEG, PNG}
+
+
+def test_accepted_formats_pcl_only():
+    assert accepted_formats(_only("application/vnd.hp-PCL")) == frozenset()
 
 
 def test_choose_target_pdf_native_printer():

@@ -23,6 +23,7 @@ from .const import (
 from .coordinator import HomePrintCoordinator
 from .http import HomePrintUploadView
 from .services import async_setup_services
+from .websocket import async_setup_websocket
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
@@ -43,6 +44,7 @@ type HomePrintConfigEntry = ConfigEntry[HomePrintData]
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the service and the upload view once for all entries."""
     async_setup_services(hass)
+    async_setup_websocket(hass)
     hass.http.register_view(HomePrintUploadView())
     return True
 

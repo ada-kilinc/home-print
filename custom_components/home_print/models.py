@@ -99,6 +99,21 @@ class JobResult:
 
 
 @dataclass(frozen=True)
+class JobStatus:
+    """Live state of one job, from Get-Job-Attributes.
+
+    ``state`` is one of pending, held, processing, stopped, canceled, aborted
+    or completed. Counters are ``None`` when the printer does not report them.
+    """
+
+    job_id: int
+    state: str
+    reasons: tuple[str, ...]
+    impressions: int | None
+    sheets: int | None
+
+
+@dataclass(frozen=True)
 class LastJob:
     """The most recent job submitted through Home Assistant."""
 

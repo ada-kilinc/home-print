@@ -11,6 +11,7 @@ from pyipp.enums import IppOperation
 from custom_components.home_print.client import (
     CannotConnect,
     HomePrintClient,
+    HomePrintError,
     PrinterRejected,
     PrintTimeout,
     UnsupportedOption,
@@ -19,6 +20,7 @@ from custom_components.home_print.client import (
 from custom_components.home_print.const import PRINT_TIMEOUT
 from custom_components.home_print.models import (
     JobResult,
+    JobStatus,
     JpegLimits,
     MediaCaps,
     PrintOptions,
@@ -381,3 +383,78 @@ async def test_print_job_timeout_override_still_raises_print_timeout(monkeypatch
             options=PrintOptions(),
             timeout=400,
         )
+
+
+@pytest.mark.parametrize(
+    ("code", "name"),
+    [
+        (3, "pending"),
+        (4, "held"),
+        (5, "processing"),
+        (6, "stopped"),
+        (7, "canceled"),
+        (8, "aborted"),
+        (9, "completed"),
+    ],
+)
+async def test_get_job_maps_states(code, name):
+    execute = AsyncMock(
+        return_value={
+            "status-code": 0,
+            "jobs": [
+                {
+                    "job-id": 42,
+                    "job-state": code,
+                    "job-state-reasons": "none",
+                    "job-impressions-completed": 3,
+                    "job-media-sheets-completed": 2,
+                }
+            ],
+        }
+    )
+    client = _client(execute)
+    job = await client.get_job(42)
+    assert job == JobStatus(job_id=42, state=name, reasons=(), impressions=3, sheets=2)
+    operation, message = execute.await_args.args
+    assert operation == IppOperation.GET_JOB_ATTRIBUTES
+    op_attrs = message["operation-attributes-tag"]
+    assert op_attrs["job-id"] == 42
+    assert set(op_attrs["requested-attributes"]) == {
+        "job-state",
+        "job-state-reasons",
+        "job-impressions-completed",
+        "job-media-sheets-completed",
+    }
+
+
+async def test_get_job_reasons_and_missing_counters():
+    execute = AsyncMock(
+        return_value={
+            "status-code": 0,
+            "jobs": [
+                {
+                    "job-id": 7,
+                    "job-state": 8,
+                    "job-state-reasons": ["job-canceled-by-user", "aborted-by-system"],
+                }
+            ],
+        }
+    )
+    job = await _client(execute).get_job(7)
+    assert job.reasons == ("job-canceled-by-user", "aborted-by-system")
+    assert job.impressions is None
+    assert job.sheets is None
+
+
+async def test_get_job_uses_short_timeout_and_maps_connection_error():
+    execute = AsyncMock(side_effect=IPPConnectionError("down"))
+    client = _client(execute)
+    with pytest.raises(CannotConnect):
+        await client.get_job(1)
+    assert client._ipp.execute is execute  # status client, not the print one
+
+
+async def test_get_job_no_job_in_response():
+    execute = AsyncMock(return_value={"status-code": 0, "jobs": []})
+    with pytest.raises(HomePrintError):
+        await _client(execute).get_job(1)
