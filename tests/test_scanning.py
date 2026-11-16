@@ -79,9 +79,8 @@ async def test_scan_jpeg_single_page(hass, tmp_path, entry):
 async def test_adf_multi_page_jpeg_becomes_pdf(
     hass, tmp_path, mock_client, mock_escl, mock_find_scanner
 ):
-    mock_escl.client.capabilities.return_value = ADF_CAPS
     mock_escl.client.scan.return_value = [scan_jpeg(), scan_jpeg()]
-    entry = await setup_scanner_entry(hass, tmp_path, mock_find_scanner)
+    entry = await setup_scanner_entry(hass, tmp_path, mock_find_scanner, ADF_CAPS)
     state = await _run(hass, entry, ScanRequest("adf", "color", 300, "jpeg"))
     assert mock_escl.client.scan.call_args.args[1].source == "adf"
     assert state.record["mime"] == "application/pdf"

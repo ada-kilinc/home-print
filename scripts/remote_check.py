@@ -16,8 +16,12 @@ Tarayıcı kontrolü: ``--scan-info`` yazıcının adresinde eSCL tarayıcıyı 
 yeteneklerini yazdırır, ham XML'i ``escl_capabilities.xml`` ve
 ``escl_status.xml`` olarak kaydeder (``--json`` verilmişse onun klasörüne,
 yoksa bulunduğun klasöre). Kağıt harcamaz. Bu kipte yazıcı (IPP) kontrolleri
-çalışmaz. ``--scan`` ek olarak camdan 75 dpi gri tek sayfa tarar ve
-``scan_test.jpg`` kaydeder; ``--print`` ile birlikte kullanılamaz.
+çalışmaz; ``--json`` yalnızca çıktı klasörünü belirler, ``--ha``/``--token``
+yok sayılır. Kaydedilen XML cihaz kimlikleri (seri no, UUID) içerir, herkese
+açık yerde paylaşma. ``--scan`` ek olarak camdan 75 dpi gri tek sayfa tarar ve
+``scan_test.jpg`` kaydeder; ScanJobs durum kodunu, ham ``Location``
+başlığını, her NextDocument durum kodunu ve yönlendirmelerden sonraki son
+adresi yazdırır (HP tuhaflıkları için). ``--print`` ile birlikte kullanılamaz.
 
 Bağımlılıklar: ``pyipp==0.17.0 aiohttp pypdfium2==5.15.2 Pillow==12.0.0
 numpy==2.3.2``. Repo içinden çalıştırılır (``scripts/`` ile
@@ -781,18 +785,68 @@ ESCL_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "home_
 SCAN_TEST_DPI = 75
 
 
+ESCL_PACKAGE = "home_print_standalone_escl"
+
+
 def load_escl() -> Any | None:
-    """Import the integration's HA-free ``escl`` package by path, or None."""
-    if not (ESCL_DIR / "escl" / "client.py").is_file():
+    """Import the integration's HA-free ``escl`` package by path, or None.
+
+    It is loaded under a unique name (``ESCL_PACKAGE``) so it never shadows
+    or picks up another top-level ``escl`` module; ``sys.path`` is untouched.
+    Returns the package with ``client``, ``models`` and ``parse`` loaded.
+    """
+    init = ESCL_DIR / "escl" / "__init__.py"
+    if not (ESCL_DIR / "escl" / "client.py").is_file() or not init.is_file():
         return None
-    if str(ESCL_DIR) not in sys.path:
-        sys.path.insert(0, str(ESCL_DIR))
+    if ESCL_PACKAGE in sys.modules:
+        return sys.modules[ESCL_PACKAGE]
+    spec = importlib.util.spec_from_file_location(
+        ESCL_PACKAGE, init, submodule_search_locations=[str(init.parent)]
+    )
+    if spec is None or spec.loader is None:
+        return None
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[ESCL_PACKAGE] = package
     try:
-        import escl.client  # noqa: F401
-        import escl.parse  # noqa: F401
+        spec.loader.exec_module(package)
+        for name in ("errors", "models", "parse", "client"):
+            importlib.import_module(f"{ESCL_PACKAGE}.{name}")
     except ImportError:
+        for name in [m for m in sys.modules if m.split(".")[0] == ESCL_PACKAGE]:
+            del sys.modules[name]
         return None
-    return sys.modules["escl"]
+    return package
+
+
+def _escl_trace() -> aiohttp.TraceConfig:
+    """Print every eSCL job request's status (diagnostics for HP quirks)."""
+    trace = aiohttp.TraceConfig()
+
+    async def on_redirect(session, ctx, params) -> None:  # noqa: ANN001
+        print(
+            f"   [eSCL] {params.method} {params.url} -> HTTP "
+            f"{params.response.status} yönlendirme: "
+            f"{params.response.headers.get('Location')}",
+            flush=True,
+        )
+
+    async def on_end(session, ctx, params) -> None:  # noqa: ANN001
+        path = params.url.path
+        resp = params.response
+        if params.method == "POST" and path.endswith("/ScanJobs"):
+            print(
+                f"   [eSCL] POST ScanJobs -> HTTP {resp.status}, "
+                f"Location: {resp.headers.get('Location')}",
+                flush=True,
+            )
+        elif path.endswith("/NextDocument"):
+            print(f"   [eSCL] GET NextDocument -> HTTP {resp.status}", flush=True)
+        elif params.method == "DELETE":
+            print(f"   [eSCL] DELETE {path} -> HTTP {resp.status}", flush=True)
+
+    trace.on_request_redirect.append(on_redirect)
+    trace.on_request_end.append(on_end)
+    return trace
 
 
 def _scan_out_dir(args: argparse.Namespace) -> Path:
@@ -814,14 +868,21 @@ async def run_scan_check(args: argparse.Namespace) -> int:
             flush=True,
         )
         return 1
-    from escl.client import EsclClient, EsclError, find_scanner
-    from escl.models import ScanSettings
-    from escl.parse import parse_capabilities, parse_status
+    EsclClient = escl.client.EsclClient  # noqa: N806
+    EsclError = escl.client.EsclError  # noqa: N806
+    find_scanner = escl.client.find_scanner
+    ScanSettings = escl.models.ScanSettings  # noqa: N806
+    parse_capabilities = escl.parse.parse_capabilities
+    parse_status = escl.parse.parse_status
 
     out_dir = _scan_out_dir(args)
+    # A status file from an earlier run must not pass for this device's.
+    (out_dir / "escl_status.xml").unlink(missing_ok=True)
     timeout = aiohttp.ClientTimeout(total=PRINT_TIMEOUT)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        base = await find_scanner(session, args.printer, args.tls, False)
+    traces = [_escl_trace()] if args.scan else []
+    async with aiohttp.ClientSession(timeout=timeout, trace_configs=traces) as session:
+        found = await find_scanner(session, args.printer, args.tls, False)
+        base = found[0] if found is not None else None
         if base is None:
             print(
                 f"❌ {args.printer} adresinde tarayıcı bulunamadı "
@@ -838,6 +899,7 @@ async def run_scan_check(args: argparse.Namespace) -> int:
             return 1
         (out_dir / "escl_capabilities.xml").write_bytes(caps_xml)
         print(f"✅ Tarayıcı bulundu: {base}", flush=True)
+        print(f"   Son adres (yönlendirmelerden sonra): {base}", flush=True)
         print(f"   Model: {caps.make_model or '?'}  (eSCL {caps.version})", flush=True)
         names = {"platen": "cam", "adf": "belge besleyici", "adf_duplex": "çift yüzlü"}
         for key, src in caps.sources.items():
@@ -857,6 +919,11 @@ async def run_scan_check(args: argparse.Namespace) -> int:
         except EsclError as err:
             print(f"⚠ Durum okunamadı: {err}", flush=True)
         print(f"   XML dosyaları: {out_dir}", flush=True)
+        print(
+            "   Not: XML dosyaları cihaz kimlikleri (seri no, UUID) içerir; "
+            "herkese açık paylaşma.",
+            flush=True,
+        )
 
         if not args.scan:
             return 0
@@ -1797,7 +1864,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--scan-info",
         action="store_true",
-        help="yalnızca tarayıcıyı bul ve özetle (kağıt harcamaz, IPP kontrolü yok)",
+        help=(
+            "yalnızca tarayıcıyı bul ve özetle (kağıt harcamaz, IPP kontrolü yok); "
+            "bu kipte --json yalnızca çıktı klasörünü belirler, --ha/--token "
+            "yok sayılır"
+        ),
     )
     p.add_argument(
         "--scan",

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from collections.abc import Callable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -28,16 +29,30 @@ _LOGGER = logging.getLogger(__name__)
 MAX_XML_BYTES = 1024 * 1024
 MAX_PAGE_BYTES = 64 * 1024 * 1024
 REQUEST_TIMEOUT = 10  # seconds, for XML requests and job control
-PAGE_WAIT = 180  # seconds, total wait for one page (includes scanning)
+PAGE_WAIT = 180  # seconds, total wait for one page's headers (incl. 503 retries)
+BODY_READ_TIMEOUT = 60  # seconds without data while a page body is read
 RETRY_DELAY = 1.0  # seconds between 503 retries
+CREATE_BUSY_WAIT = 30  # seconds of 503 retries when creating a job
+_FEEDER_SOURCES = ("adf", "adf_duplex")
+_CAPS_PATH = "/ScannerCapabilities"
 
 
-async def _read_limited(resp: aiohttp.ClientResponse, limit: int) -> bytes:
-    """Read a body, failing with bad_response past ``limit`` bytes."""
+async def _read_limited(
+    resp: aiohttp.ClientResponse, limit: int, idle_timeout: float | None = None
+) -> bytes:
+    """Read a body, failing with bad_response past ``limit`` bytes.
+
+    With ``idle_timeout`` each chunk must arrive within that many seconds
+    (``TimeoutError`` otherwise).
+    """
     if resp.content_length is not None and resp.content_length > limit:
         raise EsclError("bad_response")
     data = bytearray()
-    async for chunk in resp.content.iter_chunked(64 * 1024):
+    while True:
+        async with asyncio.timeout(idle_timeout):
+            chunk = await resp.content.read(64 * 1024)
+        if not chunk:
+            break
         data += chunk
         if len(data) > limit:
             raise EsclError("bad_response")
@@ -57,6 +72,14 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 
 def _same_origin(a: str, b: str) -> bool:
     return _origin(a) == _origin(b)
+
+
+def _with_suffix(url: str, suffix: str) -> str:
+    """``url`` with ``/suffix`` appended to its path; the query is kept."""
+    parts = urlsplit(url)
+    return urlunsplit(
+        parts._replace(path=f"{parts.path.rstrip('/')}/{suffix}", fragment="")
+    )
 
 
 class EsclClient:
@@ -92,24 +115,74 @@ class EsclClient:
     async def status(self) -> ScannerStatus:
         return parse_status(await self._get_xml("ScannerStatus"))
 
-    async def _create_job(self, body: bytes) -> str:
+    def _job_url(self, location: str) -> str | None:
+        """The job URL on our own origin; None when it is outside the base path.
+
+        Only the path and query of ``Location`` are used: some scanners name
+        another host or scheme (e.g. their own https address) for the job.
+        """
+        parts = urlsplit(urljoin(self._base_url + "/", location))
+        base = urlsplit(self._base_url)
+        job = urlunsplit(
+            (base.scheme, base.netloc, parts.path.rstrip("/"), parts.query, "")
+        )
+        segments = parts.path.split("/")
+        if (
+            not parts.path.startswith(base.path.rstrip("/") + "/")
+            or ".." in segments
+            or "." in segments
+            or parts.path.rstrip("/") == base.path.rstrip("/")
+        ):
+            return None
+        return job
+
+    def _rejected_url(self, location: str) -> str:
+        """Where to DELETE a job whose Location was rejected (our origin)."""
+        parts = urlsplit(urljoin(self._base_url + "/", location))
+        base = urlsplit(self._base_url)
+        return urlunsplit((base.scheme, base.netloc, parts.path, parts.query, ""))
+
+    async def _post_job(self, body: bytes) -> tuple[int, str | None]:
         try:
             async with self._session.post(
                 f"{self._base_url}/ScanJobs",
                 data=body,
                 headers={"Content-Type": "text/xml"},
                 ssl=self._ssl,
+                allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
             ) as resp:
-                if resp.status in (503, 409):
-                    raise ScannerBusy()
-                location = resp.headers.get("Location")
-                if resp.status != 201 or not location:
-                    raise EsclError("bad_response")
+                return resp.status, resp.headers.get("Location")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ScannerUnavailable() from err
-        job_url = urljoin(self._base_url + "/", location).rstrip("/")
-        if not _same_origin(self._base_url, job_url):
+
+    async def _create_job(self, body: bytes, source: str) -> str:
+        deadline = time.monotonic() + CREATE_BUSY_WAIT
+        while True:
+            status, location = await self._post_job(body)
+            if status != 503:
+                break
+            if time.monotonic() + RETRY_DELAY > deadline:
+                raise ScannerBusy()
+            await asyncio.sleep(RETRY_DELAY)
+        if status == 409:
+            if source in _FEEDER_SOURCES:
+                try:
+                    adf_loaded = (await self.status()).adf_loaded
+                except EsclError:
+                    adf_loaded = None
+                if adf_loaded is False:
+                    raise AdfEmpty()
+            raise ScannerBusy()
+        if 300 <= status < 400:
+            _LOGGER.debug("Scanner redirected ScanJobs (%s) to %s", status, location)
+            raise EsclError("bad_response")
+        if status != 201 or not location:
+            raise EsclError("bad_response")
+        job_url = self._job_url(location)
+        if job_url is None:
+            _LOGGER.debug("Scanner gave an unexpected job location %s", location)
+            await asyncio.shield(self._close_job(self._rejected_url(location)))
             raise EsclError("bad_response")
         return job_url
 
@@ -119,6 +192,7 @@ class EsclClient:
             async with self._session.delete(
                 job_url,
                 ssl=self._ssl,
+                allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
             ):
                 pass
@@ -126,20 +200,29 @@ class EsclClient:
             _LOGGER.debug("Could not close scan job %s", job_url)
 
     async def _next_page(self, job_url: str, first: bool) -> bytes | None:
-        """Fetch the next page; None when no pages remain."""
+        """Fetch the next page; None when no pages remain.
+
+        Headers must arrive within ``PAGE_WAIT`` (503 retries included);
+        the body then only has to keep flowing (``BODY_READ_TIMEOUT``).
+        """
+        url = _with_suffix(job_url, "NextDocument")
         deadline = time.monotonic() + PAGE_WAIT
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ScannerUnavailable()
             try:
-                async with self._session.get(
-                    f"{job_url}/NextDocument",
-                    ssl=self._ssl,
-                    timeout=aiohttp.ClientTimeout(total=remaining),
-                ) as resp:
+                async with asyncio.timeout(remaining):
+                    resp = await self._session.get(
+                        url,
+                        ssl=self._ssl,
+                        timeout=aiohttp.ClientTimeout(total=None),
+                    )
+                try:
                     if resp.status == 200:
-                        return await _read_limited(resp, MAX_PAGE_BYTES)
+                        return await _read_limited(
+                            resp, MAX_PAGE_BYTES, BODY_READ_TIMEOUT
+                        )
                     if resp.status == 404:
                         return None
                     if resp.status == 409:
@@ -148,6 +231,8 @@ class EsclClient:
                         return None
                     if resp.status != 503:
                         raise EsclError("bad_response")
+                finally:
+                    resp.release()
             except (aiohttp.ClientError, TimeoutError) as err:
                 raise ScannerUnavailable() from err
             await asyncio.sleep(RETRY_DELAY)
@@ -158,10 +243,16 @@ class EsclClient:
         settings: ScanSettings,
         on_page: Callable[[int], None] | None = None,
     ) -> list[bytes]:
-        """Run a scan job and return the page images in order."""
-        job_url = await self._create_job(build_settings(caps, settings))
+        """Run a scan job and return the page images in order.
+
+        The platen gives one page; feeders are read until the scanner says
+        there are no more. A created job is always closed (DELETE).
+        """
+        body = build_settings(caps, settings)
+        job_url: str | None = None
         pages: list[bytes] = []
         try:
+            job_url = await self._create_job(body, settings.source)
             while True:
                 page = await self._next_page(job_url, first=not pages)
                 if page is None:
@@ -169,23 +260,68 @@ class EsclClient:
                 pages.append(page)
                 if on_page is not None:
                     on_page(len(pages))
+                if settings.source not in _FEEDER_SOURCES:
+                    break
             if not pages:
                 raise EsclError("bad_response")
         finally:
-            await asyncio.shield(self._close_job(job_url))
+            if job_url is not None:
+                await asyncio.shield(self._close_job(job_url))
         return pages
 
 
+def _url_host(host: str) -> str:
+    """``host`` for a URL: IPv6 literals get brackets."""
+    bare = host.strip("[]")
+    try:
+        if ipaddress.ip_address(bare).version == 6:
+            return f"[{bare}]"
+    except ValueError:
+        pass
+    return host
+
+
+async def _probe(
+    session: aiohttp.ClientSession, base: str, verify_ssl: bool, timeout: float
+) -> tuple[str, ScannerCaps]:
+    """Read capabilities at ``base``; return the base after redirects too."""
+    try:
+        async with session.get(
+            f"{base}{_CAPS_PATH}",
+            ssl=None if verify_ssl else False,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            if resp.status != 200:
+                raise EsclError("bad_response")
+            caps = parse_capabilities(await _read_limited(resp, MAX_XML_BYTES))
+            final = str(resp.url.with_query(None).with_fragment(None))
+    except (aiohttp.ClientError, TimeoutError) as err:
+        raise ScannerUnavailable() from err
+    if final.endswith(_CAPS_PATH):
+        base = final[: -len(_CAPS_PATH)]
+    return base, caps
+
+
 async def find_scanner(
-    session: aiohttp.ClientSession, host: str, ssl: bool, verify_ssl: bool
-) -> str | None:
-    """Return the eSCL base URL for ``host`` or None if it has no scanner."""
-    schemes = ("https", "http") if ssl else ("http",)
+    session: aiohttp.ClientSession,
+    host: str,
+    ssl: bool,
+    verify_ssl: bool,
+    timeout: float = REQUEST_TIMEOUT,
+) -> tuple[str, ScannerCaps] | None:
+    """Return the eSCL base URL and capabilities for ``host``, or None.
+
+    Both schemes are tried (the printer's own first): HP printers may only
+    answer eSCL over https, or redirect http there. The base URL is taken
+    from the final URL after redirects. ``timeout`` applies per candidate.
+    """
+    schemes = ("https", "http") if ssl else ("http", "https")
+    url_host = _url_host(host)
     for scheme in schemes:
-        base = f"{scheme}://{host}/eSCL"
         try:
-            await EsclClient(base, session, verify_ssl).capabilities()
+            return await _probe(
+                session, f"{scheme}://{url_host}/eSCL", verify_ssl, timeout
+            )
         except (EsclError, aiohttp.ClientError, TimeoutError):
             continue
-        return base
     return None

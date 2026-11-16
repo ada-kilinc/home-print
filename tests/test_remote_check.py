@@ -718,6 +718,7 @@ class _FakeScanner:
         Image.new("L", (64, 96), 128).save(buf, "JPEG")
         self.jpeg = buf.getvalue()
         self.present = present
+        self.status_ok = True
         self.posted: list[bytes] = []
         self.pages = [self.jpeg]
         self.app = web.Application()
@@ -736,6 +737,8 @@ class _FakeScanner:
         )
 
     async def status(self, request):
+        if not self.status_ok:
+            return self._web.Response(status=500)
         return self._web.Response(body=(ESCL_FIX / "status_idle.xml").read_bytes())
 
     async def create(self, request):
@@ -829,3 +832,51 @@ async def test_scan_info_skips_printer_checks(scanner, tmp_path):
 def test_scan_flags_conflict_with_print():
     with pytest.raises(SystemExit):
         rc.parse_args(["--printer", "x", "--scan-info", "--print"])
+
+
+async def test_scan_info_removes_stale_status_xml(scanner, tmp_path):
+    fake, host = await scanner()
+    fake.status_ok = False
+    (tmp_path / "escl_status.xml").write_bytes(b"old")
+    code = await rc.run(
+        rc.parse_args(
+            ["--printer", host, "--scan-info", "--json", str(tmp_path / "r.json")]
+        )
+    )
+    assert code == 0
+    assert not (tmp_path / "escl_status.xml").exists()
+
+
+async def test_scan_flag_prints_escl_diagnostics(scanner, tmp_path, capsys):
+    _, host = await scanner()
+    code = await rc.run(
+        rc.parse_args(["--printer", host, "--scan", "--json", str(tmp_path / "r.json")])
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "ScanJobs -> HTTP 201" in out
+    assert "Location: /eSCL/ScanJobs/j1" in out
+    assert "NextDocument -> HTTP 200" in out
+    assert f"http://{host}/eSCL" in out
+
+
+def test_load_escl_does_not_shadow_top_level_names():
+    import sys
+
+    path_before = list(sys.path)
+    sys.modules.pop("escl", None)
+    escl = rc.load_escl()
+    assert escl is not None
+    assert hasattr(escl.client, "EsclClient")
+    assert hasattr(escl.parse, "parse_status")
+    assert "escl" not in sys.modules
+    assert sys.path == path_before
+
+
+def test_help_mentions_scan_info_json_and_ha(capsys):
+    with pytest.raises(SystemExit):
+        rc.parse_args(["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "--scan-info" in out
+    assert "klasör" in out
+    assert "yok sayılır" in out

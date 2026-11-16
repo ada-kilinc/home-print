@@ -53,10 +53,10 @@ async def setup_entry(hass, entry=None):
     return entry
 
 
-async def setup_scanner_entry(hass, tmp_path, mock_find_scanner, **options):
+async def setup_scanner_entry(hass, tmp_path, mock_find_scanner, caps=None, **options):
     """Set up an entry whose scanner exists and archives into ``tmp_path``."""
     hass.config.media_dirs = {"local": str(tmp_path / "media")}
-    mock_find_scanner.return_value = URL
+    mock_find_scanner.return_value = (URL, caps or CAPS)
     return await setup_entry(hass, make_entry(**options))
 
 

@@ -25,10 +25,16 @@ from custom_components.home_print.escl.parse import parse_capabilities
 FIX = Path(__file__).parent.parent / "fixtures" / "escl"
 CAPS_XML = (FIX / "hp_capabilities_platen.xml").read_bytes()
 SETTINGS = ScanSettings("platen", "color", 300, "image/jpeg")
+ADF_CAPS_XML = (FIX / "hp_capabilities_adf.xml").read_bytes()
+ADF = ScanSettings("adf", "color", 300, "image/jpeg")
 
 
 class FakeScanner:
-    """Scripted fake: ``pages`` is a list of status ints or bytes per NextDocument."""
+    """Scripted fake: ``pages`` is a list of status ints or bytes per NextDocument.
+
+    ``create`` is the ScanJobs status, or a list of statuses for successive
+    POSTs (201 once the list runs out).
+    """
 
     def __init__(self, pages, *, create=201, location="/eSCL/ScanJobs/abc") -> None:
         self.pages = list(pages)
@@ -37,28 +43,39 @@ class FakeScanner:
         self.deleted: list[str] = []
         self.posted: list[bytes] = []
         self.next_calls = 0
+        self.next_paths: list[str] = []
         self.caps_body = CAPS_XML
+        self.status_body = (FIX / "status_idle.xml").read_bytes()
+        self.page_delay = 0.0
+        self.stall_body = False
         self.app = web.Application()
         self.app.router.add_get("/eSCL/ScannerCapabilities", self.h_caps)
         self.app.router.add_get("/eSCL/ScannerStatus", self.h_status)
         self.app.router.add_post("/eSCL/ScanJobs", self.h_create)
-        self.app.router.add_get("/eSCL/ScanJobs/abc/NextDocument", self.h_next)
-        self.app.router.add_delete("/eSCL/ScanJobs/abc", self.h_delete)
+        self.app.router.add_get("/{job:.*}/NextDocument", self.h_next)
+        self.app.router.add_delete("/{job:.*}", self.h_delete)
 
     async def h_caps(self, request):
         return web.Response(body=self.caps_body)
 
     async def h_status(self, request):
-        return web.Response(body=(FIX / "status_idle.xml").read_bytes())
+        return web.Response(body=self.status_body)
 
     async def h_create(self, request):
         self.posted.append(await request.read())
-        if self.create != 201:
-            return web.Response(status=self.create)
-        return web.Response(status=201, headers={"Location": self.location})
+        if isinstance(self.create, list):
+            status = self.create.pop(0) if self.create else 201
+        else:
+            status = self.create
+        if status == 201 or 300 <= status < 400:
+            return web.Response(status=status, headers={"Location": self.location})
+        return web.Response(status=status)
 
     async def h_next(self, request):
         self.next_calls += 1
+        self.next_paths.append(request.path_qs)
+        if self.page_delay:
+            await asyncio.sleep(self.page_delay)
         # "drop" is sticky: aiohttp retries idempotent GETs after a disconnect.
         if self.pages and self.pages[0] == "drop":
             item = "drop"
@@ -70,6 +87,13 @@ class FakeScanner:
             raise web.HTTPInternalServerError
         if isinstance(item, int):
             return web.Response(status=item)
+        if self.stall_body:
+            resp = web.StreamResponse(headers={"Content-Type": "image/jpeg"})
+            resp.content_length = len(item) + 100
+            await resp.prepare(request)
+            await resp.write(item)
+            await asyncio.sleep(5)
+            return resp
         return web.Response(body=item, content_type="image/jpeg")
 
     async def h_delete(self, request):
@@ -116,10 +140,11 @@ async def test_capabilities_and_status(env):
 
 async def test_scan_two_pages_then_404(env):
     fake = FakeScanner([b"p1", b"p2", 404])
+    fake.caps_body = ADF_CAPS_XML
     client, _ = await env(fake)
-    caps = parse_capabilities(CAPS_XML)
+    caps = parse_capabilities(ADF_CAPS_XML)
     seen: list[int] = []
-    pages = await client.scan(caps, SETTINGS, on_page=seen.append)
+    pages = await client.scan(caps, ADF, on_page=seen.append)
     assert pages == [b"p1", b"p2"]
     assert seen == [1, 2]
     assert fake.deleted == ["/eSCL/ScanJobs/abc"]
@@ -145,7 +170,7 @@ async def test_scan_first_page_409_raises_adf_empty(env):
 async def test_scan_409_after_page_returns_pages(env):
     fake = FakeScanner([b"p1", 409])
     client, _ = await env(fake)
-    pages = await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+    pages = await client.scan(parse_capabilities(ADF_CAPS_XML), ADF)
     assert pages == [b"p1"]
     assert fake.deleted == ["/eSCL/ScanJobs/abc"]
 
@@ -159,15 +184,121 @@ async def test_scan_first_page_404_raises_bad_response(env):
     assert fake.deleted == ["/eSCL/ScanJobs/abc"]
 
 
-async def test_scan_rejects_foreign_location(env):
+async def test_scan_foreign_location_rewritten_to_base_origin(env):
     fake = FakeScanner([b"p1"])
     client, server = await env(fake)
-    fake.location = f"http://127.0.0.1:{server.port + 1}/eSCL/ScanJobs/abc"
+    fake.location = f"http://192.0.2.1:{server.port + 1}/eSCL/ScanJobs/abc"
+    pages = await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+    assert pages == [b"p1"]
+    assert fake.next_paths == ["/eSCL/ScanJobs/abc/NextDocument"]
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+@pytest.mark.parametrize(
+    "location", ["/other/ScanJobs/abc", "/eSCL/../admin/abc", "/eSCLx/abc"]
+)
+async def test_scan_location_outside_base_path_rejected_and_deleted(env, location):
+    fake = FakeScanner([b"p1"], location=location)
+    client, _ = await env(fake)
     with pytest.raises(EsclError) as err:
         await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
     assert err.value.code == "bad_response"
     assert fake.next_calls == 0
-    assert fake.deleted == []
+    assert len(fake.deleted) == 1
+
+
+async def test_scan_location_query_is_kept(env):
+    fake = FakeScanner([b"p1"], location="/eSCL/ScanJobs/abc?s=1")
+    client, _ = await env(fake)
+    assert await client.scan(parse_capabilities(CAPS_XML), SETTINGS) == [b"p1"]
+    assert fake.next_paths == ["/eSCL/ScanJobs/abc/NextDocument?s=1"]
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+async def test_scan_create_redirect_is_not_followed(env):
+    fake = FakeScanner([b"p1"], create=307, location="/eSCL/ScanJobs")
+    client, _ = await env(fake)
+    with pytest.raises(EsclError) as err:
+        await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+    assert err.value.code == "bad_response"
+    assert len(fake.posted) == 1
+    assert fake.next_calls == 0
+
+
+async def test_create_job_503_retried_until_ready(env):
+    fake = FakeScanner([b"p1"], create=[503, 503])
+    client, _ = await env(fake)
+    assert await client.scan(parse_capabilities(CAPS_XML), SETTINGS) == [b"p1"]
+    assert len(fake.posted) == 3
+
+
+async def test_create_job_409_adf_empty(env):
+    fake = FakeScanner([], create=409)  # status_idle: ScannerAdfEmpty
+    client, _ = await env(fake)
+    with pytest.raises(AdfEmpty):
+        await client.scan(parse_capabilities(ADF_CAPS_XML), ADF)
+
+
+async def test_create_job_409_adf_loaded_is_busy(env):
+    fake = FakeScanner([], create=409)
+    fake.status_body = (FIX / "status_adf_loaded.xml").read_bytes()
+    client, _ = await env(fake)
+    with pytest.raises(ScannerBusy):
+        await client.scan(parse_capabilities(ADF_CAPS_XML), ADF)
+
+
+async def test_create_job_409_platen_is_busy(env):
+    fake = FakeScanner([], create=409)
+    client, _ = await env(fake)
+    with pytest.raises(ScannerBusy):
+        await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+
+
+async def test_platen_stops_after_first_page(env):
+    fake = FakeScanner([b"p1", b"p2", 404])
+    client, _ = await env(fake)
+    assert await client.scan(parse_capabilities(CAPS_XML), SETTINGS) == [b"p1"]
+    assert fake.next_calls == 1
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+async def test_adf_reads_until_404(env):
+    fake = FakeScanner([b"p1", b"p2", b"p3", 404])
+    client, _ = await env(fake)
+    pages = await client.scan(parse_capabilities(ADF_CAPS_XML), ADF)
+    assert pages == [b"p1", b"p2", b"p3"]
+    assert fake.next_calls == 4
+
+
+async def test_page_headers_may_take_longer_than_body_timeout(env, monkeypatch):
+    monkeypatch.setattr(client_mod, "BODY_READ_TIMEOUT", 0.1)
+    fake = FakeScanner([b"p1"])
+    fake.page_delay = 0.3
+    client, _ = await env(fake)
+    assert await client.scan(parse_capabilities(CAPS_XML), SETTINGS) == [b"p1"]
+
+
+async def test_stalled_page_body_times_out(env, monkeypatch):
+    monkeypatch.setattr(client_mod, "BODY_READ_TIMEOUT", 0.1)
+    fake = FakeScanner([b"p1"])
+    fake.stall_body = True
+    client, _ = await env(fake)
+    with pytest.raises(ScannerUnavailable):
+        await asyncio.wait_for(
+            client.scan(parse_capabilities(CAPS_XML), SETTINGS), timeout=2
+        )
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+async def test_page_wait_includes_503_retries(env, monkeypatch):
+    monkeypatch.setattr(client_mod, "PAGE_WAIT", 0.2)
+    fake = FakeScanner([503] * 10000)
+    client, _ = await env(fake)
+    with pytest.raises(ScannerUnavailable):
+        await asyncio.wait_for(
+            client.scan(parse_capabilities(CAPS_XML), SETTINGS), timeout=2
+        )
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
 
 
 async def test_scan_cancel_mid_wait_still_deletes(env):
@@ -204,7 +335,8 @@ async def test_scan_relative_and_absolute_location(env, kind):
     assert fake.deleted == ["/eSCL/ScanJobs/abc"]
 
 
-async def test_create_job_503_raises_busy(env):
+async def test_create_job_503_raises_busy(env, monkeypatch):
+    monkeypatch.setattr(client_mod, "CREATE_BUSY_WAIT", 0.1)
     fake = FakeScanner([], create=503)
     client, _ = await env(fake)
     with pytest.raises(ScannerBusy) as err:
@@ -216,8 +348,11 @@ async def test_find_scanner_https_then_http(env):
     fake = FakeScanner([])
     _, server = await env(fake)
     async with aiohttp.ClientSession() as session:
-        base = await find_scanner(session, f"127.0.0.1:{server.port}", True, False)
+        found = await find_scanner(session, f"127.0.0.1:{server.port}", True, False)
+    assert found is not None
+    base, caps = found
     assert base == f"http://127.0.0.1:{server.port}/eSCL"
+    assert "platen" in caps.sources
 
 
 async def test_find_scanner_none(env):
@@ -229,6 +364,69 @@ async def test_find_scanner_none(env):
             await find_scanner(session, f"127.0.0.1:{server.port}", False, False)
             is None
         )
+
+
+async def test_find_scanner_uses_url_after_redirect(env):
+    fake = FakeScanner([])
+    _, target = await env(fake)
+    final = target.make_url("/eSCL/ScannerCapabilities")
+
+    async def redirect(request):
+        raise web.HTTPFound(str(final))
+
+    app = web.Application()
+    app.router.add_get("/eSCL/ScannerCapabilities", redirect)
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        async with aiohttp.ClientSession() as session:
+            found = await find_scanner(
+                session, f"127.0.0.1:{server.port}", False, False
+            )
+    finally:
+        await server.close()
+    assert found is not None
+    assert found[0] == f"http://127.0.0.1:{target.port}/eSCL"
+
+
+@pytest.mark.parametrize(
+    ("ssl", "expected"),
+    [
+        (True, ["https://h/eSCL", "http://h/eSCL"]),
+        (False, ["http://h/eSCL", "https://h/eSCL"]),
+    ],
+)
+async def test_find_scanner_candidate_order(monkeypatch, ssl, expected):
+    tried = []
+
+    async def probe(session, base, verify_ssl, timeout):
+        tried.append((base, verify_ssl, timeout))
+        raise ScannerUnavailable()
+
+    monkeypatch.setattr(client_mod, "_probe", probe)
+    assert await find_scanner(None, "h", ssl, False, timeout=5) is None
+    assert tried == [(url, False, 5) for url in expected]
+
+
+@pytest.mark.parametrize(
+    ("host", "url"),
+    [
+        ("fe80::1", "http://[fe80::1]/eSCL"),
+        ("[fe80::1]", "http://[fe80::1]/eSCL"),
+        ("192.168.1.20", "http://192.168.1.20/eSCL"),
+        ("printer.local", "http://printer.local/eSCL"),
+    ],
+)
+async def test_find_scanner_brackets_ipv6(monkeypatch, host, url):
+    tried = []
+
+    async def probe(session, base, verify_ssl, timeout):
+        tried.append(base)
+        raise ScannerUnavailable()
+
+    monkeypatch.setattr(client_mod, "_probe", probe)
+    await find_scanner(None, host, False, True)
+    assert tried[0] == url
 
 
 async def test_oversized_response_rejected(env, monkeypatch):

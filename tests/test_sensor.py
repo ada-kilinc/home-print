@@ -25,7 +25,7 @@ from custom_components.home_print.const import (
 from custom_components.home_print.escl.models import ScannerStatus
 from custom_components.home_print.models import LastJob
 
-from .common import URL
+from .common import CAPS, URL
 
 UUID = "0a1b2c3d-4e5f-6789-abcd-0123456789ef"
 
@@ -219,7 +219,7 @@ async def test_marker_sensor_category_and_state_class(hass, mock_client):
 async def test_status_sensor_states(
     hass, mock_client, mock_escl, mock_find_scanner, state, adf, expected
 ):
-    mock_find_scanner.return_value = URL
+    mock_find_scanner.return_value = (URL, CAPS)
     mock_escl.client.status.return_value = ScannerStatus(state, adf)
     await setup_entry(hass)
     sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
@@ -230,7 +230,7 @@ async def test_status_sensor_states(
 async def test_status_sensor_unavailable_without_status(
     hass, mock_client, mock_escl, mock_find_scanner
 ):
-    mock_find_scanner.return_value = URL
+    mock_find_scanner.return_value = (URL, CAPS)
     mock_escl.client.status.side_effect = TimeoutError
     await setup_entry(hass)
     sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
