@@ -284,9 +284,29 @@ def test_simplex_ignores_sheet_back():
     } == {(1, 1)}
 
 
-def test_unknown_sheet_back_raises():
-    with pytest.raises(ValueError):
-        _encode([_white(SMALL)], SMALL, duplex=True, sheet_back="sideways")
+def test_unknown_sheet_back_falls_back_to_normal(caplog):
+    pages = [_noise(SMALL, 1), _noise(SMALL, 2)]
+    with caplog.at_level("WARNING"):
+        data = _encode(pages, SMALL, duplex=True, sheet_back="sideways")
+    assert "sideways" in caplog.text
+    decoded = pwg_decoder.decode(data)
+    # "normal": back sides go as they are, with an identity transform.
+    assert [p.image.tobytes() for p in decoded] == [p.tobytes() for p in pages]
+    assert {
+        (p.header["CrossFeedTransform"], p.header["FeedTransform"]) for p in decoded
+    } == {(1, 1)}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("x" * 70, "x" * 63),  # over 63 bytes: truncated
+        ("iso_a4_210x297mm\u00e9", ""),  # not ASCII: left blank
+    ],
+)
+def test_page_size_name_never_breaks_the_header(name, expected):
+    (page,) = pwg_decoder.decode(_encode([_white(SMALL)], SMALL, page_size_name=name))
+    assert page.header["PageSizeName"] == expected
 
 
 def test_page_size_mismatch_raises():

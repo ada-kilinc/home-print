@@ -9,8 +9,10 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from PIL import Image
+
 from ..models import Capabilities, PrintOptions
-from .errors import InvalidDocument, NoConversionRoute, TooManyPages
+from .errors import InvalidDocument, NoConversionRoute, OutputTooLarge, TooManyPages
 from .pwg import encode_pwg
 from .render import (
     DEFAULT_DPI,
@@ -25,15 +27,22 @@ from .render import (
     parse_page_ranges,
     png_to_jpeg,
 )
-from .urf import encode_urf
+from .urf import DM_SHEET_BACK, encode_urf
 
 __all__ = [
+    "MAX_OUTPUT_BYTES",
     "NoConversionRoute",
+    "OutputTooLarge",
     "PreparedJob",
     "choose_target",
     "is_gray",
     "prepare",
 ]
+
+# Most converted bytes we hold for one job. A colour scan is ~17 MB per PWG
+# page, so a long colour job would otherwise exhaust a small host's RAM.
+MAX_OUTPUT_BYTES = 150 * 1024 * 1024
+_MB = 1024 * 1024
 
 PWG = "image/pwg-raster"
 URF = "image/urf"
@@ -56,13 +65,16 @@ class PreparedJob:
     """What to send: the bytes, their format and how to treat page-ranges.
 
     ``page_count`` is the number of pages converted (before any blank duplex
-    back page); ``None`` when the file is sent as it came.
+    back page); ``pages_sent`` also counts that blank page. Both are ``None``
+    when the file is sent as it came. Converted ``data`` is the one buffer
+    it was built in (a ``bytearray``), not copied again into ``bytes``.
     """
 
-    data: bytes
+    data: bytes | bytearray
     document_format: str
     send_page_ranges: bool
     page_count: int | None
+    pages_sent: int | None = None
 
 
 def is_gray(options: PrintOptions) -> bool:
@@ -132,7 +144,12 @@ def _urf_resolution(caps: Capabilities) -> int:
 def _urf_dm(caps: Capabilities) -> str | None:
     if caps.raster is None:
         return None
-    modes = sorted(k.upper() for k in caps.raster.urf if _URF_DM.match(k))
+    # A DM value we have no back-side rule for is treated as not reported.
+    modes = sorted(
+        k.upper()
+        for k in caps.raster.urf
+        if _URF_DM.match(k) and k.upper() in DM_SHEET_BACK
+    )
     return modes[0] if modes else None
 
 
@@ -149,6 +166,16 @@ def _jpeg_box(caps: Capabilities, gray: bool) -> tuple[int, int]:
         min(longest, (limits.max_x if limits else None) or longest),
         min(longest, (limits.max_y if limits else None) or longest),
     )
+
+
+def _collect(chunks: Iterator[bytes]) -> bytearray:
+    """Gather encoder output into one buffer, within ``MAX_OUTPUT_BYTES``."""
+    out = bytearray()
+    for chunk in chunks:
+        if len(out) + len(chunk) > MAX_OUTPUT_BYTES:
+            raise OutputTooLarge(MAX_OUTPUT_BYTES // _MB)
+        out += chunk
+    return out
 
 
 def _selected_pages(
@@ -176,7 +203,8 @@ def prepare(
     over the printer's limits, and leaves page-ranges to the printer.
     Otherwise the selected pages are rendered and encoded one at a time and
     page-ranges must not be sent. Raises ``NoConversionRoute``,
-    ``InvalidDocument`` or ``TooManyPages``.
+    ``InvalidDocument``, ``TooManyPages`` or, as soon as the converted bytes
+    pass ``MAX_OUTPUT_BYTES``, ``OutputTooLarge``.
     """
     gray = is_gray(options)
     target = choose_target(src_fmt, caps, gray=gray)
@@ -194,38 +222,56 @@ def prepare(
             JPEG,
             send_page_ranges=False,
             page_count=selected,
+            pages_sent=selected,
         )
 
     duplex = options.sides != "one-sided"
     tumble = options.sides == "two-sided-short-edge"
     media = caps.media
-    chunks: Iterator[bytes]
-    if target == PWG:
-        resolutions = caps.raster.pwg_resolutions if caps.raster else ()
-        spec = page_spec_for(media, _closest_to_default(resolutions), gray)
-        chunks = encode_pwg(
-            iter_pages(data, src_fmt, spec, pages, max_pages),
-            spec,
-            duplex=duplex,
-            tumble=tumble,
-            sheet_back=caps.raster.pwg_sheet_back if caps.raster else None,
-            copies=1,
-            page_count=selected,
-            page_size_name=media.default_name if media else "",
-        )
-    elif target == URF:
-        spec = page_spec_for(media, _urf_resolution(caps), gray)
-        chunks = encode_urf(
-            iter_pages(data, src_fmt, spec, pages, max_pages),
-            spec,
-            duplex=duplex,
-            tumble=tumble,
-            copies=1,
-            page_count=selected,
-            dm=_urf_dm(caps),
-        )
-    else:  # pragma: no cover - _TARGETS only lists the formats handled above
-        raise InvalidDocument("unsupported_format")
+    page_iter: Iterator[Image.Image] | None = None
+    chunks: Iterator[bytes] | None = None
+    try:
+        if target == PWG:
+            resolutions = caps.raster.pwg_resolutions if caps.raster else ()
+            spec = page_spec_for(media, _closest_to_default(resolutions), gray)
+            page_iter = iter_pages(data, src_fmt, spec, pages, max_pages)
+            chunks = encode_pwg(
+                page_iter,
+                spec,
+                duplex=duplex,
+                tumble=tumble,
+                sheet_back=caps.raster.pwg_sheet_back if caps.raster else None,
+                copies=1,
+                page_count=selected,
+                page_size_name=media.default_name if media else "",
+            )
+        elif target == URF:
+            spec = page_spec_for(media, _urf_resolution(caps), gray)
+            page_iter = iter_pages(data, src_fmt, spec, pages, max_pages)
+            chunks = encode_urf(
+                page_iter,
+                spec,
+                duplex=duplex,
+                tumble=tumble,
+                copies=1,
+                page_count=selected,
+                dm=_urf_dm(caps),
+            )
+        else:  # pragma: no cover - _TARGETS only lists the formats handled above
+            raise InvalidDocument("unsupported_format")
+        output = _collect(chunks)
+    finally:
+        # Close here, in the executor thread: left to the GC, a half-read
+        # PDF page generator would be finalized wherever its last reference
+        # dies (maybe the event loop, which would then wait on the PDFium
+        # lock).
+        for gen in (chunks, page_iter):
+            if (close := getattr(gen, "close", None)) is not None:
+                close()
     return PreparedJob(
-        b"".join(chunks), target, send_page_ranges=False, page_count=selected
+        output,
+        target,
+        send_page_ranges=False,
+        page_count=selected,
+        pages_sent=selected + (1 if duplex and selected % 2 else 0),
     )

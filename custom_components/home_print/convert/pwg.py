@@ -13,6 +13,7 @@ the header transform fields are set to match, as PWG 5102.4 requires.
 
 from __future__ import annotations
 
+import logging
 import struct
 from collections.abc import Iterable, Iterator, Sized
 
@@ -20,6 +21,8 @@ import numpy as np
 from PIL import Image
 
 from .render import ROTATED_INFO_KEY, PageSpec
+
+_LOGGER = logging.getLogger(__name__)
 
 SYNC = b"RaS2"
 HEADER_SIZE = 1796
@@ -145,10 +148,17 @@ def encode_bitmap(
 
 
 def _cstr(value: str) -> bytes:
-    data = value.encode("ascii")
-    if len(data) > 63:
-        raise ValueError(f"header string too long: {value!r}")
-    return data.ljust(64, b"\0")
+    """A 64-byte NUL-padded header string.
+
+    The printer's own value goes here, so a bad one must not fail the job:
+    non-ASCII is left blank (a mangled name is worse than none) and anything
+    over 63 bytes is cut.
+    """
+    try:
+        data = value.encode("ascii")
+    except UnicodeEncodeError:
+        data = b""
+    return data[:63].ljust(64, b"\0")
 
 
 def _header(
@@ -233,14 +243,20 @@ def encode_pwg(
     ``page_count`` or ``len(pages)``; when neither is known it is 0.
 
     Duplex back sides (odd 0-based indexes) follow ``sheet_back`` per PWG
-    5102.4 Table 9 (``None`` = ``normal``). A page whose content was turned
-    90° to fit (``home_print_rotated`` in its ``info``) swaps the binding
-    edge, so it uses tumble XOR rotated (Ruling O). That is the page's header
-    Tumble too, so printers that transform back sides themselves agree.
+    5102.4 Table 9 (``None`` or an unknown keyword = ``normal``, logged). A
+    page whose content was turned 90° to fit (``home_print_rotated`` in its
+    ``info``) swaps the binding edge, so it uses tumble XOR rotated (Ruling
+    O). That is the page's header Tumble too, so printers that transform back
+    sides themselves agree.
     """
     sheet_back = sheet_back or "normal"
-    if duplex and (sheet_back, False) not in _BACK_TRANSFORMS:
-        raise ValueError(f"unknown pwg-raster-document-sheet-back: {sheet_back!r}")
+    if (sheet_back, False) not in _BACK_TRANSFORMS:
+        if duplex:
+            _LOGGER.warning(
+                "Unknown pwg-raster-document-sheet-back %r; using 'normal'",
+                sheet_back,
+            )
+        sheet_back = "normal"
     if page_count is None and isinstance(pages, Sized):
         page_count = len(pages)
     total = page_count or 0

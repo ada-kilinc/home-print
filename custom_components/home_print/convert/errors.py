@@ -27,3 +27,14 @@ class TooManyPages(ConvertError):
 
 class NoConversionRoute(ConvertError):
     """The printer takes neither the document's format nor any we can make."""
+
+
+class OutputTooLarge(ConvertError):
+    """The converted document grew past the output budget.
+
+    Raised while pages are still being produced; ``limit_mb`` is the budget.
+    """
+
+    def __init__(self, limit_mb: int) -> None:
+        super().__init__(f"converted output exceeds {limit_mb} MB")
+        self.limit_mb = limit_mb
