@@ -47,6 +47,16 @@ const REASONS = [
   [["marker-supply-empty", "toner-empty"], "reason_ink_empty"],
   [["door-open", "cover-open"], "reason_cover_open"],
 ];
+// Housekeeping keywords printers send all the time; never worth showing.
+const NOISE_REASONS = [
+  "none",
+  "job-printing",
+  "job-incoming",
+  "job-queued",
+  "processing-to-stop-point",
+  "job-data-insufficient",
+  "job-completed-successfully",
+];
 const PRINTER_ERROR_LIMIT = 3;
 const KNOWN_STATES = ["idle", "processing", "stopped"];
 
@@ -96,6 +106,9 @@ const STRINGS = {
     upload_failed: "Yazdırılamadı (HTTP {status}).",
     job_printing: "Yazdırılıyor…",
     job_held: "Yazıcıda bekliyor…",
+    job_pausing: "Yazıcı bekliyor…",
+    job_pausing_duplex:
+      "Yazıcı bekliyor… Çift taraflı baskıda arka yüz öncesi mürekkebin kuruması beklenir.",
     job_stopped: "Yazıcı durdu, yazıcıya bak.",
     job_completed: "Tamamlandı ✓",
     job_canceled: "İş iptal edildi.",
@@ -158,6 +171,9 @@ const STRINGS = {
     upload_failed: "Printing failed (HTTP {status}).",
     job_printing: "Printing…",
     job_held: "Waiting at the printer…",
+    job_pausing: "The printer is pausing…",
+    job_pausing_duplex:
+      "The printer is pausing… With two-sided printing it waits for the ink to dry before the back side.",
     job_stopped: "The printer has stopped. Check the printer.",
     job_completed: "Done ✓",
     job_canceled: "The job was canceled.",
@@ -246,20 +262,41 @@ function isAuthError(err, hass) {
   return ["auth", "token", "401"].some((word) => text.includes(word));
 }
 
-function jobLabel(lang, status) {
-  const state = status?.state;
+// Raw IPP keywords the card has no wording for, for the muted detail line.
+function visibleRawReasons(reasons) {
+  const raw = Array.isArray(reasons) ? reasons.map((r) => String(r ?? "")) : [];
+  return [
+    ...new Set(
+      raw.filter((r) => r && !NOISE_REASONS.includes(r) && reasonLabel("en", r) === null),
+    ),
+  ];
+}
+
+function knownReasons(lang, status) {
   const raw = Array.isArray(status?.reasons) ? status.reasons : [];
-  const reasons = [...new Set(raw.map((reason) => reasonLabel(lang, reason)).filter(Boolean))];
+  return [...new Set(raw.map((reason) => reasonLabel(lang, reason)).filter(Boolean))];
+}
+
+// A stopped job with a known problem is an error; stopped/held without one is
+// usually the printer pausing (e.g. letting ink dry between duplex sides).
+function isProblemState(status, lang = "en") {
+  return status?.state === "stopped" && knownReasons(lang, status).length > 0;
+}
+
+function jobLabel(lang, status, { twoSided = false } = {}) {
+  const state = status?.state;
+  const reasons = knownReasons(lang, status);
   const withReasons = (key) =>
     t(lang, key) + (reasons.length ? t(lang, "job_reasons", { reasons: reasons.join(", ") }) : "");
+  const pausing = () => t(lang, twoSided ? "job_pausing_duplex" : "job_pausing");
   switch (state) {
     case "pending":
     case "processing":
       return t(lang, "job_printing");
     case "held":
-      return t(lang, "job_held");
+      return reasons.length ? withReasons("job_held") : pausing();
     case "stopped":
-      return withReasons("job_stopped");
+      return reasons.length ? withReasons("job_stopped") : pausing();
     case "completed":
       return t(lang, "job_completed");
     case "canceled":
@@ -412,6 +449,11 @@ const STYLE = `
   .print:disabled { opacity: 0.5; cursor: default; }
   .message { min-height: 1.2em; overflow-wrap: anywhere; }
   .message.error { color: var(--error-color); }
+  .detail {
+    color: var(--secondary-text-color);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
   .last {
     color: var(--secondary-text-color);
     font-size: 0.9em;
@@ -466,6 +508,7 @@ const TEMPLATE = `
       </label>
       <button type="button" class="print" data-role="print" data-t="print"></button>
       <div class="message" data-role="message" aria-live="polite"></div>
+      <div class="detail" data-role="detail" hidden></div>
       <div class="last" data-role="last"></div>
     </div>
   </ha-card>
@@ -697,6 +740,7 @@ class HomePrintCard extends HTMLElement {
       started: Date.now(),
       printerErrors: 0,
       troubleSince: null,
+      twoSided: String(form.get("sides") ?? printer.defaults?.sides ?? "").startsWith("two-sided"),
     };
     this._setMessage(jobLabel(lang, { state: "pending" }));
     this._schedulePoll();
@@ -774,9 +818,13 @@ class HomePrintCard extends HTMLElement {
     if (this._job !== job) return;
     job.printerErrors = 0;
     job.troubleSince = null;
-    const label = jobLabel(lang, status);
+    const label = jobLabel(lang, status, { twoSided: job.twoSided });
     if (RUNNING_JOB_STATES.includes(status?.state)) {
-      this._setMessage(label, status.state === "stopped" ? "error" : "info");
+      this._setMessage(
+        label,
+        isProblemState(status, lang) ? "error" : "info",
+        visibleRawReasons(status.reasons).join(", "),
+      );
       if (this.isConnected) this._schedulePoll();
       return;
     }
@@ -796,8 +844,8 @@ class HomePrintCard extends HTMLElement {
     this._setMessage(text, kind);
   }
 
-  _setMessage(text, kind = "info") {
-    this._message = { text, kind };
+  _setMessage(text, kind = "info", detail = "") {
+    this._message = { text, kind, detail };
     this._update();
   }
 
@@ -937,6 +985,9 @@ class HomePrintCard extends HTMLElement {
     }
     message.textContent = shown?.text ?? "";
     message.className = `message ${shown?.kind ?? ""}`.trim();
+    const detail = this._role("detail");
+    detail.textContent = shown?.detail ?? "";
+    detail.hidden = !shown?.detail;
   }
 
   _renderInk(lang, printer) {
@@ -1012,6 +1063,8 @@ HomePrintCard.helpers = Object.freeze({
   buildForm,
   jobLabel,
   reasonLabel,
+  visibleRawReasons,
+  isProblemState,
 });
 
 if (!customElements.get(CARD_TYPE)) {

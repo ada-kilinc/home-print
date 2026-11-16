@@ -598,6 +598,138 @@ describe("printing", () => {
   });
 });
 
+describe("job paused or stopped", () => {
+  const DUPLEX_TR =
+    "Yazıcı bekliyor… Çift taraflı baskıda arka yüz öncesi mürekkebin kuruması beklenir.";
+  const DUPLEX_EN =
+    "The printer is pausing… With two-sided printing it waits for the ink to dry before the back side.";
+
+  async function startJob(jobs, { language = "tr", duplex = true } = {}) {
+    const hass = makeHass({ jobs, language });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    setInput(card, "duplex", duplex);
+    await clickPrint(card);
+    return { hass, card };
+  }
+  const isError = (card) => role(card, "message").classList.contains("error");
+
+  it("shows a neutral duplex text for a two-sided stopped job without reasons, then Done", async () => {
+    const { hass, card } = await startJob([
+      { job_id: 42, state: "stopped", reasons: [] },
+      { job_id: 42, state: "processing", reasons: [] },
+      { job_id: 42, state: "completed", reasons: [] },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe(DUPLEX_TR);
+    expect(isError(card)).toBe(false);
+    expect(role(card, "print").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Yazdırılıyor…");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Tamamlandı ✓");
+    expect(hass.calls.filter((m) => m.type === "home_print/job")).toHaveLength(3);
+  });
+
+  it("has the English duplex text", async () => {
+    const { card } = await startJob([{ job_id: 42, state: "stopped", reasons: ["none"] }], {
+      language: "en",
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe(DUPLEX_EN);
+    expect(isError(card)).toBe(false);
+  });
+
+  it("shows the short pause text for a one-sided stopped job", async () => {
+    const { card } = await startJob([{ job_id: 42, state: "stopped", reasons: [] }], {
+      duplex: false,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Yazıcı bekliyor…");
+    expect(isError(card)).toBe(false);
+  });
+
+  it("has the short English pause text", async () => {
+    const { card } = await startJob([{ job_id: 42, state: "stopped", reasons: [] }], {
+      language: "en",
+      duplex: false,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("The printer is pausing…");
+  });
+
+  it("treats a held job without reasons as a neutral pause", async () => {
+    const { card } = await startJob([{ job_id: 42, state: "held", reasons: [] }]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe(DUPLEX_TR);
+    expect(isError(card)).toBe(false);
+  });
+
+  it("keeps the error style for a stopped job with a known problem, then clears it", async () => {
+    const { card } = await startJob([
+      { job_id: 42, state: "stopped", reasons: ["media-empty-error"] },
+      { job_id: 42, state: "processing", reasons: [] },
+      { job_id: 42, state: "completed", reasons: [] },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toContain("Kâğıt bitti");
+    expect(isError(card)).toBe(true);
+    expect(role(card, "print").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(isError(card)).toBe(false);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Tamamlandı ✓");
+    expect(isError(card)).toBe(false);
+  });
+
+  it("shows unmapped reasons in a muted secondary line and hides noise", async () => {
+    const { card } = await startJob([
+      {
+        job_id: 42,
+        state: "processing",
+        reasons: ["com.hp.dry-time", "job-printing", "none", "job-incoming", "vendor-x"],
+      },
+      { job_id: 42, state: "completed", reasons: ["job-completed-successfully", "com.hp.dry-time"] },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "detail")).toBe("com.hp.dry-time, vendor-x");
+    expect(text(card, "message")).toBe("Yazdırılıyor…");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Tamamlandı ✓");
+    expect(text(card, "detail")).toBe("");
+  });
+
+  it("does not repeat mapped reasons in the secondary line", async () => {
+    const { card } = await startJob([
+      { job_id: 42, state: "stopped", reasons: ["media-empty-error", "document-format-error"] },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "detail")).toBe("document-format-error");
+  });
+
+  it("visibleRawReasons drops noise, mapped and duplicate keywords", () => {
+    const f = HomePrintCard.helpers.visibleRawReasons;
+    expect(f(["none", "job-printing", "job-incoming", "job-queued"])).toEqual([]);
+    expect(
+      f(["processing-to-stop-point", "job-data-insufficient", "job-completed-successfully"]),
+    ).toEqual([]);
+    expect(f(["com.hp.dry-time", "com.hp.dry-time", "x-y"])).toEqual(["com.hp.dry-time", "x-y"]);
+    expect(f(["media-jam-error", "job-canceled-at-device", "odd"])).toEqual(["odd"]);
+    expect(f(undefined)).toEqual([]);
+  });
+
+  it("jobLabel picks the pause text by state, reasons and sides", () => {
+    const h = HomePrintCard.helpers;
+    expect(h.jobLabel("en", { state: "stopped", reasons: [] })).toBe("The printer is pausing…");
+    expect(h.jobLabel("en", { state: "stopped", reasons: [] }, { twoSided: true })).toBe(DUPLEX_EN);
+    expect(h.jobLabel("tr", { state: "stopped", reasons: ["media-jam"] })).toBe(
+      "Yazıcı durdu, yazıcıya bak. (Kâğıt sıkıştı)",
+    );
+    expect(h.isProblemState({ state: "stopped", reasons: [] }, "en")).toBe(false);
+    expect(h.isProblemState({ state: "stopped", reasons: ["door-open"] }, "en")).toBe(true);
+  });
+});
+
 describe("printer availability", () => {
   it("shows an unreachable printer without errors", async () => {
     const printer = deskjetPrinter({ available: false, state: null });
