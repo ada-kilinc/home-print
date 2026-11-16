@@ -147,6 +147,39 @@ async def test_scan_409_after_page_returns_pages(env):
     client, _ = await env(fake)
     pages = await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
     assert pages == [b"p1"]
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+async def test_scan_first_page_404_raises_bad_response(env):
+    fake = FakeScanner([404])
+    client, _ = await env(fake)
+    with pytest.raises(EsclError) as err:
+        await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+    assert err.value.code == "bad_response"
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+
+
+async def test_scan_rejects_foreign_location(env):
+    fake = FakeScanner([b"p1"])
+    client, server = await env(fake)
+    fake.location = f"http://127.0.0.1:{server.port + 1}/eSCL/ScanJobs/abc"
+    with pytest.raises(EsclError) as err:
+        await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
+    assert err.value.code == "bad_response"
+    assert fake.next_calls == 0
+    assert fake.deleted == []
+
+
+async def test_scan_cancel_mid_wait_still_deletes(env):
+    fake = FakeScanner([503] * 10000)
+    client, _ = await env(fake)
+    task = asyncio.ensure_future(client.scan(parse_capabilities(CAPS_XML), SETTINGS))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.2)
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
 
 
 async def test_scan_deletes_job_on_error(env):

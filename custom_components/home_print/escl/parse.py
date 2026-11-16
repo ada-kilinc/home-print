@@ -9,6 +9,8 @@ from .models import ScannerCaps, ScannerStatus, ScanSettings, SourceCaps
 
 PWG = "http://www.pwg.org/schemas/2010/12/sm"
 SCAN = "http://schemas.hp.com/imaging/escl/2011/05/03"
+ET.register_namespace("pwg", PWG)
+ET.register_namespace("scan", SCAN)
 _NS = {"pwg": PWG, "scan": SCAN}
 
 _COLOR_IN = {"RGB24": "color", "Grayscale8": "gray", "BlackAndWhite1": "bw"}
@@ -113,8 +115,6 @@ def build_settings(caps: ScannerCaps, settings: ScanSettings) -> bytes:
     src = caps.sources.get(settings.source)
     if src is None or settings.color_mode not in _COLOR_OUT:
         raise EsclError("invalid_option")
-    ET.register_namespace("pwg", PWG)
-    ET.register_namespace("scan", SCAN)
     root = ET.Element(f"{{{SCAN}}}ScanSettings")
 
     def add(parent: ET.Element, ns: str, tag: str, text: str) -> ET.Element:

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 
@@ -93,7 +93,11 @@ class EsclClient:
                     raise EsclError("bad_response")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ScannerUnavailable() from err
-        return urljoin(self._base_url + "/", location).rstrip("/")
+        job_url = urljoin(self._base_url + "/", location).rstrip("/")
+        base, job = urlsplit(self._base_url), urlsplit(job_url)
+        if (base.scheme, base.netloc) != (job.scheme, job.netloc):
+            raise EsclError("bad_response")
+        return job_url
 
     async def _close_job(self, job_url: str) -> None:
         """Best-effort DELETE; never raises."""
@@ -151,6 +155,8 @@ class EsclClient:
                 pages.append(page)
                 if on_page is not None:
                     on_page(len(pages))
+            if not pages:
+                raise EsclError("bad_response")
         finally:
             await asyncio.shield(self._close_job(job_url))
         return pages
