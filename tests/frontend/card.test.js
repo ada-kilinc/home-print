@@ -658,10 +658,10 @@ describe("job paused or stopped", () => {
     expect(text(card, "message")).toBe("The printer is pausing…");
   });
 
-  it("treats a held job without reasons as a neutral pause", async () => {
+  it("treats a held job without reasons as a neutral pause, without dry-time wording", async () => {
     const { card } = await startJob([{ job_id: 42, state: "held", reasons: [] }]);
     await vi.advanceTimersByTimeAsync(3000);
-    expect(text(card, "message")).toBe(DUPLEX_TR);
+    expect(text(card, "message")).toBe("Yazıcı bekliyor…");
     expect(isError(card)).toBe(false);
   });
 
@@ -705,6 +705,60 @@ describe("job paused or stopped", () => {
     ]);
     await vi.advanceTimersByTimeAsync(3000);
     expect(text(card, "detail")).toBe("document-format-error");
+  });
+
+  it("keeps unmapped reasons visible when the job aborts, until a new upload", async () => {
+    const { hass, card } = await startJob([
+      { job_id: 42, state: "aborted", reasons: ["document-format-error", "job-printing"] },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe("Yazdırma yarıda kaldı.");
+    expect(isError(card)).toBe(true);
+    expect(text(card, "detail")).toBe("document-format-error");
+    await selectFile(card, makeFile("ikinci.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(hass.fetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(text(card, "detail")).toBe("");
+  });
+
+  it("falls back to the printer default sides when the duplex row is hidden", async () => {
+    const printer = deskjetPrinter({
+      capabilities: { ...deskjetPrinter().capabilities, sides: ["one-sided"] },
+    });
+    const hass = makeHass({
+      printers: [printer],
+      jobs: [{ job_id: 42, state: "stopped", reasons: [] }],
+    });
+    const card = await mount(hass);
+    expect(optVisible(card, "duplex")).toBe(false);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toBe(DUPLEX_TR);
+  });
+
+  it("clears the detail line on job_gone and on a printer_error stop", async () => {
+    let { card } = await startJob([
+      { job_id: 42, state: "processing", reasons: ["com.hp.dry-time"] },
+      { error: "job_gone" },
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "detail")).toBe("com.hp.dry-time");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "message")).toContain("listesinde yok");
+    expect(text(card, "detail")).toBe("");
+    document.body.innerHTML = "";
+    ({ card } = await startJob([
+      { job_id: 42, state: "processing", reasons: ["com.hp.dry-time"] },
+      { error: "printer_error" },
+      { error: "printer_error" },
+      { error: "printer_error" },
+    ]));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(text(card, "detail")).toBe("com.hp.dry-time");
+    await vi.advanceTimersByTimeAsync(3 * 3000);
+    expect(text(card, "message")).toBe("Durum alınamadı, yazıcıya bak.");
+    expect(text(card, "detail")).toBe("");
   });
 
   it("visibleRawReasons drops noise, mapped and duplicate keywords", () => {

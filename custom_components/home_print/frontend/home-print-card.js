@@ -294,7 +294,7 @@ function jobLabel(lang, status, { twoSided = false } = {}) {
     case "processing":
       return t(lang, "job_printing");
     case "held":
-      return reasons.length ? withReasons("job_held") : pausing();
+      return reasons.length ? withReasons("job_held") : t(lang, "job_pausing");
     case "stopped":
       return reasons.length ? withReasons("job_stopped") : pausing();
     case "completed":
@@ -829,19 +829,21 @@ class HomePrintCard extends HTMLElement {
       return;
     }
     if (status?.state === "completed") this._finish(label, "success");
-    else if (status?.state === "canceled" || status?.state === "aborted") this._finish(label, "error");
+    else if (status?.state === "canceled" || status?.state === "aborted") {
+      this._finish(label, "error", visibleRawReasons(status.reasons).join(", "));
+    }
     else {
       this._setMessage(t(lang, "job_checking"));
       if (this.isConnected) this._schedulePoll();
     }
   }
 
-  _finish(text, kind) {
+  _finish(text, kind, detail = "") {
     clearTimeout(this._pollTimer);
     this._pollTimer = null;
     this._job = null;
     this._uploading = false;
-    this._setMessage(text, kind);
+    this._setMessage(text, kind, detail);
   }
 
   _setMessage(text, kind = "info", detail = "") {
