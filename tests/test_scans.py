@@ -1,7 +1,9 @@
 """Tests for the scan archive."""
 
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE
 from homeassistant.util import dt as dt_util
@@ -185,7 +187,8 @@ async def test_cleanup_size_cap_removes_oldest(hass, tmp_path):
     old = await _add(archive, "old", b"a" * (600 * 1024))
     mid = await _add(archive, "mid", b"b" * (600 * 1024))
     new = await _add(archive, "new", b"c" * (300 * 1024))
-    assert mb  # 1.5 MB total against a 1 MB cap
+    assert old["size"] + mid["size"] + new["size"] > mb  # 1.5 MB, cap 1 MB
+    await hass.async_block_till_done()
     await archive.async_cleanup()
     ids = [e["id"] for e in archive.entries()]
     assert ids == [new["id"], mid["id"]]
@@ -243,3 +246,59 @@ async def test_remove_keeps_media_files(hass, tmp_path):
     again = ScanArchive(hass, archive._entry)
     await again.async_load()
     assert again.entries() == []
+
+
+async def test_size_cap_keeps_newest_even_if_alone_over_cap(hass, tmp_path):
+    archive = _setup(hass, tmp_path, **{CONF_SCAN_MAX_MB: 1})
+    old = await _add(archive, "old", b"a" * 1000)
+    big = await _add(archive, "big", b"b" * (2 * 1024 * 1024))
+    await hass.async_block_till_done()
+    await archive.async_cleanup()
+    assert [e["id"] for e in archive.entries()] == [big["id"]]
+    assert archive.file_path(big["id"]) is not None
+    assert not (tmp_path / "media" / old["path"]).exists()
+
+
+async def test_cleanup_keeps_record_on_non_missing_oserror(hass, tmp_path):
+    archive = _setup(hass, tmp_path)
+    record = await _add(archive)
+    await hass.async_block_till_done()
+    real_stat = Path.stat
+
+    def flaky(self, *args, **kwargs):
+        if self.name == "doc.pdf":
+            raise PermissionError("denied")
+        return real_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", flaky):
+        await archive.async_cleanup()
+    assert [e["id"] for e in archive.entries()] == [record["id"]]
+
+
+async def test_cleanup_skips_pruning_when_scans_root_missing(hass, tmp_path):
+    archive = _setup(hass, tmp_path)
+    record = await _add(archive)
+    await hass.async_block_till_done()
+    shutil.rmtree(tmp_path / "media")  # like an unmounted share
+    await archive.async_cleanup()
+    assert [e["id"] for e in archive.entries()] == [record["id"]]
+
+
+async def test_load_drops_records_missing_required_keys(hass, tmp_path):
+    archive = _setup(hass, tmp_path)
+    record = await _add(archive)
+    await archive.async_flush()
+    store_entries = archive._data()["entries"]
+    store_entries.append({"id": "f" * 32, "path": "x.pdf"})
+    await archive._store.async_save({"entries": store_entries})
+    again = ScanArchive(hass, archive._entry)
+    await again.async_load()
+    assert [e["id"] for e in again.entries()] == [record["id"]]
+
+
+def test_clean_name_strips_known_extension():
+    assert clean_scan_name("x.pdf", "fb") == "x"
+    assert clean_scan_name("Scan.JPEG", "fb") == "Scan"
+    assert clean_scan_name("a.jpg", "fb") == "a"
+    assert clean_scan_name("v1.2", "fb") == "v1.2"
+    assert clean_scan_name(".pdf", "fb") == "fb"

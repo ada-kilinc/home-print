@@ -49,6 +49,8 @@ SAVE_DELAY = 1  # seconds; batches writes and keeps disk I/O off the loop
 RECORD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _EXTENSIONS = {"application/pdf": ".pdf", "image/jpeg": ".jpg"}
 _BAD_CHARS_RE = re.compile(r'[/\\:*?"<>|\x00-\x1f\x7f]')
+_EXT_RE = re.compile(r"\.(pdf|jpe?g)$", re.IGNORECASE)
+_REQUIRED_KEYS = frozenset({"id", "time", "name", "path", "mime", "pages", "size"})
 _SUBPATH = Path("home_print") / "scans"
 
 
@@ -66,7 +68,8 @@ def default_scan_name(hass: HomeAssistant, when: datetime) -> str:
 
 def clean_scan_name(name: str | None, fallback: str) -> str:
     """Make a user-given name safe as a file name (without extension)."""
-    cleaned = _BAD_CHARS_RE.sub("_", name or "").strip(" .")
+    cleaned = _BAD_CHARS_RE.sub("_", name or "").rstrip(" .")
+    cleaned = _EXT_RE.sub("", cleaned).strip(" .")
     cleaned = cleaned[:MAX_NAME_LENGTH]
     while len(cleaned.encode()) > MAX_NAME_BYTES:
         cleaned = cleaned[:-1]
@@ -128,19 +131,27 @@ def _sweep(
 
     ``wanted`` lists ``(record id, path)`` newest first. Ids whose file is
     missing are left out, and once the total passes ``max_bytes`` (when above
-    zero) every older file is deleted and left out too.
+    zero) every older file is deleted and left out too; the newest file always
+    stays. A file that cannot be stat-ed for another reason than being absent
+    is kept, and when the scans folder itself is absent (an unmounted share)
+    nothing is pruned.
     """
     for path in expired:
         _remove_file(path, scans_dir)
+    if not scans_dir.is_dir():
+        return {record_id for record_id, _ in wanted}
     kept: set[str] = set()
     total = 0
     over = False
     for record_id, path in wanted:
         try:
             size = path.stat().st_size
-        except OSError:
+        except FileNotFoundError:
             continue
-        if over or (max_bytes > 0 and total + size > max_bytes):
+        except OSError:
+            kept.add(record_id)
+            continue
+        if over or (max_bytes > 0 and kept and total + size > max_bytes):
             over = True
             _remove_file(path, scans_dir)
             continue
@@ -169,9 +180,7 @@ class ScanArchive:
         self._entries = [
             entry
             for entry in (entries or [])[:MAX_ENTRIES]
-            if isinstance(entry, dict)
-            and isinstance(entry.get("id"), str)
-            and isinstance(entry.get("path"), str)
+            if isinstance(entry, dict) and _REQUIRED_KEYS <= entry.keys()
         ]
 
     def entries(self) -> list[dict[str, Any]]:
@@ -290,11 +299,12 @@ class ScanArchive:
                 for r in self._entries
                 if cutoff is not None and self._expired(r, cutoff)
             ]
+            expired_ids = {r["id"] for r in expired}
             expired_paths = [p for r in expired if (p := self._resolve(r)) is not None]
             wanted = [
                 (r["id"], p)
                 for r in self._entries
-                if r not in expired and (p := self._resolve(r)) is not None
+                if r["id"] not in expired_ids and (p := self._resolve(r)) is not None
             ]
             try:
                 kept = await self._hass.async_add_executor_job(
