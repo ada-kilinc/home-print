@@ -25,6 +25,9 @@ JPEG = "image/jpeg"
 
 DEFAULT_DPI = 300
 DEFAULT_MAX_PAGES = 200
+# Explicit cap, below Pillow's own decompression-bomb limits. 60 MP is an
+# A4 sheet at ~880 dpi; anything bigger is not a sane print image.
+MAX_IMAGE_PIXELS = 60_000_000
 
 _A4_HMM = (21000, 29700)
 _DEFAULT_MARGIN_HMM = 300  # 3 mm
@@ -97,13 +100,29 @@ def _open_pdf(data: bytes) -> pdfium.PdfDocument:
         raise InvalidDocument("corrupt") from err
 
 
-def _open_image(data: bytes) -> Image.Image:
+def _open_image(data: bytes, formats: list[str]) -> Image.Image:
+    """Open (header only) an image of one of the Pillow ``formats``."""
     try:
-        return Image.open(io.BytesIO(data))
+        image = Image.open(io.BytesIO(data), formats=formats)
     except Image.DecompressionBombError as err:
         raise InvalidDocument("too_large") from err
-    except (UnidentifiedImageError, OSError, ValueError) as err:
+    except UnidentifiedImageError as err:
+        raise InvalidDocument(_unidentified_reason(data)) from err
+    except (OSError, ValueError, SyntaxError) as err:
         raise InvalidDocument("corrupt") from err
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        image.close()
+        raise InvalidDocument("too_large")
+    return image
+
+
+def _unidentified_reason(data: bytes) -> str:
+    """``unsupported_format`` if Pillow knows the image at all, else corrupt."""
+    try:
+        Image.open(io.BytesIO(data)).close()
+    except Exception:  # noqa: BLE001 - any failure means "not an image"
+        return "corrupt"
+    return "unsupported_format"
 
 
 def count_pages(data: bytes) -> int:
@@ -115,7 +134,7 @@ def count_pages(data: bytes) -> int:
                 return len(pdf)
             finally:
                 pdf.close()
-    _open_image(data).close()
+    _open_image(data, ["PNG", "JPEG"]).close()
     return 1
 
 
@@ -141,8 +160,11 @@ def iter_pages(
 ) -> Iterator[Image.Image]:
     """Yield one full sheet per selected page, in ``spec`` size and mode.
 
-    The document is validated before this returns (``InvalidDocument``,
-    ``TooManyPages``); rendering happens lazily, one page per ``next()``.
+    Checked before this returns: format, PDF structure and encryption,
+    page selection (``InvalidDocument``, ``TooManyPages``), and for images
+    the header (format, pixel cap). Pages are rendered lazily, one per
+    ``next()``, so a corrupt PDF page or truncated image data only raises
+    ``InvalidDocument("corrupt")`` from the ``next()`` that reaches it.
     """
     if fmt == PDF:
         with _PDFIUM_LOCK:
@@ -154,7 +176,7 @@ def iter_pages(
         return _pdf_pages(data, spec, _select(pages, count, max_pages))
     if fmt in (PNG, JPEG):
         _select(pages, 1, max_pages)
-        image = _open_image(data)
+        image = _open_image(data, ["PNG" if fmt == PNG else "JPEG"])
         return _image_pages(image, spec)
     raise InvalidDocument("unsupported_format")
 
@@ -181,25 +203,34 @@ def _render_pdf_page(
     pdf: pdfium.PdfDocument, index: int, box_w: int, box_h: int, gray: bool
 ) -> Image.Image:
     """Render a page scaled to fit the box, rotated if orientations differ."""
-    page = pdf[index]
+    try:
+        page = pdf[index]
+    except pdfium.PdfiumError as err:
+        raise InvalidDocument("corrupt") from err
     try:
         width, height = page.get_size()  # points, page /Rotate applied
         if width <= 0 or height <= 0:
             raise InvalidDocument("corrupt")
+        # Duplex back-side transforms are applied by the encoders (Tasks 3/4).
         rotate = _needs_rotation(width, height, box_w, box_h)
         if rotate:
             width, height = height, width
         scale = min(box_w / width, box_h / height)
-        bitmap = page.render(
-            scale=scale,
-            rotation=270 if rotate else 0,  # PDFium turns clockwise; 270 = CCW 90°
-            grayscale=gray,
-            rev_byteorder=True,
-            fill_color=(255, 255, 255, 255),
-        )
-        # copy() detaches the image from the bitmap's ctypes buffer.
-        image = bitmap.to_pil().copy()
-        bitmap.close()
+        try:
+            bitmap = page.render(
+                scale=scale,
+                rotation=270 if rotate else 0,  # PDFium is clockwise; 270 = CCW
+                grayscale=gray,
+                rev_byteorder=True,
+                fill_color=(255, 255, 255, 255),
+            )
+        except pdfium.PdfiumError as err:
+            raise InvalidDocument("corrupt") from err
+        try:
+            # copy() detaches the image from the bitmap's ctypes buffer.
+            image = bitmap.to_pil().copy()
+        finally:
+            bitmap.close()
     finally:
         page.close()
     return image
@@ -218,6 +249,7 @@ def _image_pages(image: Image.Image, spec: PageSpec) -> Iterator[Image.Image]:
             raise InvalidDocument("corrupt") from err
     finally:
         image.close()
+    # Duplex back-side transforms are applied by the encoders (Tasks 3/4).
     if _needs_rotation(flat.width, flat.height, box_w, box_h):
         flat = flat.transpose(Image.Transpose.ROTATE_90)  # counter-clockwise
     size = _fit_size(flat.width, flat.height, box_w, box_h)
@@ -227,7 +259,12 @@ def _image_pages(image: Image.Image, spec: PageSpec) -> Iterator[Image.Image]:
 
 
 def _needs_rotation(width: float, height: float, box_w: int, box_h: int) -> bool:
-    """True when content and printable area differ in orientation."""
+    """True when content and printable area differ in orientation.
+
+    Square content (or a square area) is never rotated.
+    """
+    if width == height or box_w == box_h:
+        return False
     return (width > height) != (box_w > box_h)
 
 
@@ -278,7 +315,7 @@ def _flatten(image: Image.Image) -> Image.Image:
 
 def png_to_jpeg(data: bytes, quality: int = 90) -> bytes:
     """Re-encode an image as JPEG, transparency flattened onto white."""
-    image = _open_image(data)
+    image = _open_image(data, ["PNG"])
     try:
         flat = _flatten(image)
     except (OSError, ValueError, SyntaxError) as err:
@@ -298,7 +335,7 @@ def fit_jpeg(data: bytes, limits: JpegLimits | None) -> bytes:
     """Shrink a JPEG to the printer's limits; unchanged bytes if it fits."""
     if limits is None:
         return data
-    image = _open_image(data)
+    image = _open_image(data, ["JPEG"])
     max_x = limits.max_x or image.width
     max_y = limits.max_y or image.height
     max_bytes = limits.max_kb * 1024 if limits.max_kb else None

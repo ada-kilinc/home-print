@@ -279,3 +279,57 @@ def test_convert_package_does_not_import_homeassistant():
             else:
                 continue
             assert not any(n.startswith("homeassistant") for n in names), path
+
+
+def test_corrupt_pdf_page_raises_invalid_document_lazily():
+    data = samples.pdf_with_broken_second_page()
+    assert count_pages(data) == 2
+    pages = iter_pages(data, PDF, A4_100, None)
+    first = next(pages)
+    assert first.size == (A4_100.width_px, A4_100.height_px)
+    with pytest.raises(InvalidDocument, match="corrupt"):
+        next(pages)
+
+
+@pytest.mark.parametrize("pil_format", ["GIF", "BMP"])
+def test_other_image_formats_are_unsupported(pil_format):
+    data = samples.image_bytes(samples.page_image(40, 60), pil_format)
+    with pytest.raises(InvalidDocument, match="unsupported_format"):
+        count_pages(data)
+    for fmt in ("image/png", "image/jpeg"):
+        with pytest.raises(InvalidDocument, match="unsupported_format"):
+            iter_pages(data, fmt, A4_100, None)
+    with pytest.raises(InvalidDocument, match="unsupported_format"):
+        png_to_jpeg(data)
+
+
+def test_declared_format_must_match_image():
+    png = samples.image_bytes(samples.page_image(40, 60), "PNG")
+    with pytest.raises(InvalidDocument, match="unsupported_format"):
+        iter_pages(png, "image/jpeg", A4_100, None)
+
+
+def test_image_pixel_cap(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    assert render.MAX_IMAGE_PIXELS == 60_000_000
+    # 8000x7600 = 60.8 MP: over the cap, but Pillow's own bomb check
+    # (~89 MP warning) would let it through. Only the header is read.
+    big = Image.new("L", (8000, 7600), 255)
+    png = samples.image_bytes(big, "PNG")
+    with pytest.raises(InvalidDocument, match="too_large"):
+        iter_pages(png, "image/png", A4_100, None)
+    with pytest.raises(InvalidDocument, match="too_large"):
+        count_pages(png)
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    small = samples.image_bytes(Image.new("L", (101, 100), 255), "JPEG")
+    with pytest.raises(InvalidDocument, match="too_large"):
+        fit_jpeg(small, JpegLimits(max_x=None, max_y=None, max_kb=None))
+
+
+def test_square_content_is_not_rotated():
+    from custom_components.home_print.convert.render import _needs_rotation
+
+    assert not _needs_rotation(500, 500, 800, 600)
+    assert not _needs_rotation(500, 500, 600, 800)
+    assert _needs_rotation(600, 500, 600, 800)

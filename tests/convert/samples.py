@@ -103,6 +103,12 @@ def encrypted_pdf(user_password: str = USER_PASSWORD) -> bytes:
         + str(permissions).encode()
         + b" >>",
     ]
+    ids = file_id.hex().encode()
+    return build_pdf(objects, b"/Encrypt 4 0 R /ID [<%s> <%s>]" % (ids, ids))
+
+
+def build_pdf(objects: list[bytes], trailer_extra: bytes = b"") -> bytes:
+    """A PDF from raw object bodies (object 1 must be the catalog)."""
     body = bytearray(b"%PDF-1.4\n")
     offsets = []
     for number, obj in enumerate(objects, start=1):
@@ -112,10 +118,21 @@ def encrypted_pdf(user_password: str = USER_PASSWORD) -> bytes:
     body += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
     for offset in offsets:
         body += b"%010d 00000 n \n" % offset
-    body += b"trailer\n<< /Size %d /Root 1 0 R /Encrypt 4 0 R /ID [<%s> <%s>] >>\n" % (
+    body += b"trailer\n<< /Size %d /Root 1 0 R %s >>\n" % (
         len(objects) + 1,
-        file_id.hex().encode(),
-        file_id.hex().encode(),
+        trailer_extra,
     )
     body += b"startxref\n%d\n%%%%EOF\n" % xref
     return bytes(body)
+
+
+def pdf_with_broken_second_page() -> bytes:
+    """Two pages in /Count, but the second page object is a plain string."""
+    return build_pdf(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
+            b"(garbage)",
+        ]
+    )
