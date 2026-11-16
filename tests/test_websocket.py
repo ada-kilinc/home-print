@@ -8,7 +8,11 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.home_print.client import CannotConnect, parse_printer
+from custom_components.home_print.client import (
+    CannotConnect,
+    PrinterRejected,
+    parse_printer,
+)
 from custom_components.home_print.const import CONF_ADMIN_ONLY, CONF_MAX_FILE_MB
 from custom_components.home_print.models import JobStatus
 
@@ -259,4 +263,39 @@ async def test_job_admin_only_non_admin_unauthorized(
     msg = await ws.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "unauthorized"
+    mock_client.get_job.assert_not_awaited()
+
+
+async def _job_error(hass, hass_ws_client, entry_id, job_id=1):
+    ws = await hass_ws_client(hass)
+    await ws.send_json(
+        {"id": 1, "type": "home_print/job", "entry_id": entry_id, "job_id": job_id}
+    )
+    msg = await ws.receive_json()
+    assert not msg["success"]
+    return msg["error"]["code"]
+
+
+async def test_job_purged_by_printer_is_gone(hass, mock_client, hass_ws_client):
+    """A finished job the printer already forgot is reported as job_gone."""
+    entry = await setup_entry(hass)
+    mock_client.get_job = AsyncMock(
+        side_effect=PrinterRejected("client-error-not-found")
+    )
+    assert await _job_error(hass, hass_ws_client, entry.entry_id) == "job_gone"
+
+
+async def test_job_other_rejection_is_printer_error(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    mock_client.get_job = AsyncMock(
+        side_effect=PrinterRejected("client-error-bad-request")
+    )
+    assert await _job_error(hass, hass_ws_client, entry.entry_id) == "printer_error"
+
+
+async def test_job_negative_id_invalid_format(hass, mock_client, hass_ws_client):
+    entry = await setup_entry(hass)
+    mock_client.get_job = AsyncMock()
+    code = await _job_error(hass, hass_ws_client, entry.entry_id, job_id=-1)
+    assert code == "invalid_format"
     mock_client.get_job.assert_not_awaited()

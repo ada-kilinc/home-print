@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
-from .client import CannotConnect, HomePrintError
+from .client import CannotConnect, HomePrintError, PrinterRejected
 from .const import CONF_ADMIN_ONLY, CONF_DEFAULT_COLOR_MODE, CONF_DEFAULT_SIDES, DOMAIN
 from .convert.pipeline import accepted_formats
 from .printing import COLOR_AUTO, max_file_mb
@@ -172,6 +172,15 @@ async def ws_job(
         connection.send_error(
             msg["id"], "printer_unavailable", "The printer could not be reached"
         )
+        return
+    except PrinterRejected as err:
+        if "not-found" in err.status:
+            # Finished jobs drop off the printer's list after a while.
+            connection.send_error(
+                msg["id"], "job_gone", "The printer no longer lists the job"
+            )
+        else:
+            connection.send_error(msg["id"], "printer_error", str(err))
         return
     except HomePrintError as err:
         connection.send_error(msg["id"], "printer_error", str(err))
