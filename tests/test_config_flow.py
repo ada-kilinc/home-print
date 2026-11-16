@@ -20,7 +20,10 @@ from custom_components.home_print.const import (
     CONF_DEFAULT_SIDES,
     CONF_HISTORY_DAYS,
     CONF_MAX_FILE_MB,
+    CONF_SCAN_DAYS,
     CONF_SCAN_INTERVAL,
+    CONF_SCAN_MAX_MB,
+    CONF_SCANNER_URL,
     DEFAULT_PATH,
     DEFAULT_PORT,
     DOMAIN,
@@ -234,6 +237,9 @@ async def test_options_flow_saves_values(hass, mock_client):
         CONF_SCAN_INTERVAL: 120,
         CONF_ADMIN_ONLY: True,
         CONF_HISTORY_DAYS: 30,
+        CONF_SCANNER_URL: "",
+        CONF_SCAN_DAYS: 30,
+        CONF_SCAN_MAX_MB: 2000,
     }
     assert isinstance(entry.options[CONF_MAX_FILE_MB], int)
     assert isinstance(entry.options[CONF_SCAN_INTERVAL], int)
@@ -249,6 +255,45 @@ async def test_options_flow_history_days_default_and_range(hass, mock_client):
     assert key.default() == 7
     config = schema[key].config
     assert (config["min"], config["max"]) == (0, 90)
+
+
+async def test_options_flow_scan_fields(hass, mock_client):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=UUID, data={CONF_HOST: "x"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = result["data_schema"].schema
+    keys = {str(k): k for k in schema}
+    assert keys[CONF_SCAN_DAYS].default() == 30
+    assert keys[CONF_SCAN_MAX_MB].default() == 2000
+    assert keys[CONF_SCANNER_URL].default() == ""
+    assert (
+        schema[keys[CONF_SCAN_DAYS]].config["min"],
+        schema[keys[CONF_SCAN_DAYS]].config["max"],
+    ) == (0, 3650)
+    assert (
+        schema[keys[CONF_SCAN_MAX_MB]].config["min"],
+        schema[keys[CONF_SCAN_MAX_MB]].config["max"],
+    ) == (0, 100000)
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_DEFAULT_SIDES: "one-sided",
+            CONF_DEFAULT_COLOR_MODE: "auto",
+            CONF_MAX_FILE_MB: 25,
+            CONF_SCAN_INTERVAL: 60,
+            CONF_ADMIN_ONLY: False,
+            CONF_SCANNER_URL: "  http://192.168.1.9/eSCL ",
+            CONF_SCAN_DAYS: 0.0,
+            CONF_SCAN_MAX_MB: 500.0,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_SCANNER_URL] == "http://192.168.1.9/eSCL"
+    assert entry.options[CONF_SCAN_DAYS] == 0
+    assert entry.options[CONF_SCAN_MAX_MB] == 500
+    assert isinstance(entry.options[CONF_SCAN_DAYS], int)
+    assert isinstance(entry.options[CONF_SCAN_MAX_MB], int)
 
 
 def test_history_days_labels():

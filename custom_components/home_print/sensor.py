@@ -21,6 +21,7 @@ from .entity import HomePrintEntity
 PARALLEL_UPDATES = 0
 
 STATES = ["idle", "processing", "stopped"]
+SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"]
 
 
 def reasons_of(state_reasons: tuple[str, ...]) -> list[str]:
@@ -38,6 +39,8 @@ async def async_setup_entry(
         StatusSensor(coordinator),
         LastJobSensor(coordinator),
     ]
+    if entry.runtime_data.scanner is not None:
+        entities.append(ScannerStatusSensor(coordinator))
     entities.extend(
         MarkerSensor(coordinator, index)
         for index in range(len(coordinator.data.markers))
@@ -119,3 +122,33 @@ class LastJobSensor(HomePrintEntity, SensorEntity):
             "user": job.user,
             "time": job.time.isoformat(),
         }
+
+
+class ScannerStatusSensor(HomePrintEntity, SensorEntity):
+    """Scanner state (idle / scanning / paper in the ADF / stopped)."""
+
+    _attr_translation_key = "scanner_status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = SCANNER_STATES
+
+    def __init__(self, coordinator: HomePrintCoordinator) -> None:
+        super().__init__(coordinator, "scanner_status")
+
+    @property
+    def available(self) -> bool:
+        scanner = self.coordinator.scanner
+        return super().available and scanner is not None and scanner.status is not None
+
+    @property
+    def native_value(self) -> str | None:
+        scanner = self.coordinator.scanner
+        status = scanner.status if scanner else None
+        if status is None:
+            return None
+        if status.state in ("processing", "testing"):
+            return "scanning"
+        if status.state in ("stopped", "down"):
+            return "stopped"
+        if status.state == "idle":
+            return "adf_loaded" if status.adf_loaded else "idle"
+        return None

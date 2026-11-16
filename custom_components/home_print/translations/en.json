@@ -37,7 +37,10 @@
           "max_file_mb": "Max file size (MB)",
           "scan_interval": "Status refresh interval (seconds)",
           "admin_only": "Only admins can print",
-          "history_days": "Keep files (days)"
+          "history_days": "Keep files (days)",
+          "scanner_url": "Scanner address (empty = find automatically)",
+          "scan_days": "Keep scans (days, 0 = forever)",
+          "scan_max_mb": "Max space for scans (MB, 0 = no limit)"
         }
       }
     }
@@ -75,6 +78,15 @@
       },
       "last_job": {
         "name": "Last job"
+      },
+      "scanner_status": {
+        "name": "Scanner status",
+        "state": {
+          "idle": "Idle",
+          "scanning": "Scanning",
+          "adf_loaded": "Paper in the feeder",
+          "stopped": "Stopped"
+        }
       }
     },
     "binary_sensor": {

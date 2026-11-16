@@ -33,14 +33,20 @@ from .const import (
     CONF_DEFAULT_SIDES,
     CONF_HISTORY_DAYS,
     CONF_MAX_FILE_MB,
+    CONF_SCAN_DAYS,
     CONF_SCAN_INTERVAL,
+    CONF_SCAN_MAX_MB,
+    CONF_SCANNER_URL,
     DEFAULT_HISTORY_DAYS,
     DEFAULT_MAX_FILE_MB,
     DEFAULT_PATH,
     DEFAULT_PORT,
+    DEFAULT_SCAN_DAYS,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCAN_MAX_MB,
     DOMAIN,
     MAX_HISTORY_DAYS,
+    MAX_SCAN_DAYS,
 )
 from .models import PrinterInfo, normalize_uuid
 
@@ -208,6 +214,9 @@ class HomePrintOptionsFlow(OptionsFlow):
                 CONF_MAX_FILE_MB: int(user_input[CONF_MAX_FILE_MB]),
                 CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
                 CONF_HISTORY_DAYS: int(user_input[CONF_HISTORY_DAYS]),
+                CONF_SCANNER_URL: str(user_input.get(CONF_SCANNER_URL) or "").strip(),
+                CONF_SCAN_DAYS: int(user_input[CONF_SCAN_DAYS]),
+                CONF_SCAN_MAX_MB: int(user_input[CONF_SCAN_MAX_MB]),
             }
             return self.async_create_entry(data=user_input)
 
@@ -257,6 +266,26 @@ class HomePrintOptionsFlow(OptionsFlow):
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=0, max=MAX_HISTORY_DAYS, step=1, mode=NumberSelectorMode.BOX
+                    )
+                ),
+                vol.Optional(
+                    CONF_SCANNER_URL,
+                    default=opts.get(CONF_SCANNER_URL, ""),
+                ): str,
+                vol.Required(
+                    CONF_SCAN_DAYS,
+                    default=opts.get(CONF_SCAN_DAYS, DEFAULT_SCAN_DAYS),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=MAX_SCAN_DAYS, step=1, mode=NumberSelectorMode.BOX
+                    )
+                ),
+                vol.Required(
+                    CONF_SCAN_MAX_MB,
+                    default=opts.get(CONF_SCAN_MAX_MB, DEFAULT_SCAN_MAX_MB),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=100000, step=1, mode=NumberSelectorMode.BOX
                     )
                 ),
             }

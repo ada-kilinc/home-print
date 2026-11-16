@@ -27,6 +27,8 @@ from .frontend import async_register_frontend
 from .history import PrintHistory
 from .http import HomePrintUploadView
 from .preview import HomePrintPreviewView
+from .scanner import ScannerRuntime, async_refresh_status, async_setup_scanner
+from .scans import ScanArchive
 from .services import async_setup_services
 from .websocket import async_setup_websocket
 
@@ -45,6 +47,7 @@ class HomePrintData:
     client: HomePrintClient
     coordinator: HomePrintCoordinator
     history: PrintHistory
+    scanner: ScannerRuntime | None = None
 
 
 type HomePrintConfigEntry = ConfigEntry[HomePrintData]
@@ -78,8 +81,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
     await history.async_load()
     await history.async_cleanup()
 
+    # A printer without a scanner is normal; detection never fails the entry.
+    scanner = await async_setup_scanner(hass, entry, session)
+    if scanner is not None:
+        await async_refresh_status(scanner)
+        coordinator.scanner = scanner
+
     entry.runtime_data = HomePrintData(
-        client=client, coordinator=coordinator, history=history
+        client=client, coordinator=coordinator, history=history, scanner=scanner
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -88,6 +97,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
             hass, history.async_schedule_cleanup, HISTORY_CLEANUP_INTERVAL
         )
     )
+    if scanner is not None:
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass, scanner.archive.async_schedule_cleanup, HISTORY_CLEANUP_INTERVAL
+            )
+        )
     return True
 
 
@@ -97,12 +112,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -
     if unloaded:
         # A reload must not lose records still waiting for the delayed save.
         await entry.runtime_data.history.async_flush()
+        if entry.runtime_data.scanner is not None:
+            await entry.runtime_data.scanner.archive.async_flush()
     return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> None:
-    """Delete the entry's history file and its kept files."""
+    """Delete the entry's history file, kept files and scan records.
+
+    Scans in the media folder are the user's documents and stay.
+    """
     await PrintHistory(hass, entry).async_remove()
+    await ScanArchive(hass, entry).async_remove()
 
 
 async def _async_options_updated(

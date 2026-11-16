@@ -83,3 +83,13 @@ def tmp_config_dir(request, tmp_path):
     if "hass" in request.fixturenames:
         request.getfixturevalue("hass").config.config_dir = str(tmp_path)
     yield
+
+
+@pytest.fixture(autouse=True)
+def mock_find_scanner():
+    """No scanner by default; tests set ``return_value`` to a URL to add one."""
+    with patch(
+        "custom_components.home_print.scanner.find_scanner",
+        new=AsyncMock(return_value=None),
+    ) as find:
+        yield find

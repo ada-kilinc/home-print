@@ -37,7 +37,10 @@
           "max_file_mb": "En büyük dosya boyutu (MB)",
           "scan_interval": "Durum yenileme aralığı (saniye)",
           "admin_only": "Sadece yöneticiler yazdırabilsin",
-          "history_days": "Dosyaları sakla (gün)"
+          "history_days": "Dosyaları sakla (gün)",
+          "scanner_url": "Tarayıcı adresi (boş = otomatik bul)",
+          "scan_days": "Taramaları sakla (gün, 0 = hep sakla)",
+          "scan_max_mb": "Taramalar için en fazla yer (MB, 0 = sınırsız)"
         }
       }
     }
@@ -75,6 +78,15 @@
       },
       "last_job": {
         "name": "Son iş"
+      },
+      "scanner_status": {
+        "name": "Tarayıcı durumu",
+        "state": {
+          "idle": "Boşta",
+          "scanning": "Tarıyor",
+          "adf_loaded": "ADF'de kağıt var",
+          "stopped": "Durdu"
+        }
       }
     },
     "binary_sensor": {

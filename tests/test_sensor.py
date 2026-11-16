@@ -1,7 +1,7 @@
 """Tests for Home Print sensors and entry setup."""
 
 from datetime import UTC, datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -199,3 +199,46 @@ async def test_marker_sensor_category_and_state_class(hass, mock_client):
         reg = registry.async_get(entity_id)
         assert (reg.entity_category == "diagnostic") is diagnostic, slug
         assert hass.states.get(entity_id).attributes["state_class"] == "measurement"
+
+
+@pytest.mark.parametrize(
+    ("state", "adf", "expected"),
+    [
+        ("idle", False, "idle"),
+        ("idle", None, "idle"),
+        ("idle", True, "adf_loaded"),
+        ("processing", False, "scanning"),
+        ("testing", False, "scanning"),
+        ("stopped", False, "stopped"),
+        ("down", None, "stopped"),
+    ],
+)
+async def test_status_sensor_states(
+    hass, mock_client, mock_find_scanner, state, adf, expected
+):
+    from custom_components.home_print.escl.models import ScannerStatus
+
+    from .test_scanner_setup import CAPS, URL
+
+    mock_find_scanner.return_value = URL
+    with patch("custom_components.home_print.scanner.EsclClient") as cls:
+        cls.return_value.capabilities = AsyncMock(return_value=CAPS)
+        cls.return_value.status = AsyncMock(return_value=ScannerStatus(state, adf))
+        await setup_entry(hass)
+    sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
+    assert sensor.state == expected
+    assert sensor.attributes["options"] == ["idle", "scanning", "adf_loaded", "stopped"]
+
+
+async def test_status_sensor_unavailable_without_status(
+    hass, mock_client, mock_find_scanner
+):
+    from .test_scanner_setup import CAPS, URL
+
+    mock_find_scanner.return_value = URL
+    with patch("custom_components.home_print.scanner.EsclClient") as cls:
+        cls.return_value.capabilities = AsyncMock(return_value=CAPS)
+        cls.return_value.status = AsyncMock(side_effect=TimeoutError)
+        await setup_entry(hass)
+    sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
+    assert sensor.state == STATE_UNAVAILABLE

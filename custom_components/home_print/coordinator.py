@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .client import CannotConnect, HomePrintClient, HomePrintError
 from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .models import LastJob, PrinterInfo
+from .scanner import ScannerRuntime, async_refresh_status
 
 if TYPE_CHECKING:
     from . import HomePrintConfigEntry
@@ -41,14 +42,19 @@ class HomePrintCoordinator(DataUpdateCoordinator[PrinterInfo]):
         )
         self.client = client
         self.last_job: LastJob | None = None
+        # Set by async_setup_entry once a scanner was found.
+        self.scanner: ScannerRuntime | None = None
 
     async def _async_update_data(self) -> PrinterInfo:
         try:
-            return await self.client.get_printer()
+            info = await self.client.get_printer()
         except CannotConnect as err:
             raise UpdateFailed(f"Printer unreachable: {err}") from err
         except HomePrintError as err:
             raise UpdateFailed(f"Printer error: {err}") from err
+        if self.scanner is not None:
+            await async_refresh_status(self.scanner)
+        return info
 
     def async_set_last_job(self, job: LastJob) -> None:
         """Record the latest submitted job and notify entities."""
