@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .convert.scan_doc import SCAN_MAX_PIXELS
 from .preview import render_bounded
 from .scans import RECORD_ID_RE, media_root
 
@@ -103,7 +104,7 @@ class ScanPreviewView(HomeAssistantView):
         path, _ = found
         folder = media_root(hass) / "home_print" / "scans"
         body = await hass.async_add_executor_job(
-            render_bounded, folder, path, int(page)
+            render_bounded, folder, path, int(page), SCAN_MAX_PIXELS
         )
         if body is None:
             raise web.HTTPNotFound

@@ -107,3 +107,17 @@ async def test_missing_file_404(hass, tmp_path, entry, hass_client):
     client = await hass_client()
     assert (await client.get(file_url(entry.entry_id, record["id"]))).status == 404
     assert (await client.get(page_url(entry.entry_id, record["id"], 1))).status == 404
+
+
+async def test_page_preview_of_scan_above_print_pixel_cap(
+    hass, entry, hass_client, monkeypatch
+):
+    """Scans may exceed the 25 MP print cap; their preview still renders."""
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 1000)  # scan is 60x80
+    record = await _add(entry, name="big", data=scan_jpeg(), mime="image/jpeg")
+    client = await hass_client()
+    resp = await client.get(page_url(entry.entry_id, record["id"], 1))
+    assert resp.status == 200
+    assert resp.content_type == "image/jpeg"

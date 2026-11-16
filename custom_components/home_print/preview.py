@@ -30,7 +30,9 @@ MAX_RENDERS = 2
 _RENDER_SLOTS = threading.BoundedSemaphore(MAX_RENDERS)
 
 
-def _render(folder: Path, path: Path, page: int) -> bytes | None:
+def _render(
+    folder: Path, path: Path, page: int, max_pixels: int | None = None
+) -> bytes | None:
     """The page as JPEG, or None if the file or the page is not there."""
     try:
         if not path.resolve().is_relative_to(folder.resolve()):
@@ -39,15 +41,20 @@ def _render(folder: Path, path: Path, page: int) -> bytes | None:
     except OSError:
         return None
     try:
-        return preview_jpeg(data, page)
+        return preview_jpeg(data, page, max_pixels=max_pixels)
     except (InvalidDocument, TooManyPages):
         return None
 
 
-def render_bounded(folder: Path, path: Path, page: int) -> bytes | None:
-    """Render in the executor, at most MAX_RENDERS at a time."""
+def render_bounded(
+    folder: Path, path: Path, page: int, max_pixels: int | None = None
+) -> bytes | None:
+    """Render in the executor, at most MAX_RENDERS at a time.
+
+    ``max_pixels`` caps image files (default: the print cap).
+    """
     with _RENDER_SLOTS:
-        return _render(folder, path, page)
+        return _render(folder, path, page, max_pixels)
 
 
 class HomePrintPreviewView(HomeAssistantView):

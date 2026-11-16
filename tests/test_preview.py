@@ -160,7 +160,7 @@ async def test_at_most_two_renders_run_at_once(hass, mock_client, hass_client):
     running = 0
     peak = 0
 
-    def slow_render(folder, path, page):
+    def slow_render(folder, path, page, max_pixels=None):
         nonlocal running, peak
         with lock:
             running += 1
@@ -185,7 +185,7 @@ async def test_render_slots_are_held_by_the_worker(hass):
     running = 0
     peak = 0
 
-    def slow_render(folder, path, page):
+    def slow_render(folder, path, page, max_pixels=None):
         nonlocal running, peak
         with lock:
             running += 1

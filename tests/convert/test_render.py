@@ -467,3 +467,15 @@ def test_exif_orientation_applied_after_downscale():
     flat = _flatten(Image.open(io.BytesIO(jpeg)), (100, 100))
     assert flat.size == (50, 100)
     assert _is_red(flat.getpixel((45, 3)))  # top-left mark now top-right
+
+
+def test_preview_jpeg_max_pixels(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 1000)
+    jpeg = samples.image_bytes(Image.new("RGB", (60, 80), "white"), "JPEG")
+    with pytest.raises(InvalidDocument, match="too_large"):
+        render.preview_jpeg(jpeg, 1)
+    assert render.preview_jpeg(jpeg, 1, max_pixels=10_000).startswith(b"\xff\xd8")
+    with pytest.raises(InvalidDocument, match="too_large"):
+        render.preview_jpeg(jpeg, 1, max_pixels=100)

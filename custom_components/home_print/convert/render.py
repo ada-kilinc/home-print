@@ -102,8 +102,13 @@ def _open_pdf(data: bytes) -> pdfium.PdfDocument:
         raise InvalidDocument("corrupt") from err
 
 
-def _open_image(data: bytes, formats: list[str]) -> Image.Image:
-    """Open (header only) an image of one of the Pillow ``formats``."""
+def _open_image(
+    data: bytes, formats: list[str], max_pixels: int | None = None
+) -> Image.Image:
+    """Open (header only) an image of one of the Pillow ``formats``.
+
+    Images over ``max_pixels`` (default ``MAX_IMAGE_PIXELS``) are too large.
+    """
     try:
         image = Image.open(io.BytesIO(data), formats=formats)
     except Image.DecompressionBombError as err:
@@ -112,7 +117,8 @@ def _open_image(data: bytes, formats: list[str]) -> Image.Image:
         raise InvalidDocument(_unidentified_reason(data)) from err
     except (OSError, ValueError, SyntaxError) as err:
         raise InvalidDocument("corrupt") from err
-    if image.width * image.height > MAX_IMAGE_PIXELS:
+    limit = MAX_IMAGE_PIXELS if max_pixels is None else max_pixels
+    if image.width * image.height > limit:
         image.close()
         raise InvalidDocument("too_large")
     return image
@@ -478,12 +484,14 @@ def preview_jpeg(
     dpi: int = PREVIEW_DPI,
     max_width: int = PREVIEW_MAX_WIDTH,
     quality: int = PREVIEW_QUALITY,
+    max_pixels: int | None = None,
 ) -> bytes:
     """One page as a JPEG for on-screen preview (not a print sheet).
 
     PDF pages render at ``dpi``, images keep their size; both shrink to at
     most ``max_width`` pixels wide. A page outside the document raises
-    ``InvalidDocument("no_pages")``.
+    ``InvalidDocument("no_pages")``. ``max_pixels`` caps image sources
+    (default ``MAX_IMAGE_PIXELS``; scans allow more).
     """
     if page < 1:
         raise InvalidDocument("no_pages")
@@ -492,7 +500,7 @@ def preview_jpeg(
     else:
         if page != 1:
             raise InvalidDocument("no_pages")
-        image = _preview_image(data, max_width)
+        image = _preview_image(data, max_width, max_pixels)
     return _encode_jpeg(image, quality)
 
 
@@ -532,8 +540,10 @@ def _preview_pdf_page(data: bytes, page: int, dpi: int, max_width: int) -> Image
     return image.convert("RGB")
 
 
-def _preview_image(data: bytes, max_width: int) -> Image.Image:
-    image = _open_image(data, ["PNG", "JPEG"])
+def _preview_image(
+    data: bytes, max_width: int, max_pixels: int | None = None
+) -> Image.Image:
+    image = _open_image(data, ["PNG", "JPEG"], max_pixels)
     box = (max_width, max(1, MAX_IMAGE_PIXELS // max_width))
     try:
         if image.format == "JPEG":
