@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 
 from custom_components.home_print.convert import scan_doc
-from custom_components.home_print.convert.errors import InvalidDocument
+from custom_components.home_print.convert.errors import InvalidDocument, TooManyPages
 from custom_components.home_print.convert.render import count_pages
 
 
@@ -82,8 +82,58 @@ def test_normalize_truncated_raises():
 
 
 def test_normalize_too_large(monkeypatch):
-    monkeypatch.setattr(scan_doc, "MAX_IMAGE_PIXELS", 100)
+    monkeypatch.setattr(scan_doc, "SCAN_MAX_PIXELS", 100)
     with pytest.raises(InvalidDocument, match="too_large"):
         scan_doc.normalize_page(_img((20, 20)))
     with pytest.raises(InvalidDocument, match="too_large"):
         scan_doc.normalize_page(_img((20, 20), fmt="PNG"))
+
+
+def test_scan_limit_is_above_print_limit():
+    # 600 dpi full platen (~36 MP) must not be rejected as a scan.
+    assert scan_doc.SCAN_MAX_PIXELS == 100_000_000
+    assert 6800 * 5100 < scan_doc.SCAN_MAX_PIXELS
+
+
+def test_build_pdf_embeds_jpeg_verbatim():
+    jpeg = _img((300, 200))
+    pdf = scan_doc.build_pdf([jpeg], 300)
+    assert jpeg in pdf
+    assert b"/DCTDecode" in pdf
+    assert b"/DeviceRGB" in pdf
+
+
+def test_build_pdf_gray_stays_device_gray():
+    pdf = scan_doc.build_pdf([_img((100, 100), mode="L")], 300)
+    assert b"/DeviceGray" in pdf
+    assert b"/DeviceRGB" not in pdf
+
+
+def test_build_pdf_cmyk_decode_array():
+    pdf = scan_doc.build_pdf([_img((50, 50), mode="CMYK")], 300)
+    assert b"/DeviceCMYK" in pdf
+    assert b"/Decode [1 0 1 0 1 0 1 0]" in pdf
+
+
+def test_build_pdf_renders_with_pdfium():
+    doc_bytes = scan_doc.build_pdf([_img((600, 800), mode="L")], 300)
+    doc = pdfium.PdfDocument(doc_bytes)
+    try:
+        img = doc[0].render(scale=0.5).to_pil()
+        assert img.getpixel((10, 10))[0] > 240  # white page
+    finally:
+        doc.close()
+
+
+def test_build_pdf_keeps_jpeg_bytes_not_reencoded():
+    # A noisy JPEG at quality 95 would shrink if re-encoded at 75.
+    out = io.BytesIO()
+    Image.effect_noise((200, 200), 60).save(out, "JPEG", quality=95)
+    jpeg = out.getvalue()
+    assert jpeg in scan_doc.build_pdf([jpeg], 300)
+
+
+def test_build_pdf_too_many_pages():
+    page = _img((10, 10))
+    with pytest.raises(TooManyPages):
+        scan_doc.build_pdf([page] * 201, 300)
