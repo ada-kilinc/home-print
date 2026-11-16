@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- synthetic, HP layout; replace with a real dump -->
+<scan:ScannerStatus xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm" xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03">
+  <pwg:Version>2.63</pwg:Version>
+  <pwg:State>Processing</pwg:State>
+</scan:ScannerStatus>
