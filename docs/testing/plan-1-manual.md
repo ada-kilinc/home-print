@@ -154,6 +154,23 @@ Telefondan ya da panelden `POST /api/home_print/upload/<entry_id>` isteği atın
 
 Script'in 5d ve 5e kontrolleri bu tablonun 401 ve 400 satırlarını kullanıyor.
 
+## Kartı ana sayfaya ekle
+
+- Ana sayfa (Dashboard) → sağ üstten **Düzenle** → **Kart ekle** → arama kutusuna "Home Print" yaz, kartı seç.
+- Görsel düzenleyiciden yazıcıyı seç (boş bırakırsan ilk yazıcı kullanılır), istersen başlık yaz, mürekkep seviyelerini göstermek ya da gizlemek için anahtarı kullan.
+- YAML ile eklemek istersen:
+
+```yaml
+type: custom:home-print-card
+# hepsi isteğe bağlı
+entry_id: <yazıcının entry_id değeri>
+title: Ofis yazıcısı
+show_ink: true
+```
+
+- Kart entegrasyonla birlikte kendiliğinden yüklenir, ayrıca bir kaynak (resource) eklemen gerekmez.
+- Entegrasyonu güncelledikten sonra kart eski haliyle görünürse tarayıcıda sayfayı sert yenile (Ctrl+Shift+R, telefonda uygulamayı kapatıp aç).
+
 ## Bilinen konular
 
 - **PDF desteklemeyen yazıcılar:** `document-format-supported` listesinde `application/pdf` yoksa PDF, PWG raster ya da URF'ye dönüştürülerek gönderilir (Plan 3). Script'in 2. kontrolünde "PDF: YOK" görürsen bunu bekle; hata sayılmaz. 4m-4p ve 6 dönüştürmenin çalıştığını gösterir.
