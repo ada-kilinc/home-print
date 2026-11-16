@@ -363,10 +363,17 @@ class HomePrintClient:
         job_name: str,
         user_name: str,
         options: PrintOptions,
+        send_page_ranges: bool = True,
     ) -> JobResult:
-        """Submit a Print-Job after validating options against capabilities."""
+        """Submit a Print-Job after validating options against capabilities.
+
+        ``send_page_ranges=False`` is for converted jobs, whose data already
+        holds only the selected pages: ``page-ranges`` is then neither checked
+        nor sent.
+        """
         caps = (await self.get_printer()).capabilities
-        if options.page_ranges and not caps.page_ranges:
+        page_ranges = options.page_ranges if send_page_ranges else None
+        if page_ranges and not caps.page_ranges:
             raise UnsupportedOption("page_ranges")
         if caps.sides and options.sides not in caps.sides:
             raise UnsupportedOption("sides")
@@ -378,8 +385,8 @@ class HomePrintClient:
         job_attrs: dict[str, Any] = {"copies": options.copies, "sides": options.sides}
         if options.color_mode:
             job_attrs["print-color-mode"] = options.color_mode
-        if options.page_ranges:
-            job_attrs["page-ranges"] = _parse_page_ranges(options.page_ranges)
+        if page_ranges:
+            job_attrs["page-ranges"] = _parse_page_ranges(page_ranges)
 
         response = await self._execute(
             IppOperation.PRINT_JOB,

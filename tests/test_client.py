@@ -177,6 +177,31 @@ async def test_print_job_omits_unset_color_mode_and_page_ranges():
     assert "page-ranges" not in job_attrs
 
 
+async def test_print_job_without_page_ranges_for_converted_job():
+    # Converted jobs carry only the selected pages: page-ranges is neither
+    # checked against page-ranges-supported nor sent.
+    response = _printer_response()
+    response["printers"][0]["page-ranges-supported"] = False
+    execute = AsyncMock(
+        side_effect=[
+            response,
+            {"status-code": 0, "jobs": [{"job-id": 7, "job-state": 3}]},
+        ]
+    )
+    client = _client(execute)
+    await client.print_job(
+        b"RaS2",
+        document_format="image/pwg-raster",
+        job_name="j",
+        user_name="u",
+        options=PrintOptions(copies=2, page_ranges="2-3"),
+        send_page_ranges=False,
+    )
+    job_attrs = execute.await_args_list[-1].args[1]["job-attributes-tag"]
+    assert "page-ranges" not in job_attrs
+    assert job_attrs["copies"] == 2
+
+
 @pytest.mark.parametrize(
     ("options", "name"),
     [

@@ -1,5 +1,8 @@
 """Tests for the authenticated upload endpoint."""
 
+import json
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 import aiohttp
@@ -11,6 +14,7 @@ from custom_components.home_print.client import (
     CannotConnect,
     PrintTimeout,
     UnsupportedOption,
+    parse_printer,
 )
 from custom_components.home_print.const import (
     CONF_ADMIN_ONLY,
@@ -20,8 +24,19 @@ from custom_components.home_print.const import (
 from custom_components.home_print.http import CHUNK_SIZE
 
 from .common import PDF, PNG, make_entry, setup_entry
+from .convert.samples import blank_pdf
 
 MB = 1024 * 1024
+DESKJET = parse_printer(
+    json.loads(
+        (Path(__file__).parent / "fixtures/printer_hp_deskjet_4670.json").read_text()
+    )
+)
+
+
+def _with_formats(*formats: str):
+    caps = replace(DESKJET.capabilities, document_formats=frozenset(formats))
+    return replace(DESKJET, capabilities=caps)
 
 
 def form(
@@ -213,7 +228,8 @@ async def test_upload_print_timeout(hass, mock_client, hass_client):
 
 
 async def test_upload_format_not_supported_by_printer(hass, mock_client, hass_client):
-    # The fixture printer does not list image/png.
+    # Neither PNG nor anything it converts to (JPEG, PWG, URF).
+    mock_client.get_printer.return_value = _with_formats("application/vnd.hp-PCL")
     entry = await setup_entry(hass)
     client = await hass_client()
     resp = await client.post(url(entry.entry_id), data=form(PNG, "photo.png"))
@@ -299,3 +315,68 @@ async def test_two_entries_register_view_once(hass, mock_client, hass_client):
     for entry in (first, second):
         resp = await client.post(url(entry.entry_id), data=form())
         assert resp.status == 200
+
+
+async def test_upload_pdf_converted_for_deskjet(hass, mock_client, hass_client):
+    mock_client.get_printer.return_value = DESKJET
+    entry = await setup_entry(hass)
+    events = async_capture_events(hass, EVENT_JOB)
+    client = await hass_client()
+    resp = await client.post(
+        url(entry.entry_id),
+        data=form(blank_pdf(3), "a.pdf", page_ranges="1-2", copies=2),
+    )
+    assert resp.status == 200
+
+    (data,), kwargs = mock_client.print_job.call_args
+    assert data.startswith(b"RaS2")
+    assert kwargs["document_format"] == "image/pwg-raster"
+    assert kwargs["send_page_ranges"] is False
+    assert kwargs["options"].copies == 2
+    await hass.async_block_till_done()
+    assert events[0].data["converted_to"] == "image/pwg-raster"
+    assert events[0].data["pages"] == 2
+
+
+async def test_upload_corrupt_pdf_invalid_document(hass, mock_client, hass_client):
+    mock_client.get_printer.return_value = DESKJET
+    entry = await setup_entry(hass)
+    client = await hass_client()
+    resp = await client.post(url(entry.entry_id), data=form(PDF, "a.pdf"))
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "invalid_document"
+    assert body["message"] == (
+        "The file couldn't be opened. It may be damaged or password protected."
+    )
+    mock_client.print_job.assert_not_called()
+
+
+async def test_upload_too_many_pages(hass, mock_client, hass_client):
+    mock_client.get_printer.return_value = DESKJET
+    entry = await setup_entry(hass)
+    client = await hass_client()
+    resp = await client.post(
+        url(entry.entry_id),
+        data=form(blank_pdf(201), "long.pdf"),
+        headers={"Accept-Language": "tr-TR,tr;q=0.9"},
+    )
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "too_many_pages"
+    assert body["message"] == ("Bu belge çok uzun. En fazla 200 sayfa yazdırabilirsin.")
+    mock_client.print_job.assert_not_called()
+
+
+async def test_upload_invalid_document_in_turkish(hass, mock_client, hass_client):
+    mock_client.get_printer.return_value = DESKJET
+    entry = await setup_entry(hass)
+    client = await hass_client()
+    resp = await client.post(
+        url(entry.entry_id),
+        data=form(PDF, "a.pdf"),
+        headers={"Accept-Language": "tr-TR,tr;q=0.9"},
+    )
+    assert (await resp.json())["message"] == (
+        "Dosya açılamadı. Bozuk ya da parola korumalı olabilir."
+    )

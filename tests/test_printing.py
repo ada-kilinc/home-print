@@ -1,6 +1,11 @@
 """Tests for the shared printing path."""
 
+import json
+import time
+import tracemalloc
 from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from homeassistant.core import Event
@@ -12,6 +17,7 @@ from custom_components.home_print.client import (
     PrinterRejected,
     PrintTimeout,
     UnsupportedOption,
+    parse_printer,
 )
 from custom_components.home_print.const import (
     CONF_DEFAULT_COLOR_MODE,
@@ -19,16 +25,19 @@ from custom_components.home_print.const import (
     CONF_MAX_FILE_MB,
     EVENT_JOB,
 )
+from custom_components.home_print.convert import pipeline
 from custom_components.home_print.models import PrintOptions
 from custom_components.home_print.printing import (
     FileTooLarge,
     FormatNotSupportedByPrinter,
+    InvalidDocumentError,
     InvalidPrintOption,
     OptionNotSupportedByPrinter,
     PrinterRejectedJob,
     PrintError,
     PrinterUnavailable,
     PrintTimedOut,
+    TooManyPagesError,
     UnsupportedFileType,
     async_print,
     build_options,
@@ -36,6 +45,16 @@ from custom_components.home_print.printing import (
 )
 
 from .common import JPEG, PDF, PNG, make_entry, setup_entry
+from .convert import pwg_decoder
+from .convert.samples import blank_pdf, page_image, pdf_from_images
+
+DESKJET = parse_printer(
+    json.loads(
+        (Path(__file__).parent / "fixtures/printer_hp_deskjet_4670.json").read_text()
+    )
+)
+PWG = "image/pwg-raster"
+A4_300DPI_RGB_BYTES = 2480 * 3508 * 3
 
 
 def test_sniff_format():
@@ -85,8 +104,10 @@ async def test_async_print_rejects_unknown_type(hass, mock_client):
 async def test_async_print_rejects_format_not_supported_by_printer(hass, mock_client):
     entry = await setup_entry(hass)
     coordinator = entry.runtime_data.coordinator
+    # No route: the printer takes neither the file's format nor a raster one.
     caps = replace(
-        coordinator.data.capabilities, document_formats=frozenset({"image/urf"})
+        coordinator.data.capabilities,
+        document_formats=frozenset({"application/vnd.hp-PCL"}),
     )
     coordinator.async_set_updated_data(replace(coordinator.data, capabilities=caps))
 
@@ -111,18 +132,40 @@ async def test_async_print_offline_raises_unavailable(hass, mock_client):
     assert entry.runtime_data.coordinator.last_job.state == "error"
 
 
-async def test_async_print_skips_format_check_when_offline(hass, mock_client):
+async def test_async_print_uses_cached_caps_after_failed_poll(hass, mock_client):
     entry = await setup_entry(hass)
-    # Last poll failed: the cached capabilities may be stale, so skip the
-    # local check and let the client report the real problem.
+    # Last poll failed but capabilities are cached: they still decide the
+    # target format, and the client reports the real connection problem.
     entry.runtime_data.coordinator.last_update_success = False
     mock_client.print_job.side_effect = CannotConnect("offline")
 
     with pytest.raises(PrinterUnavailable):
         await async_print(
-            hass, entry, PNG, file_name="a.png", options=PrintOptions(), user=None
+            hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
         )
     mock_client.print_job.assert_called_once()
+
+
+async def test_async_print_without_printer_data_is_unavailable(hass, mock_client):
+    entry = await setup_entry(hass)
+    events = async_capture_events(hass, EVENT_JOB)
+    coordinator = entry.runtime_data.coordinator
+    # Setup needs a first refresh, so this is a defensive guard. Entities
+    # assume data, so keep the last-job update from notifying them.
+    coordinator.data = None
+
+    with (
+        patch.object(pipeline, "prepare", wraps=pipeline.prepare) as prepare,
+        patch.object(coordinator, "async_set_last_job"),
+        pytest.raises(PrinterUnavailable),
+    ):
+        await async_print(
+            hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    prepare.assert_not_called()
+    mock_client.print_job.assert_not_called()
+    assert events[0].data["error"] == "printer_unavailable"
 
 
 async def test_async_print_maps_unsupported_option(hass, mock_client):
@@ -201,6 +244,8 @@ async def test_async_print_fires_event_and_sets_last_job(
         "job_id": 42,
         "result": "sent",
         "error": None,
+        "converted_to": None,
+        "pages": None,
     }
     last = entry.runtime_data.coordinator.last_job
     assert last.file_name == "report.pdf"
@@ -314,3 +359,170 @@ async def test_async_print_unexpected_error_still_reports(hass, mock_client):
     assert events[0].data["result"] == "error"
     assert events[0].data["error"] == "print_failed"
     assert entry.runtime_data.coordinator.last_job.state == "error"
+
+
+# --- conversion -----------------------------------------------------------------
+
+
+async def _deskjet_entry(hass, mock_client):
+    mock_client.get_printer.return_value = DESKJET
+    return await setup_entry(hass)
+
+
+async def test_async_print_converts_pdf_for_deskjet(hass, mock_client):
+    entry = await _deskjet_entry(hass, mock_client)
+    events = async_capture_events(hass, EVENT_JOB)
+    options = PrintOptions(copies=2, sides="two-sided-long-edge", page_ranges="2-3")
+
+    await async_print(
+        hass, entry, blank_pdf(3), file_name="a.pdf", options=options, user=None
+    )
+    await hass.async_block_till_done()
+
+    (data,), kwargs = mock_client.print_job.call_args
+    assert kwargs["document_format"] == PWG
+    assert kwargs["send_page_ranges"] is False
+    # Options go through unchanged: copies and sides are still IPP attributes.
+    assert kwargs["options"] == options
+    assert isinstance(data, bytes)
+    pages = pwg_decoder.decode(data)
+    assert len(pages) == 2
+    assert pages[0].header["NumCopies"] == 1
+    assert events[0].data["converted_to"] == PWG
+    assert events[0].data["pages"] == 2
+    assert events[0].data["result"] == "sent"
+
+
+async def test_async_print_passthrough_sends_page_ranges(hass, mock_client):
+    entry = await setup_entry(hass)
+    events = async_capture_events(hass, EVENT_JOB)
+    await async_print(
+        hass,
+        entry,
+        PDF,
+        file_name="a.pdf",
+        options=PrintOptions(page_ranges="1-2"),
+        user=None,
+    )
+    await hass.async_block_till_done()
+    kwargs = mock_client.print_job.call_args.kwargs
+    assert kwargs["document_format"] == "application/pdf"
+    assert kwargs["send_page_ranges"] is True
+    assert events[0].data["converted_to"] is None
+    assert events[0].data["pages"] is None
+
+
+async def test_async_print_prepares_in_executor(hass, mock_client):
+    entry = await _deskjet_entry(hass, mock_client)
+    with patch.object(
+        hass, "async_add_executor_job", wraps=hass.async_add_executor_job
+    ) as executor:
+        await async_print(
+            hass,
+            entry,
+            blank_pdf(1),
+            file_name="a.pdf",
+            options=PrintOptions(),
+            user=None,
+        )
+    targets = [call.args[0] for call in executor.call_args_list]
+    assert pipeline.prepare in targets
+
+
+async def test_async_print_corrupt_pdf_is_invalid_document(hass, mock_client):
+    entry = await _deskjet_entry(hass, mock_client)
+    events = async_capture_events(hass, EVENT_JOB)
+    with pytest.raises(InvalidDocumentError) as exc:
+        await async_print(
+            hass, entry, PDF, file_name="a.pdf", options=PrintOptions(), user=None
+        )
+    await hass.async_block_till_done()
+    assert exc.value.key == "invalid_document"
+    assert exc.value.http_status == 400
+    mock_client.print_job.assert_not_called()
+    assert events[0].data["error"] == "invalid_document"
+    assert events[0].data["converted_to"] is None
+
+
+async def test_async_print_too_many_pages(hass, mock_client):
+    entry = await _deskjet_entry(hass, mock_client)
+    with pytest.raises(TooManyPagesError) as exc:
+        await async_print(
+            hass,
+            entry,
+            blank_pdf(201),
+            file_name="long.pdf",
+            options=PrintOptions(),
+            user=None,
+        )
+    assert exc.value.key == "too_many_pages"
+    assert exc.value.http_status == 400
+    assert exc.value.translation_placeholders == {"limit": "200"}
+    mock_client.print_job.assert_not_called()
+
+
+async def test_async_print_page_range_past_end_is_invalid_option(hass, mock_client):
+    entry = await _deskjet_entry(hass, mock_client)
+    with pytest.raises(InvalidPrintOption) as exc:
+        await async_print(
+            hass,
+            entry,
+            blank_pdf(2),
+            file_name="a.pdf",
+            options=PrintOptions(page_ranges="5-6"),
+            user=None,
+        )
+    assert exc.value.translation_placeholders == {"option": "page_ranges"}
+
+
+async def test_async_print_no_route_is_format_not_supported(hass, mock_client):
+    info = replace(
+        DESKJET,
+        capabilities=replace(
+            DESKJET.capabilities,
+            document_formats=frozenset({"application/vnd.hp-PCL"}),
+        ),
+    )
+    mock_client.get_printer.return_value = info
+    entry = await setup_entry(hass)
+    with pytest.raises(FormatNotSupportedByPrinter) as exc:
+        await async_print(
+            hass,
+            entry,
+            blank_pdf(1),
+            file_name="a.pdf",
+            options=PrintOptions(),
+            user=None,
+        )
+    assert exc.value.http_status == 422
+    assert exc.value.translation_placeholders == {"format": "application/pdf"}
+
+
+async def test_async_print_large_pdf_end_to_end(hass, mock_client):
+    """Review Focus 5: 150 pages, one page bitmap in memory at a time.
+
+    tracemalloc sees Python and numpy buffers (numpy reports its data
+    allocations to it); Pillow's and PDFium's own C heaps are invisible to
+    it. The bound is on what it can see, with the output (the chunks plus
+    the joined bytes, 2x the job size) and the input PDF taken out.
+    """
+    entry = await _deskjet_entry(hass, mock_client)
+    pdf = pdf_from_images([page_image(595, 842)] * 150)
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        start = time.monotonic()
+        await async_print(
+            hass, entry, pdf, file_name="big.pdf", options=PrintOptions(), user=None
+        )
+        elapsed = time.monotonic() - start
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    (data,), kwargs = mock_client.print_job.call_args
+    assert kwargs["document_format"] == PWG
+    assert pwg_decoder.parse_header(data[4 : 4 + 1796])["TotalPageCount"] == 150
+    assert elapsed < 60
+    assert peak - 2 * len(data) < 3 * A4_300DPI_RGB_BYTES

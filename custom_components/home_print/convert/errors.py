@@ -23,3 +23,7 @@ class TooManyPages(ConvertError):
         super().__init__(f"{count} pages exceed the limit of {limit}")
         self.count = count
         self.limit = limit
+
+
+class NoConversionRoute(ConvertError):
+    """The printer takes neither the document's format nor any we can make."""

@@ -142,6 +142,12 @@
     "invalid_option": {
       "message": "The {option} value is not valid."
     },
+    "invalid_document": {
+      "message": "The file couldn't be opened. It may be damaged or password protected."
+    },
+    "too_many_pages": {
+      "message": "This document is too long. You can print at most {limit} pages."
+    },
     "invalid_request": {
       "message": "The upload request is not valid."
     },

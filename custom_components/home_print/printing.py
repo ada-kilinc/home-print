@@ -28,7 +28,9 @@ from .const import (
     DOMAIN,
     EVENT_JOB,
 )
-from .models import JobResult, LastJob, PrintOptions
+from .convert import pipeline
+from .convert.errors import InvalidDocument, NoConversionRoute, TooManyPages
+from .models import JobResult, LastJob, PrinterInfo, PrintOptions
 
 if TYPE_CHECKING:
     from . import HomePrintConfigEntry
@@ -120,6 +122,24 @@ class InvalidPrintOption(PrintError, ServiceValidationError):
     http_status = 400
 
 
+class InvalidDocumentError(PrintError, ServiceValidationError):
+    """The document is corrupt, encrypted or empty."""
+
+    key = "invalid_document"
+    http_status = 400
+
+
+class TooManyPagesError(PrintError, ServiceValidationError):
+    """The document has more pages than we convert."""
+
+    key = "too_many_pages"
+    http_status = 400
+
+
+# InvalidDocument reasons that come from the page selection, not the file.
+_PAGE_SELECTION_REASONS = frozenset({"no_pages", "invalid_page_ranges"})
+
+
 def sniff_format(data: bytes) -> str | None:
     """Detect the document format from the file's first bytes."""
     for magic, mime in _MAGIC:
@@ -204,6 +224,7 @@ def async_report_result(
     user: User | None,
     result: JobResult | None = None,
     error: PrintError | None = None,
+    prepared: pipeline.PreparedJob | None = None,
 ) -> None:
     """Fire EVENT_JOB and update the last job. Never includes file contents."""
     user_name = _user_name(user)
@@ -217,6 +238,12 @@ def async_report_result(
             "job_id": result.job_id if result else None,
             "result": "sent" if error is None else "error",
             "error": error.key if error else None,
+            "converted_to": (
+                prepared.document_format
+                if prepared and not prepared.send_page_ranges
+                else None
+            ),
+            "pages": prepared.page_count if prepared else None,
         },
     )
     entry.runtime_data.coordinator.async_set_last_job(
@@ -242,7 +269,9 @@ async def async_print(
     """Validate and send ``data`` to the entry's printer."""
     file_name = clean_file_name(file_name)
     try:
-        result = await _async_send(hass, entry, data, file_name, options, user)
+        result, prepared = await _async_send(
+            hass, entry, data, file_name, options, user
+        )
     except PrintError as err:
         async_report_result(hass, entry, file_name=file_name, user=user, error=err)
         raise
@@ -251,7 +280,9 @@ async def async_print(
         error = PrintError()
         async_report_result(hass, entry, file_name=file_name, user=user, error=error)
         raise error from err
-    async_report_result(hass, entry, file_name=file_name, user=user, result=result)
+    async_report_result(
+        hass, entry, file_name=file_name, user=user, result=result, prepared=prepared
+    )
     return result
 
 
@@ -262,7 +293,7 @@ async def _async_send(
     file_name: str,
     options: PrintOptions,
     user: User | None,
-) -> JobResult:
+) -> tuple[JobResult, pipeline.PreparedJob]:
     if len(data) > max_file_bytes(entry):
         raise FileTooLarge(max=max_file_mb(entry))
     validate_options(options)
@@ -271,22 +302,21 @@ async def _async_send(
     if document_format is None:
         raise UnsupportedFileType()
 
-    # When the printer is offline there is nothing to check against; the
-    # client call below then surfaces CannotConnect.
-    coordinator = entry.runtime_data.coordinator
-    info = coordinator.data
-    if info is not None and coordinator.last_update_success:
-        formats = info.capabilities.document_formats
-        if formats and document_format not in formats:
-            raise FormatNotSupportedByPrinter(format=document_format)
+    # Conversion needs the printer's capabilities. Cached ones are used even
+    # after a failed poll; they describe the hardware, not its state.
+    info = entry.runtime_data.coordinator.data
+    if info is None:
+        raise PrinterUnavailable()
+    prepared = await _async_prepare(hass, data, document_format, info, options)
 
     try:
-        return await entry.runtime_data.client.print_job(
-            data,
-            document_format=document_format,
+        result = await entry.runtime_data.client.print_job(
+            prepared.data,
+            document_format=prepared.document_format,
             job_name=file_name,
             user_name=_user_name(user),
             options=options,
+            send_page_ranges=prepared.send_page_ranges,
         )
     except PrintTimeout as err:
         raise PrintTimedOut() from err
@@ -299,3 +329,26 @@ async def _async_send(
     except HomePrintError as err:
         _LOGGER.warning("Printing %s failed: %s", file_name, err)
         raise PrintError() from err
+    return result, prepared
+
+
+async def _async_prepare(
+    hass: HomeAssistant,
+    data: bytes,
+    document_format: str,
+    info: PrinterInfo,
+    options: PrintOptions,
+) -> pipeline.PreparedJob:
+    """Convert in the executor and map conversion errors to PrintErrors."""
+    try:
+        return await hass.async_add_executor_job(
+            pipeline.prepare, data, document_format, info.capabilities, options
+        )
+    except NoConversionRoute as err:
+        raise FormatNotSupportedByPrinter(format=document_format) from err
+    except TooManyPages as err:
+        raise TooManyPagesError(limit=err.limit) from err
+    except InvalidDocument as err:
+        if str(err) in _PAGE_SELECTION_REASONS:
+            raise InvalidPrintOption(option="page_ranges") from err
+        raise InvalidDocumentError() from err
