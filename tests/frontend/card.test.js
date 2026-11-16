@@ -1732,3 +1732,68 @@ describe("fix round 1", () => {
     }
   });
 });
+
+describe("final review", () => {
+  const items = (card) => [...card.shadowRoot.querySelectorAll('[data-role="history-item"]')];
+
+  it("does not offer a preview for a record that never had a file", async () => {
+    const hass = makeHass({
+      history: [
+        historyEntry({ id: "1".repeat(32), file: false, mime: null, state: "error", pages: null }),
+        historyEntry({ id: "2".repeat(32), file: false, mime: "application/pdf" }),
+      ],
+    });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    const [never, gone] = items(card);
+    expect(never.textContent).not.toContain("dosya yok");
+    const open = never.querySelector('[data-role="history-open"]');
+    expect(open.tagName).not.toBe("BUTTON");
+    expect(open.classList.contains("static")).toBe(true);
+    open.click();
+    await flush();
+    expect(role(card, "preview-dialog").open).toBe(false);
+    expect(never.querySelector('[data-role="history-delete"]')).toBeTruthy();
+    // A file that was kept and has expired still says so.
+    expect(gone.textContent).toContain("dosya yok");
+    gone.querySelector('[data-role="history-open"]').click();
+    await flush();
+    expect(role(card, "preview-dialog").open).toBe(true);
+    expect(text(card, "preview-body")).toBe("Bu dosya artık saklanmıyor.");
+  });
+
+  it("closes the pick menu when focus leaves it", async () => {
+    Object.defineProperty(navigator, "userAgent", { value: "Android", configurable: true });
+    try {
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      const card = await mount(makeHass());
+      const menu = role(card, "pick-menu");
+      const first = $(card, '[data-option="file"]');
+      role(card, "pick").click();
+      expect(menu.hidden).toBe(false);
+      // Moving within the menu, or back to the button, keeps it open.
+      first.dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, composed: true, relatedTarget: $(card, '[data-option="photo"]') }),
+      );
+      expect(menu.hidden).toBe(false);
+      first.dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, composed: true, relatedTarget: role(card, "pick") }),
+      );
+      expect(menu.hidden).toBe(false);
+      // Tabbing on to anything else closes it.
+      first.dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, composed: true, relatedTarget: role(card, "copies") }),
+      );
+      expect(menu.hidden).toBe(true);
+      role(card, "pick").click();
+      role(card, "pick").dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, composed: true, relatedTarget: outside }),
+      );
+      expect(menu.hidden).toBe(true);
+    } finally {
+      delete navigator.userAgent;
+    }
+  });
+});

@@ -173,6 +173,7 @@ show_ink: true
 
 - Kart entegrasyonla birlikte kendiliğinden yüklenir, ayrıca bir kaynak (resource) eklemen gerekmez.
 - Başlıktaki saat simgesi geçmiş baskıları açar: çöp kutusuyla kaydı ve dosyayı silebilir, kayda dokunup ön izlemeyi kaydırarak görebilirsin; **Dosya seç** iPhone/iPad'de sistemin kendi menüsünü, diğer cihazlarda kartın "Dosyadan seç / Fotoğraf seç / Fotoğraf çek" menüsünü açar.
+- Yazdırılan dosyaların aslı **Dosyaları sakla (gün)** süresi kadar (varsayılan 7) `<config>/home_print/<entry_id>/` altında saklanır ve yedeklere girer; geçmişi ve ön izlemeleri giriş yapan herkes görebilir, hiç saklanmasın istersen ayarı 0 yap.
 - Entegrasyonu güncelledikten sonra kart eski haliyle görünürse tarayıcıda sayfayı sert yenile (Ctrl+Shift+R, telefonda uygulamayı kapatıp aç).
 
 ## Bilinen konular

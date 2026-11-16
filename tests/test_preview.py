@@ -5,10 +5,13 @@ import io
 import threading
 import time
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from homeassistant.components.http.auth import async_sign_path
 from PIL import Image
+
+from custom_components.home_print import preview
 
 from .common import make_entry, setup_entry
 from .convert.samples import blank_pdf
@@ -173,4 +176,33 @@ async def test_at_most_two_renders_run_at_once(hass, mock_client, hass_client):
             *(client.get(url(entry.entry_id, record["id"], n)) for n in (1, 2, 3))
         )
     assert [r.status for r in responses] == [200, 200, 200]
+    assert peak == 2
+
+
+async def test_render_slots_are_held_by_the_worker(hass):
+    """The cap lives in the worker thread, so a cancelled request can't free it."""
+    lock = threading.Lock()
+    running = 0
+    peak = 0
+
+    def slow_render(folder, path, page):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.2)
+        with lock:
+            running -= 1
+        return b"jpeg"
+
+    with patch.object(preview, "_render", slow_render):
+        results = await asyncio.gather(
+            *(
+                hass.async_add_executor_job(
+                    preview.render_bounded, Path("/x"), Path("/x/a.pdf"), n
+                )
+                for n in (1, 2, 3)
+            )
+        )
+    assert results == [b"jpeg"] * 3
     assert peak == 2

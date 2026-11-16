@@ -696,6 +696,7 @@ const STYLE = `
     color: inherit;
     cursor: pointer;
   }
+  .history-open.static { cursor: default; }
   .history-mark { flex: none; width: 1.5em; text-align: center; font-weight: 500; }
   .history-mark.ok { color: var(--success-color, var(--primary-color)); }
   .history-mark.bad { color: var(--error-color); }
@@ -865,6 +866,9 @@ class HomePrintCard extends HTMLElement {
       option.addEventListener("click", () => this._onPickOption(option.dataset.option));
     }
     this._role("pick-menu").addEventListener("keydown", (ev) => this._onMenuKey(ev));
+    for (const name of ["pick", "pick-menu"]) {
+      this._role(name).addEventListener("focusout", (ev) => this._onMenuFocusOut(ev));
+    }
     this._role("print").addEventListener("click", () => this._onPrint());
     this._role("history-button").addEventListener("click", () => this._openHistory());
     this._role("history-close").addEventListener("click", () => this._closeHistory());
@@ -1067,6 +1071,16 @@ class HomePrintCard extends HTMLElement {
     if (focusButton) this._role("pick").focus();
   }
 
+  // Tab (or any focus move) to something outside the menu closes it. A null
+  // relatedTarget is left to the outside-click handler: Safari doesn't focus
+  // tapped buttons, so closing here would swallow the tap on an option.
+  _onMenuFocusOut(ev) {
+    const next = ev.relatedTarget;
+    if (!next || this._role("pick-menu").hidden) return;
+    if (this._role("pick-menu").contains(next) || next === this._role("pick")) return;
+    this._closeMenu();
+  }
+
   _closeMenuOutside(ev) {
     const path = ev.composedPath();
     if (path.includes(this._role("pick-menu")) || path.includes(this._role("pick"))) return;
@@ -1205,11 +1219,16 @@ class HomePrintCard extends HTMLElement {
     row.className = "history-item";
     row.dataset.role = "history-item";
 
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "history-open";
+    // A record without a MIME type never had a file (a failed job, or files
+    // not kept at all): nothing to preview, so the row is not a button.
+    const hadFile = Boolean(record.mime);
+    const open = document.createElement(hadFile ? "button" : "div");
+    open.className = hadFile ? "history-open" : "history-open static";
     open.dataset.role = "history-open";
-    open.addEventListener("click", () => this._openPreview(record));
+    if (hadFile) {
+      open.type = "button";
+      open.addEventListener("click", () => this._openPreview(record));
+    }
 
     const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
     const icon = historyStateIcon(state);
@@ -1240,7 +1259,7 @@ class HomePrintCard extends HTMLElement {
       span.textContent = part;
       meta.append(span);
     }
-    if (record.file === false) {
+    if (hadFile && record.file === false) {
       const tag = document.createElement("span");
       tag.className = "tag";
       tag.textContent = t(lang, "file_gone_tag");

@@ -38,7 +38,9 @@ The clock icon in the card's header opens the print history, where you can delet
 
 ## Options
 
-Per printer (**Configure**): default duplex and colour mode, maximum file size (default 25 MB), polling interval, and "only admins can print".
+Per printer (**Configure**): default duplex and colour mode, maximum file size (default 25 MB), polling interval, "only admins can print", and **Keep files (days)** (default 7, 0–90; 0 keeps no files, only the history entries).
+
+**Privacy:** the original of every printed file is kept for that many days under `<config>/home_print/<entry_id>/`, so the history can show a preview. These files are included in Home Assistant backups, and deleting an entry from the history doesn't remove it from backups already taken. Any logged-in Home Assistant user can see the history list and the previews: "only admins can print" limits printing and deleting, not viewing. Set **Keep files (days)** to 0 to keep no files.
 
 ## Contributing
 
@@ -70,6 +72,10 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 - Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
 
 **Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
+
+**Ayarlar:** Her yazıcının **Yapılandır** ekranında varsayılan çift taraf ve renk, en büyük dosya boyutu, yoklama aralığı, "yalnızca yöneticiler yazdırabilir" ve **Dosyaları sakla (gün)** var. Sonuncusu varsayılan olarak 7 gün, 0 ile 90 arası olabilir. 0 seçersen dosya saklanmaz, yalnızca geçmiş kaydı tutulur.
+
+**Gizlilik:** Ön izleme gösterebilmek için yazdırılan her dosyanın aslı bu süre boyunca `<config>/home_print/<entry_id>/` altında durur. Bu dosyalar Home Assistant yedeklerine de girer. Geçmişten sildiğin bir kayıt, önceden alınmış yedeklerde kalır. Geçmiş listesini ve ön izlemeleri Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği görmeyi değil, yazdırmayı ve silmeyi kısıtlar. Hiç dosya saklanmasın istiyorsan **Dosyaları sakla (gün)** değerini 0 yap.
 
 Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor. Tarama özelliği sonraki sürümde gelecek.
 
