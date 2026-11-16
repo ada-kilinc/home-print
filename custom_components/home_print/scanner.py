@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
+    from .scanning import ScanJobState
+
 _LOGGER = logging.getLogger(__name__)
 
 # A slow scanner must not stall printer polling.
@@ -34,8 +36,8 @@ class ScannerRuntime:
     caps: ScannerCaps
     archive: ScanArchive
     status: ScannerStatus | None = None
-    # ScanJobState of the running scan; owned by scanning.py (Task 5).
-    active: Any = None
+    # The running (or recently finished) scan; owned by scanning.py.
+    active: ScanJobState | None = None
     # Keeps a background scan task referenced while it runs.
     task: asyncio.Task[Any] | None = None
 

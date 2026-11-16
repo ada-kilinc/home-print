@@ -13,7 +13,15 @@ from homeassistant.helpers import entity_registry as er
 from .client import CannotConnect, HomePrintError, PrinterRejected
 from .const import CONF_ADMIN_ONLY, CONF_DEFAULT_COLOR_MODE, CONF_DEFAULT_SIDES, DOMAIN
 from .convert.pipeline import accepted_formats
+from .escl.errors import EsclError
 from .printing import COLOR_AUTO, max_file_mb
+from .scanning import (
+    ScanError,
+    ScanRequest,
+    active_state,
+    async_start_scan,
+    scan_defaults,
+)
 
 if TYPE_CHECKING:
     from . import HomePrintConfigEntry
@@ -29,6 +37,11 @@ def async_setup_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_job)
     websocket_api.async_register_command(hass, ws_history)
     websocket_api.async_register_command(hass, ws_history_delete)
+    websocket_api.async_register_command(hass, ws_scan_start)
+    websocket_api.async_register_command(hass, ws_scan_state)
+    websocket_api.async_register_command(hass, ws_scans)
+    websocket_api.async_register_command(hass, ws_scans_delete)
+    websocket_api.async_register_command(hass, ws_scans_rename)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list[HomePrintConfigEntry]:
@@ -89,6 +102,31 @@ def _defaults(entry: HomePrintConfigEntry) -> dict[str, Any]:
     }
 
 
+def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
+    """What the card needs to offer scanning; None without a scanner."""
+    scanner = entry.runtime_data.scanner
+    if scanner is None:
+        return None
+    status = scanner.status
+    active = active_state(scanner)
+    running = active is not None and active.state in ("scanning", "saving")
+    return {
+        "available": status is not None and status.state != "down",
+        "state": status.state if status is not None else None,
+        "adf_loaded": status.adf_loaded if status is not None else None,
+        "sources": {
+            name: {
+                "color_modes": list(src.color_modes),
+                "resolutions": list(src.resolutions),
+            }
+            for name, src in scanner.caps.sources.items()
+        },
+        "formats": ["pdf", "jpeg"],
+        "defaults": scan_defaults(scanner.caps),
+        "active_scan_id": active.scan_id if running and active else None,
+    }
+
+
 def _printer(
     hass: HomeAssistant, entry: HomePrintConfigEntry, connection: Any
 ) -> dict[str, Any]:
@@ -104,6 +142,7 @@ def _printer(
             "capabilities": None,
             "defaults": _defaults(entry),
             "max_file_mb": max_file_mb(entry),
+            "scanner": None,
         }
     coordinator = entry.runtime_data.coordinator
     info = coordinator.data
@@ -127,6 +166,7 @@ def _printer(
         "capabilities": capabilities,
         "defaults": _defaults(entry),
         "max_file_mb": max_file_mb(entry),
+        "scanner": _scanner_block(entry),
     }
 
 
@@ -257,3 +297,149 @@ async def ws_history_delete(
         return
     deleted = await entry.runtime_data.history.async_delete(msg["history_id"])
     connection.send_result(msg["id"], {"deleted": deleted})
+
+
+def _scan_entry(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> HomePrintConfigEntry | None:
+    """The loaded entry of the message; sends the error itself otherwise."""
+    entry = _history_entry(hass, connection, msg)
+    if entry is None:
+        return None
+    if entry.runtime_data.scanner is None:
+        connection.send_error(msg["id"], "no_scanner", "This printer has no scanner")
+        return None
+    return entry
+
+
+def _admin_ok(
+    entry: HomePrintConfigEntry,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> bool:
+    if _can_print(entry, connection):
+        return True
+    connection.send_error(
+        msg["id"], websocket_api.ERR_UNAUTHORIZED, "Administrator required"
+    )
+    return False
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scan/start",
+        vol.Required("entry_id"): str,
+        vol.Required("source"): str,
+        vol.Required("color_mode"): str,
+        vol.Required("resolution"): vol.All(int, vol.Range(min=1)),
+        vol.Required("format"): str,
+        vol.Optional("name"): vol.Any(None, str),
+        vol.Optional("append_to"): vol.Any(None, str),
+    }
+)
+@websocket_api.async_response
+async def ws_scan_start(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Start a scan; the reply is the initial state, the card polls the rest."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    if not _admin_ok(entry, connection, msg):
+        return
+    request = ScanRequest(
+        source=msg["source"],
+        color_mode=msg["color_mode"],
+        resolution=msg["resolution"],
+        format=msg["format"],
+        name=msg.get("name") or None,
+        append_to=msg.get("append_to") or None,
+    )
+    user = connection.user.name if connection.user else None
+    try:
+        state = await async_start_scan(hass, entry, request, user)
+    except (ScanError, EsclError) as err:
+        connection.send_error(msg["id"], err.code, err.code)
+        return
+    connection.send_result(msg["id"], {"scan": state.as_dict()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scan/state",
+        vol.Required("entry_id"): str,
+        vol.Required("scan_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_scan_state(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Return the state of a running or recently finished scan."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    state = active_state(entry.runtime_data.scanner)  # type: ignore[arg-type]
+    if state is None or state.scan_id != msg["scan_id"]:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Scan not found")
+        return
+    connection.send_result(msg["id"], {"scan": state.as_dict()})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "home_print/scans", vol.Required("entry_id"): str}
+)
+@websocket_api.async_response
+async def ws_scans(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Return the scan archive, newest first."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    connection.send_result(
+        msg["id"],
+        {"entries": entry.runtime_data.scanner.archive.entries()},  # type: ignore[union-attr]
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scans/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("scan_record_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_scans_delete(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Delete one scan and its file."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    if not _admin_ok(entry, connection, msg):
+        return
+    deleted = await entry.runtime_data.scanner.archive.async_delete(  # type: ignore[union-attr]
+        msg["scan_record_id"]
+    )
+    connection.send_result(msg["id"], {"deleted": deleted})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scans/rename",
+        vol.Required("entry_id"): str,
+        vol.Required("scan_record_id"): str,
+        vol.Required("name"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_scans_rename(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Rename a scan and its file."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    if not _admin_ok(entry, connection, msg):
+        return
+    record = await entry.runtime_data.scanner.archive.async_rename(  # type: ignore[union-attr]
+        msg["scan_record_id"], msg["name"]
+    )
+    connection.send_result(msg["id"], {"entry": record})

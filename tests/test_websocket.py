@@ -142,6 +142,7 @@ async def test_printers_lists_setup_retry_entry(hass, mock_client, hass_ws_clien
         "capabilities": None,
         "defaults": {"sides": "one-sided", "color_mode": None},
         "max_file_mb": 10,
+        "scanner": None,
     }
 
     ws = await hass_ws_client(hass)

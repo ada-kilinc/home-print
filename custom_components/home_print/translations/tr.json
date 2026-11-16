@@ -59,6 +59,26 @@
         "color": "Renkli",
         "monochrome": "Siyah beyaz"
       }
+    },
+    "scan_source": {
+      "options": {
+        "platen": "Cam",
+        "adf": "Belge besleyici",
+        "adf_duplex": "Çift yüzlü besleyici"
+      }
+    },
+    "scan_color_mode": {
+      "options": {
+        "color": "Renkli",
+        "gray": "Gri",
+        "bw": "Siyah beyaz"
+      }
+    },
+    "scan_format": {
+      "options": {
+        "pdf": "PDF",
+        "jpeg": "JPEG"
+      }
     }
   },
   "entity": {
@@ -125,6 +145,40 @@
           "description": "Basılacak sayfalar, mesela 1-3,5. Boş bırakırsan hepsi basılır."
         }
       }
+    },
+    "scan": {
+      "name": "Tara",
+      "description": "Yazıcının tarayıcısıyla bir belge tarar ve medya klasörüne kaydeder. İstersen bir kopyasını başka bir klasöre de koyar.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Yazıcı",
+          "description": "Hangi yazıcının tarayıcısının kullanılacağı."
+        },
+        "source": {
+          "name": "Kaynak",
+          "description": "Cam, belge besleyici ya da çift yüzlü besleyici. Boş bırakırsan cam kullanılır."
+        },
+        "color_mode": {
+          "name": "Renk modu",
+          "description": "Renkli, gri ya da siyah beyaz. Boş bırakırsan renkli taranır."
+        },
+        "resolution": {
+          "name": "Çözünürlük",
+          "description": "dpi cinsinden çözünürlük. Boş bırakırsan 300 (ya da tarayıcının sunduğu en yakın değer) kullanılır."
+        },
+        "format": {
+          "name": "Biçim",
+          "description": "PDF ya da JPEG. JPEG yalnızca tek sayfada olur. Boş bırakırsan PDF olur."
+        },
+        "file_name": {
+          "name": "Dosya adı",
+          "description": "Taramanın uzantısız adı. Boş bırakırsan tarih ve saat kullanılır."
+        },
+        "folder": {
+          "name": "Kopyalanacak klasör",
+          "description": "Taramanın bir kopyası bu klasöre de konur. Home Assistant'ın yazabildiği bir klasör olmalı."
+        }
+      }
     }
   },
   "exceptions": {
@@ -187,6 +241,45 @@
     },
     "file_not_found": {
       "message": "Dosya bulunamadı: {path}"
+    },
+    "no_scanner": {
+      "message": "Bu yazıcının tarayıcısı yok."
+    },
+    "folder_not_found": {
+      "message": "{path} klasörü yok."
+    },
+    "scan_error_scanner_busy": {
+      "message": "Tarayıcı meşgul. Biraz sonra tekrar dene."
+    },
+    "scan_error_scanner_unavailable": {
+      "message": "Tarayıcıya ulaşılamıyor. Yazıcının açık ve bağlı olduğunu kontrol et."
+    },
+    "scan_error_adf_empty": {
+      "message": "Belge besleyici boş. Kağıdı koyup tekrar dene."
+    },
+    "scan_error_invalid_option": {
+      "message": "Tarayıcı bu tarama ayarlarını desteklemiyor."
+    },
+    "scan_error_bad_scan": {
+      "message": "Tarayıcıdan gelen sayfa okunamadı."
+    },
+    "scan_error_too_large": {
+      "message": "Taranan sayfa çok büyük. Daha düşük bir çözünürlük seç."
+    },
+    "scan_error_too_many_pages": {
+      "message": "Belgede çok fazla sayfa var."
+    },
+    "scan_error_not_found": {
+      "message": "Sayfa eklenecek tarama bulunamadı."
+    },
+    "scan_error_no_scanner": {
+      "message": "Bu yazıcının tarayıcısı yok."
+    },
+    "scan_error_scan_failed": {
+      "message": "Beklenmeyen bir hata yüzünden tarama yapılamadı."
+    },
+    "scan_error_copy_failed": {
+      "message": "Tarama kaydedildi ama {path} klasörüne kopyalanamadı."
     }
   }
 }

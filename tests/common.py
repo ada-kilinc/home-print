@@ -51,3 +51,21 @@ async def setup_entry(hass, entry=None):
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entry
+
+
+async def setup_scanner_entry(hass, tmp_path, mock_find_scanner, **options):
+    """Set up an entry whose scanner exists and archives into ``tmp_path``."""
+    hass.config.media_dirs = {"local": str(tmp_path / "media")}
+    mock_find_scanner.return_value = URL
+    return await setup_entry(hass, make_entry(**options))
+
+
+def scan_jpeg(color=(200, 30, 30), size=(60, 80)) -> bytes:
+    """A small real JPEG, as a scanner would send."""
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", size, color).save(out, "JPEG")
+    return out.getvalue()

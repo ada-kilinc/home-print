@@ -27,6 +27,7 @@ from .frontend import async_register_frontend
 from .history import PrintHistory
 from .http import HomePrintUploadView
 from .preview import HomePrintPreviewView
+from .scan_views import ScanFileView, ScanPreviewView
 from .scanner import ScannerRuntime, async_refresh_status, async_setup_scanner
 from .scans import ScanArchive
 from .services import async_setup_services
@@ -59,6 +60,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_setup_websocket(hass)
     hass.http.register_view(HomePrintUploadView())
     hass.http.register_view(HomePrintPreviewView())
+    hass.http.register_view(ScanFileView())
+    hass.http.register_view(ScanPreviewView())
     await async_register_frontend(hass)
     return True
 

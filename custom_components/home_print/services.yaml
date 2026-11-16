@@ -37,3 +37,48 @@ print_file:
       example: "1-3,5"
       selector:
         text:
+scan:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: home_print
+    source:
+      selector:
+        select:
+          translation_key: scan_source
+          options:
+            - platen
+            - adf
+            - adf_duplex
+    color_mode:
+      selector:
+        select:
+          translation_key: scan_color_mode
+          options:
+            - color
+            - gray
+            - bw
+    resolution:
+      example: 300
+      selector:
+        number:
+          min: 75
+          max: 1200
+          mode: box
+    format:
+      selector:
+        select:
+          translation_key: scan_format
+          options:
+            - pdf
+            - jpeg
+    file_name:
+      example: invoice
+      selector:
+        text:
+    folder:
+      example: /media/documents
+      selector:
+        text:

@@ -59,6 +59,26 @@
         "color": "Color",
         "monochrome": "Black and white"
       }
+    },
+    "scan_source": {
+      "options": {
+        "platen": "Glass",
+        "adf": "Document feeder",
+        "adf_duplex": "Two-sided feeder"
+      }
+    },
+    "scan_color_mode": {
+      "options": {
+        "color": "Color",
+        "gray": "Grayscale",
+        "bw": "Black and white"
+      }
+    },
+    "scan_format": {
+      "options": {
+        "pdf": "PDF",
+        "jpeg": "JPEG"
+      }
     }
   },
   "entity": {
@@ -125,6 +145,40 @@
           "description": "Pages to print, for example 1-3,5. Prints all pages when empty."
         }
       }
+    },
+    "scan": {
+      "name": "Scan",
+      "description": "Scans a document with the printer's scanner and saves it in the media folder. Optionally copies it to another folder.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Printer",
+          "description": "The printer whose scanner to use."
+        },
+        "source": {
+          "name": "Source",
+          "description": "Glass, document feeder or two-sided feeder. Uses the glass when empty."
+        },
+        "color_mode": {
+          "name": "Color mode",
+          "description": "Color, grayscale or black and white. Uses color when empty."
+        },
+        "resolution": {
+          "name": "Resolution",
+          "description": "Resolution in dpi. Uses 300 (or the closest the scanner offers) when empty."
+        },
+        "format": {
+          "name": "Format",
+          "description": "PDF or JPEG. A JPEG is only possible for a single page. Uses PDF when empty."
+        },
+        "file_name": {
+          "name": "File name",
+          "description": "Name of the scan without extension. Uses the date and time when empty."
+        },
+        "folder": {
+          "name": "Copy to folder",
+          "description": "Also copies the scan to this folder. It must be a folder Home Assistant may write to."
+        }
+      }
     }
   },
   "exceptions": {
@@ -187,6 +241,45 @@
     },
     "file_not_found": {
       "message": "File not found: {path}"
+    },
+    "no_scanner": {
+      "message": "This printer has no scanner."
+    },
+    "folder_not_found": {
+      "message": "The folder {path} doesn't exist."
+    },
+    "scan_error_scanner_busy": {
+      "message": "The scanner is busy. Try again in a moment."
+    },
+    "scan_error_scanner_unavailable": {
+      "message": "Can't reach the scanner. Check that the printer is on and connected."
+    },
+    "scan_error_adf_empty": {
+      "message": "The document feeder is empty. Load the paper and try again."
+    },
+    "scan_error_invalid_option": {
+      "message": "The scanner doesn't support these scan settings."
+    },
+    "scan_error_bad_scan": {
+      "message": "The scanner sent a page that couldn't be read."
+    },
+    "scan_error_too_large": {
+      "message": "The scanned page is too large. Choose a lower resolution."
+    },
+    "scan_error_too_many_pages": {
+      "message": "The document has too many pages."
+    },
+    "scan_error_not_found": {
+      "message": "The scan to add pages to was not found."
+    },
+    "scan_error_no_scanner": {
+      "message": "This printer has no scanner."
+    },
+    "scan_error_scan_failed": {
+      "message": "Scanning failed because of an unexpected error."
+    },
+    "scan_error_copy_failed": {
+      "message": "The scan was saved, but copying it to {path} failed."
     }
   }
 }
