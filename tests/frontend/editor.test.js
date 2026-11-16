@@ -120,6 +120,54 @@ describe("home-print-card-editor", () => {
     expect([...role(editor, "printer").options].map((o) => o.value)).toEqual([""]);
   });
 
+  it("keeps the option nodes when hass changes but the list does not", async () => {
+    const hass = makeHass({ printers: two() });
+    const { editor } = await mount({ entry_id: "office" }, hass);
+    const select = role(editor, "printer");
+    const before = [...select.options];
+    editor.hass = { ...hass, states: { ...hass.states } };
+    editor.setConfig({ entry_id: "office" });
+    await flush();
+    expect([...select.options]).toEqual(before);
+    expect(select.options[2]).toBe(before[2]);
+    expect(select.value).toBe("office");
+
+    editor.hass = makeHass({ language: "en", printers: two() });
+    await flush();
+    expect(select.options[0]).not.toBe(before[0]);
+    expect(select.options[0].textContent).toBe("Automatic (first printer)");
+  });
+
+  it("retries a failed printer load on a later hass, at most every 30 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-16T12:00:00Z"));
+      const failing = makeHass({ printersError: new Error("x") });
+      const { editor } = await mount({}, failing);
+      const count = () => failing.callWS.mock.calls.length;
+      expect(count()).toBe(1);
+      editor.hass = failing;
+      await flush();
+      expect(count()).toBe(1);
+
+      vi.setSystemTime(new Date("2026-11-16T12:00:31Z"));
+      const working = makeHass({ printers: two() });
+      editor.hass = working;
+      await flush();
+      expect(working.callWS).toHaveBeenCalledTimes(1);
+      expect([...role(editor, "printer").options].map((o) => o.value)).toEqual([
+        "",
+        "deskjet",
+        "office",
+      ]);
+      editor.hass = working;
+      await flush();
+      expect(working.callWS).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses touch targets of at least 44px", () => {
     const editor = document.createElement("home-print-card-editor");
     expect(editor.shadowRoot.innerHTML).toContain("min-height: 44px");

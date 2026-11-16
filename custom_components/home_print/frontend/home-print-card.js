@@ -16,6 +16,7 @@ const POLL_LIMIT_MS = 10 * 60 * 1000;
 const STALL_MS = 30 * 1000;
 // A little over the server's own 300 s print timeout.
 const UPLOAD_TIMEOUT_MS = 330 * 1000;
+const EDITOR_RETRY_MS = 30 * 1000;
 const PAGE_RANGES_RE = /^\s*\d+(\s*-\s*\d*)?(\s*,\s*\d+(\s*-\s*\d*)?)*\s*$/;
 const ACCEPT = "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png";
 // Some Android pickers honour only the first MIME type of ACCEPT, which greys
@@ -1061,6 +1062,8 @@ class HomePrintCardEditor extends HTMLElement {
     this._hass = null;
     this._printers = null;
     this._loading = false;
+    this._failedAt = null;
+    this._optionsKey = "";
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = EDITOR_TEMPLATE;
     this._role("printer").addEventListener("change", () => this._onPrinter());
@@ -1082,7 +1085,9 @@ class HomePrintCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._render();
-    if (this._printers === null && !this._loading && hass?.callWS) this._loadPrinters();
+    // Load once; after a failure, try again on a later hass at most every 30 s.
+    const due = this._failedAt === null || Date.now() - this._failedAt >= EDITOR_RETRY_MS;
+    if (this._printers === null && !this._loading && due && hass?.callWS) this._loadPrinters();
   }
 
   async _loadPrinters() {
@@ -1090,8 +1095,9 @@ class HomePrintCardEditor extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "home_print/printers" });
       this._printers = Array.isArray(result?.printers) ? result.printers : [];
+      this._failedAt = null;
     } catch {
-      this._printers = [];
+      this._failedAt = Date.now();
     } finally {
       this._loading = false;
     }
@@ -1114,15 +1120,21 @@ class HomePrintCardEditor extends HTMLElement {
     if (wanted && !printers.some((p) => p.entry_id === wanted)) {
       options.push({ value: wanted, label: t(lang, "editor_not_found", { id: wanted }) });
     }
-    select.replaceChildren(
-      ...options.map(({ value, label }) => {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = label;
-        return option;
-      }),
-    );
-    select.value = wanted;
+    // Rebuild only when the list changes, so an open dropdown survives the
+    // frequent hass updates.
+    const key = JSON.stringify(options.map(({ value, label }) => [value, label]));
+    if (key !== this._optionsKey) {
+      select.replaceChildren(
+        ...options.map(({ value, label }) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          return option;
+        }),
+      );
+      this._optionsKey = key;
+    }
+    if (select.value !== wanted) select.value = wanted;
 
     const title = this._role("title");
     const wantedTitle = typeof this._config.title === "string" ? this._config.title : "";
