@@ -10,7 +10,9 @@
 set -u
 
 PYVER="${1:-3.13}"
-# Keep in sync with manifest.json requirements.
+# Keep in sync with manifest.json requirements. The manifest gives Pillow and
+# numpy as minimums (>=) so HA core's own pins win; this checks those minimum
+# versions exactly, which is the floor a user could end up with.
 PKGS=(pyipp==0.17.0 pypdfium2==5.15.2 Pillow==12.0.0 numpy==2.3.2)
 status=0
 
