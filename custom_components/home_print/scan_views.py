@@ -41,7 +41,7 @@ def _lookup(
         return None
     archive = entry.runtime_data.scanner.archive
     path = archive.file_path(record_id)
-    record = next((r for r in archive.entries() if r["id"] == record_id), None)
+    record = archive.record(record_id)
     if path is None or record is None:
         return None
     return path, record

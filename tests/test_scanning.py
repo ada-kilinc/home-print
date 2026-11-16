@@ -24,6 +24,16 @@ from custom_components.home_print.scanning import (
 
 from .common import CAPS, scan_jpeg, setup_scanner_entry
 
+ADF_CAPS = ScannerCaps(
+    "2.0",
+    None,
+    None,
+    {
+        "platen": CAPS.sources["platen"],
+        "adf": SourceCaps(0, 2550, 0, 3507, ("color",), (300,), ("image/jpeg",)),
+    },
+)
+
 REQ = ScanRequest(source="platen", color_mode="color", resolution=300, format="pdf")
 
 
@@ -66,11 +76,17 @@ async def test_scan_jpeg_single_page(hass, tmp_path, entry):
     assert (tmp_path / "media" / state.record["path"]).read_bytes() == jpeg
 
 
-async def test_adf_multi_page_jpeg_becomes_pdf(hass, tmp_path, entry):
-    entry.runtime_data.scanner.client.scan.return_value = [scan_jpeg(), scan_jpeg()]
-    state = await _run(hass, entry, ScanRequest("platen", "color", 300, "jpeg"))
+async def test_adf_multi_page_jpeg_becomes_pdf(
+    hass, tmp_path, mock_client, mock_escl, mock_find_scanner
+):
+    mock_escl.client.capabilities.return_value = ADF_CAPS
+    mock_escl.client.scan.return_value = [scan_jpeg(), scan_jpeg()]
+    entry = await setup_scanner_entry(hass, tmp_path, mock_find_scanner)
+    state = await _run(hass, entry, ScanRequest("adf", "color", 300, "jpeg"))
+    assert mock_escl.client.scan.call_args.args[1].source == "adf"
     assert state.record["mime"] == "application/pdf"
     assert state.record["pages"] == 2
+    assert state.record["source"] == "adf"
 
 
 async def test_pages_follow_on_page_callback(hass, entry):
@@ -288,3 +304,74 @@ def test_defaults_prefer_300_platen_color():
         "format": "pdf",
     }
     assert DOMAIN
+
+
+async def test_unload_during_service_scan_gives_translated_error(hass, entry):
+    from homeassistant.exceptions import HomeAssistantError
+
+    started = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        started.set()
+        await asyncio.sleep(3600)
+
+    entry.runtime_data.scanner.client.scan = scan
+    call = hass.async_create_task(
+        hass.services.async_call(
+            DOMAIN, "scan", {"config_entry_id": entry.entry_id}, blocking=True
+        )
+    )
+    await started.wait()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    with pytest.raises(HomeAssistantError) as err:
+        await call
+    assert err.value.translation_key == "scan_error_scan_failed"
+
+
+async def test_cancelled_service_call_keeps_scan_running(hass, entry):
+    gate = asyncio.Event()
+
+    async def scan(caps, settings, on_page=None):
+        await gate.wait()
+        return [scan_jpeg()]
+
+    runtime = entry.runtime_data.scanner
+    runtime.client.scan = scan
+    waiter = hass.async_create_task(
+        scanning.async_scan_and_wait(hass, entry, REQ, None)
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert not runtime.task.done()
+    gate.set()
+    await runtime.task
+    assert runtime.active.state == "done"
+
+
+async def test_unload_cancels_scan_before_archive_flush(hass, entry):
+    order = []
+    runtime = entry.runtime_data.scanner
+
+    async def scan(caps, settings, on_page=None):
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            order.append("cancelled")
+
+    runtime.client.scan = scan
+    orig = runtime.archive.async_flush
+
+    async def flush():
+        order.append("flush")
+        await orig()
+
+    runtime.archive.async_flush = flush
+    await async_start_scan(hass, entry, REQ, None)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert order == ["cancelled", "flush"]
+    assert runtime.task.done()

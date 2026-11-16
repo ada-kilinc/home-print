@@ -302,3 +302,13 @@ def test_clean_name_strips_known_extension():
     assert clean_scan_name("a.jpg", "fb") == "a"
     assert clean_scan_name("v1.2", "fb") == "v1.2"
     assert clean_scan_name(".pdf", "fb") == "fb"
+
+
+async def test_record_returns_a_copy_or_none(hass, tmp_path):
+    archive = _setup(hass, tmp_path)
+    record = await _add(archive)
+    copy = archive.record(record["id"])
+    assert copy == record
+    copy["name"] = "changed"
+    assert archive.record(record["id"])["name"] == record["name"]
+    assert archive.record("0" * 32) is None

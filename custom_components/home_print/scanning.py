@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import asdict, dataclass
@@ -122,9 +123,7 @@ def validate_request(
         if req.format != "pdf":
             raise ScanOptionError
         if archive is not None:
-            record = next(
-                (r for r in archive.entries() if r["id"] == req.append_to), None
-            )
+            record = archive.record(req.append_to)
             if record is None or archive.file_path(req.append_to) is None:
                 raise ScanError("not_found")
             if record["mime"] != MIME_PDF:
@@ -196,9 +195,7 @@ async def _save(
     base_pdf = None
     previous: dict[str, Any] | None = None
     if req.append_to is not None:
-        previous = next(
-            (r for r in archive.entries() if r["id"] == req.append_to), None
-        )
+        previous = archive.record(req.append_to)
         path = archive.file_path(req.append_to)
         if previous is None or path is None:
             raise ScanError("not_found")
@@ -305,7 +302,9 @@ async def async_scan_and_wait(
     state = await async_start_scan(hass, entry, req, user)
     task = entry.runtime_data.scanner.task  # type: ignore[union-attr]
     if task is not None:
-        await task
+        # wait() neither raises the scan's cancellation nor cancels the scan
+        # when the service call itself is cancelled.
+        await asyncio.wait({task})
     return state
 
 

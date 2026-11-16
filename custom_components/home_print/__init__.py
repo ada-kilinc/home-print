@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -115,8 +116,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -
     if unloaded:
         # A reload must not lose records still waiting for the delayed save.
         await entry.runtime_data.history.async_flush()
-        if entry.runtime_data.scanner is not None:
-            await entry.runtime_data.scanner.archive.async_flush()
+        scanner = entry.runtime_data.scanner
+        if scanner is not None:
+            # A running scan is stopped first so it can't save after the flush.
+            if scanner.task is not None and not scanner.task.done():
+                scanner.task.cancel()
+                await asyncio.wait({scanner.task})
+            await scanner.archive.async_flush()
     return unloaded
 
 

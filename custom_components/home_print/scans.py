@@ -187,6 +187,11 @@ class ScanArchive:
         """Return a copy of the records, newest first."""
         return copy.deepcopy(self._entries)
 
+    def record(self, record_id: str) -> dict[str, Any] | None:
+        """A copy of one record, or None."""
+        record = self._find(record_id)
+        return copy.deepcopy(record) if record is not None else None
+
     async def async_add(
         self,
         *,

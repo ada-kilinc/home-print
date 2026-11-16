@@ -111,7 +111,8 @@ def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
     active = active_state(scanner)
     running = active is not None and active.state in ("scanning", "saving")
     return {
-        "available": status is not None and status.state != "down",
+        # Same rule as the scanner status sensor.
+        "available": status is not None and status.state not in ("stopped", "down"),
         "state": status.state if status is not None else None,
         "adf_loaded": status.adf_loaded if status is not None else None,
         "sources": {
@@ -124,6 +125,7 @@ def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
         "formats": ["pdf", "jpeg"],
         "defaults": scan_defaults(scanner.caps),
         "active_scan_id": active.scan_id if running and active else None,
+        "last_scan": active.as_dict() if active and not running else None,
     }
 
 

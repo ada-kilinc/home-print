@@ -47,6 +47,7 @@ async def test_printers_includes_scanner_block(hass, entry, hass_ws_client):
             "format": "pdf",
         },
         "active_scan_id": None,
+        "last_scan": None,
     }
 
 
@@ -244,3 +245,37 @@ async def test_unknown_scan_not_found(hass, entry, hass_ws_client):
         hass, hass_ws_client, "scan/state", entry_id=entry.entry_id, scan_id="0" * 32
     )
     assert msg["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    ("state", "available"),
+    [("idle", True), ("processing", True), ("stopped", False), ("down", False)],
+)
+async def test_scanner_available_matches_sensor(
+    hass, entry, hass_ws_client, state, available
+):
+    entry.runtime_data.scanner.status = ScannerStatus(state, False)
+    msg = await send(hass, hass_ws_client, "printers")
+    assert msg["result"]["printers"][0]["scanner"]["available"] is available
+
+
+async def test_last_scan_reported_until_retention_ends(
+    hass, entry, hass_ws_client, monkeypatch
+):
+    from custom_components.home_print import scanning
+
+    msg = await send(
+        hass, hass_ws_client, "scan/start", entry_id=entry.entry_id, **BODY
+    )
+    scan = msg["result"]["scan"]
+    await entry.runtime_data.scanner.task
+    msg = await send(hass, hass_ws_client, "printers")
+    scanner = msg["result"]["printers"][0]["scanner"]
+    assert scanner["active_scan_id"] is None
+    assert scanner["last_scan"]["scan_id"] == scan["scan_id"]
+    assert scanner["last_scan"]["state"] == "done"
+    assert scanner["last_scan"]["record"]["pages"] == 1
+    state = entry.runtime_data.scanner.active
+    monkeypatch.setattr(scanning.time, "monotonic", lambda: state.finished_at + 601)
+    msg = await send(hass, hass_ws_client, "printers")
+    assert msg["result"]["printers"][0]["scanner"]["last_scan"] is None
