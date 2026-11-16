@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import voluptuous as vol
 from homeassistant.config_entries import (
@@ -201,13 +202,39 @@ class HomePrintConfigFlow(ConfigFlow, domain=DOMAIN):
         return HomePrintOptionsFlow()
 
 
+def normalize_scanner_url(value: str | None) -> str:
+    """Tidy a typed scanner address; empty means "find automatically".
+
+    No scheme means ``http://``, no path means ``/eSCL``. Anything that is
+    not an http(s) URL with a host raises ``ValueError``.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"http://{text}"
+    parts = urlsplit(text)
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(text)
+    _ = parts.port  # raises ValueError for a bad port
+    path = parts.path.rstrip("/") or "/eSCL"
+    return urlunsplit((scheme, parts.netloc, path, parts.query, ""))
+
+
 class HomePrintOptionsFlow(OptionsFlow):
     """Edit Home Print options."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
+            try:
+                scanner_url = normalize_scanner_url(user_input.get(CONF_SCANNER_URL))
+            except ValueError:
+                errors[CONF_SCANNER_URL] = "invalid_scanner_url"
+        if user_input is not None and not errors:
             if user_input.get(CONF_DEFAULT_COLOR_MODE) == COLOR_AUTO:
                 user_input = {**user_input, CONF_DEFAULT_COLOR_MODE: None}
             user_input = {
@@ -215,7 +242,7 @@ class HomePrintOptionsFlow(OptionsFlow):
                 CONF_MAX_FILE_MB: int(user_input[CONF_MAX_FILE_MB]),
                 CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
                 CONF_HISTORY_DAYS: int(user_input[CONF_HISTORY_DAYS]),
-                CONF_SCANNER_URL: str(user_input.get(CONF_SCANNER_URL) or "").strip(),
+                CONF_SCANNER_URL: scanner_url,
                 CONF_SCAN_DAYS: int(user_input[CONF_SCAN_DAYS]),
                 CONF_SCAN_MAX_MB: int(user_input[CONF_SCAN_MAX_MB]),
             }
@@ -291,4 +318,6 @@ class HomePrintOptionsFlow(OptionsFlow):
                 ),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

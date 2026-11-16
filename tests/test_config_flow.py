@@ -358,3 +358,69 @@ async def test_zeroconf_same_type_updates_port_and_path(hass, mock_client):
     assert entry.data[CONF_PORT] == 8631
     assert entry.data[CONF_BASE_PATH] == "/ipp/other"
     assert entry.data[CONF_SSL] is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", ""),
+        ("   ", ""),
+        ("192.168.1.20", "http://192.168.1.20/eSCL"),
+        (" 192.168.1.20:8080/eSCL ", "http://192.168.1.20:8080/eSCL"),
+        ("https://printer.local", "https://printer.local/eSCL"),
+        ("HTTP://printer.local/", "http://printer.local/eSCL"),
+        ("http://10.0.0.2/eSCL/", "http://10.0.0.2/eSCL"),
+        ("http://10.0.0.2/scan", "http://10.0.0.2/scan"),
+    ],
+)
+def test_normalize_scanner_url(value, expected):
+    from custom_components.home_print.config_flow import normalize_scanner_url
+
+    assert normalize_scanner_url(value) == expected
+
+
+@pytest.mark.parametrize("value", ["ftp://h/eSCL", "http://", "file:///etc", "h:x:y"])
+def test_normalize_scanner_url_rejects(value):
+    from custom_components.home_print.config_flow import normalize_scanner_url
+
+    with pytest.raises(ValueError):
+        normalize_scanner_url(value)
+
+
+async def _options_input(**over):
+    data = {
+        CONF_DEFAULT_SIDES: "one-sided",
+        CONF_DEFAULT_COLOR_MODE: "auto",
+        CONF_MAX_FILE_MB: 25,
+        CONF_SCAN_INTERVAL: 60,
+        CONF_ADMIN_ONLY: False,
+        CONF_SCAN_DAYS: 30,
+        CONF_SCAN_MAX_MB: 2000,
+    }
+    data.update(over)
+    return data
+
+
+async def test_options_scanner_url_normalized_or_rejected(hass, mock_client):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=UUID, data={CONF_HOST: "x"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], await _options_input(**{CONF_SCANNER_URL: "ftp://x/eSCL"})
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_SCANNER_URL: "invalid_scanner_url"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], await _options_input(**{CONF_SCANNER_URL: "192.168.1.20"})
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_SCANNER_URL] == "http://192.168.1.20/eSCL"
+
+
+def test_scanner_url_translations():
+    root = Path(__file__).parent.parent / "custom_components/home_print"
+    for name in ("strings.json", "translations/en.json", "translations/tr.json"):
+        data = json.loads((root / name).read_text())
+        init = data["options"]["step"]["init"]
+        assert "http://192.168.1.20/eSCL" in init["data_description"]["scanner_url"]
+        assert data["options"]["error"]["invalid_scanner_url"]

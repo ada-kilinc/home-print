@@ -28,6 +28,9 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_scanner_url": "Tarayıcı adresi http:// ya da https:// ile başlamalı, örneğin http://192.168.1.20/eSCL."
+    },
     "step": {
       "init": {
         "title": "Yazıcı ayarları",
@@ -41,6 +44,9 @@
           "scanner_url": "Tarayıcı adresi (boş = otomatik bul)",
           "scan_days": "Taramaları sakla (gün, 0 = hep sakla)",
           "scan_max_mb": "Taramalar için en fazla yer (MB, 0 = sınırsız)"
+        },
+        "data_description": {
+          "scanner_url": "Boş bırakırsan otomatik bulunur. Biçim: http://192.168.1.20/eSCL (http:// ve /eSCL yazmazsan eklenir)."
         }
       }
     }
