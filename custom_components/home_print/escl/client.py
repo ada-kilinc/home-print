@@ -44,6 +44,21 @@ async def _read_limited(resp: aiohttp.ClientResponse, limit: int) -> bytes:
     return bytes(data)
 
 
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """Normalised (scheme, host, effective port) of a URL."""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port or {"http": 80, "https": 443}.get(scheme)
+    except ValueError:
+        port = None
+    return scheme, (parts.hostname or "").lower(), port
+
+
+def _same_origin(a: str, b: str) -> bool:
+    return _origin(a) == _origin(b)
+
+
 class EsclClient:
     """Client for one scanner's eSCL endpoint."""
 
@@ -94,8 +109,7 @@ class EsclClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ScannerUnavailable() from err
         job_url = urljoin(self._base_url + "/", location).rstrip("/")
-        base, job = urlsplit(self._base_url), urlsplit(job_url)
-        if (base.scheme, base.netloc) != (job.scheme, job.netloc):
+        if not _same_origin(self._base_url, job_url):
             raise EsclError("bad_response")
         return job_url
 

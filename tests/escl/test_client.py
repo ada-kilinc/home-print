@@ -247,3 +247,18 @@ async def test_oversized_xml_rejected(env, monkeypatch):
     with pytest.raises(EsclError) as err:
         await client.capabilities()
     assert err.value.code == "bad_response"
+
+
+@pytest.mark.parametrize(
+    ("base", "other", "same"),
+    [
+        ("http://10.0.0.5/eSCL", "http://10.0.0.5:80/eSCL/ScanJobs/x", True),
+        ("https://10.0.0.5/eSCL", "https://10.0.0.5:443/eSCL/ScanJobs/x", True),
+        ("http://Printer.local/eSCL", "HTTP://printer.LOCAL/eSCL/ScanJobs/x", True),
+        ("http://10.0.0.5/eSCL", "https://10.0.0.5/eSCL/ScanJobs/x", False),
+        ("http://10.0.0.5/eSCL", "http://10.0.0.5:8080/eSCL/ScanJobs/x", False),
+        ("http://10.0.0.5/eSCL", "http://10.0.0.6/eSCL/ScanJobs/x", False),
+    ],
+)
+def test_same_origin(base, other, same):
+    assert client_mod._same_origin(base, other) is same
