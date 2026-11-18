@@ -1,0 +1,50 @@
+# Attach home_print.zip to every published release. HACS installs that one
+# archive (hacs.json: zip_release), so an update is never half-downloaded.
+# Run it by hand to add the zip to an existing release:
+#   gh workflow run release.yml -f tag=v0.3.4
+name: Release zip
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, e.g. v0.3.5"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-zip-${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      # The default branch provides the build script; the zip is made from
+      # the tag's own files (works for older tags too).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build home_print.zip from the tag
+        run: |
+          git worktree add "$RUNNER_TEMP/tag" "refs/tags/$TAG"
+          python scripts/build_release_zip.py \
+            --tag "$TAG" \
+            --source "$RUNNER_TEMP/tag/custom_components/home_print" \
+            --out dist/home_print.zip
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/home_print.zip --clobber

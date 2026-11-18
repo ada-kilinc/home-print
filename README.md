@@ -92,6 +92,8 @@ npm install && npm test      # card tests
 
 `scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`) and prints the scanner's raw answers (status codes, `Location` header). Run it from the repo folder. The saved `escl_*.xml` files contain device identifiers (serial number, UUID); don't post them publicly.
 
+**Releases:** bump `version` in `manifest.json`, push, then publish a GitHub release tagged `v<version>`. The *Release zip* workflow builds `home_print.zip` from that tag (it fails if the tag and manifest disagree or a required file is missing) and attaches it; HACS installs that single archive (`zip_release` in `hacs.json`), so an update is never half-installed.
+
 ---
 
 ## Türkçe
