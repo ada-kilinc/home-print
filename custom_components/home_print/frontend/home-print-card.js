@@ -535,6 +535,18 @@ function isIOS(nav) {
   );
 }
 
+// The card's own "From files / Photo library / Take photo" menu is for
+// touch-only phones and tablets that aren't iOS (Android's HA app offers no
+// camera option itself). With a mouse or trackpad (desktop, touchscreen
+// laptop) "Choose file" opens the system file dialog like any web app.
+function usesPickMenu(nav, win) {
+  if (!nav || isIOS(nav)) return false;
+  const mm = win?.matchMedia;
+  if (typeof mm !== "function") return (nav.maxTouchPoints ?? 0) > 0;
+  const query = (q) => Boolean(mm.call(win, q)?.matches);
+  return query("(pointer: coarse)") && !query("(any-pointer: fine)");
+}
+
 // Local date and time in the user's language.
 function formatHistoryTime(lang, iso) {
   const date = new Date(iso);
@@ -1345,8 +1357,10 @@ class HomePrintCard extends HTMLElement {
   // ------------------------------------------------------------ file picker
 
   _onPickButton() {
-    // iOS already offers Photo Library / Take Photo / Choose File itself.
-    if (isIOS(globalThis.navigator)) {
+    // iOS offers Photo Library / Take Photo / Choose File itself; desktops
+    // just get the file dialog. Decided per click: a mouse may be plugged in.
+    if (!usesPickMenu(globalThis.navigator, globalThis)) {
+      if (!this._role("pick-menu").hidden) this._closeMenu();
       this._openInput("input-file");
       return;
     }
@@ -2670,7 +2684,7 @@ class HomePrintCard extends HTMLElement {
     this._renderScan(lang, printer);
     this._role("history-button").hidden = !printer;
     const pick = this._role("pick");
-    if (isIOS(globalThis.navigator)) {
+    if (!usesPickMenu(globalThis.navigator, globalThis)) {
       pick.removeAttribute("aria-haspopup");
       pick.removeAttribute("aria-expanded");
     } else {
@@ -2835,6 +2849,7 @@ HomePrintCard.helpers = Object.freeze({
   visibleRawReasons,
   isProblemState,
   isIOS,
+  usesPickMenu,
   formatHistoryTime,
   historyStateIcon,
   scanErrorText,

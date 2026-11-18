@@ -35,7 +35,7 @@ title: Printer
 show_ink: true
 ```
 
-The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the iPhone/iPad system sheet, or on other devices a small menu (from files, photo library, take photo).
+The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (from files, photo library, take photo) on Android phones and tablets.
 
 ## Options
 

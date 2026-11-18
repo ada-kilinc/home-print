@@ -26,10 +26,24 @@ afterEach(() => {
   document.body.innerHTML = "";
   expect(errorSpy).not.toHaveBeenCalled();
   errorSpy.mockRestore();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
+
+// Pointer media queries: "touch" = a phone (coarse only), "touch+mouse" =
+// a touchscreen laptop, "mouse" = a desktop (happy-dom's own answer).
+function stubPointer(kind) {
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+    media: query,
+    matches:
+      query === "(pointer: coarse)" ? kind !== "mouse" :
+      query === "(any-pointer: fine)" ? kind !== "touch" : false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+}
 
 async function mount(hass, config = {}) {
   const card = document.createElement("home-print-card");
@@ -1048,7 +1062,8 @@ describe("single file picker", () => {
     }
   });
 
-  it("elsewhere opens its own menu whose options click the right input", async () => {
+  it("on touch-only devices (Android) opens its own menu whose options click the right input", async () => {
+    stubPointer("touch");
     const restore = fakeNavigator({
       userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile",
       platform: "Linux armv8l",
@@ -1089,6 +1104,65 @@ describe("single file picker", () => {
     expect($(card, '[data-option="file"]').textContent.trim()).toBe("From files");
     expect($(card, '[data-option="photo"]').textContent.trim()).toBe("Photo library");
     expect($(card, '[data-option="camera"]').textContent.trim()).toBe("Take photo");
+  });
+
+  for (const [kind, label] of [
+    ["mouse", "a desktop"],
+    ["touch+mouse", "a touchscreen laptop"],
+  ]) {
+    it(`on ${label} opens the system file dialog right away`, async () => {
+      stubPointer(kind);
+      const restore = fakeNavigator({
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0",
+        platform: "Win32",
+        maxTouchPoints: kind === "mouse" ? 0 : 10,
+      });
+      try {
+        const card = await mount(makeHass());
+        const clicks = spyClicks(card);
+        expect(role(card, "pick").hasAttribute("aria-haspopup")).toBe(false);
+        role(card, "pick").click();
+        await flush();
+        expect(clicks["input-file"]).toHaveBeenCalledTimes(1);
+        expect(clicks["input-photo"]).not.toHaveBeenCalled();
+        expect(clicks["input-camera"]).not.toHaveBeenCalled();
+        expect(role(card, "pick-menu").hidden).toBe(true);
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  it("decides on every click (a mouse can be plugged into a tablet)", async () => {
+    stubPointer("touch");
+    const card = await mount(makeHass());
+    const clicks = spyClicks(card);
+    role(card, "pick").click();
+    await flush();
+    expect(role(card, "pick-menu").hidden).toBe(false);
+    role(card, "pick").click(); // closes the menu
+    vi.mocked(window.matchMedia).mockRestore();
+    stubPointer("touch+mouse");
+    role(card, "pick").click();
+    await flush();
+    expect(role(card, "pick-menu").hidden).toBe(true);
+    expect(clicks["input-file"]).toHaveBeenCalledTimes(1);
+  });
+
+  it("usesPickMenu: only non-iOS, touch-only devices", () => {
+    const { usesPickMenu } = HomePrintCard.helpers;
+    const mm = (coarse, fine) => (q) => ({
+      matches: q === "(pointer: coarse)" ? coarse : q === "(any-pointer: fine)" ? fine : false,
+    });
+    const android = { userAgent: "Android", platform: "Linux", maxTouchPoints: 5 };
+    expect(usesPickMenu(android, { matchMedia: mm(true, false) })).toBe(true);
+    expect(usesPickMenu(android, { matchMedia: mm(true, true) })).toBe(false);
+    expect(usesPickMenu(android, { matchMedia: mm(false, true) })).toBe(false);
+    expect(usesPickMenu({ userAgent: IOS_UA }, { matchMedia: mm(true, false) })).toBe(false);
+    // No matchMedia: fall back to touch points.
+    expect(usesPickMenu(android, {})).toBe(true);
+    expect(usesPickMenu({ userAgent: "X", maxTouchPoints: 0 }, {})).toBe(false);
+    expect(usesPickMenu(undefined, undefined)).toBe(false);
   });
 
   it("isIOS follows the plan's rule", () => {
@@ -1636,6 +1710,7 @@ describe("fix round 1", () => {
   });
 
   it("lets the same file be picked again through another picker", async () => {
+    stubPointer("touch");
     const restore = fakeNavigator(ANDROID);
     try {
       const card = await mount(makeHass());
@@ -1712,6 +1787,7 @@ describe("fix round 1", () => {
   });
 
   it("has an accessible menu with focus and arrow keys", async () => {
+    stubPointer("touch");
     const restore = fakeNavigator(ANDROID);
     try {
       const card = await mount(makeHass());
@@ -1772,6 +1848,7 @@ describe("final review", () => {
   });
 
   it("closes the pick menu when focus leaves it", async () => {
+    stubPointer("touch");
     Object.defineProperty(navigator, "userAgent", { value: "Android", configurable: true });
     try {
       const outside = document.createElement("button");
