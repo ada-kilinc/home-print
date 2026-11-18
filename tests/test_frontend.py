@@ -22,7 +22,7 @@ async def test_extra_js_url_registered_with_version(hass):
         "custom_components.home_print.frontend.ha_frontend.add_extra_js_url"
     ) as add:
         assert await async_setup_component(hass, DOMAIN, {})
-    add.assert_called_once_with(hass, "/home_print_static/home-print-card.js?v=0.3.5")
+    add.assert_called_once_with(hass, "/home_print_static/home-print-card.js?v=0.3.6")
 
 
 async def test_register_frontend_idempotent(hass):

@@ -1,10 +1,19 @@
 # Home Print
 
+[![CI](https://github.com/ada-kilinc/home-print/actions/workflows/ci.yml/badge.svg)](https://github.com/ada-kilinc/home-print/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ada-kilinc/home-print)](https://github.com/ada-kilinc/home-print/releases)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+
 Print to your network printer from the Home Assistant dashboard, from anywhere you can reach your Home Assistant.
 
 > **Status: early.** The integration and card are tested in code and against a real HP DeskJet 4670's responses, but not yet used day to day. Expect rough edges and please open an issue when something breaks.
 
 [Türkçe açıklama aşağıda](#türkçe)
+
+<p>
+  <img src="docs/images/card.png" alt="The Home Print card: printer status, ink levels, file picker, print options, Print and Scan buttons" width="360">
+  <img src="docs/images/scan.png" alt="The scan panel with a finished two-page scan: preview, rename, download, add page" width="360">
+</p>
 
 ## What it does
 
@@ -18,6 +27,9 @@ Print to your network printer from the Home Assistant dashboard, from anywhere y
 Not yet: Word/ODF files (save as PDF first), very old or USB-only printers (a helper add-on with CUPS is planned).
 
 ## Install
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ada-kilinc&repository=home-print&category=integration)
+[![Open your Home Assistant instance and start setting up Home Print.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=home_print)
 
 1. In HACS, open the three-dot menu → **Custom repositories**, add `https://github.com/ada-kilinc/home-print` as an **Integration**, then download **Home Print** and restart Home Assistant.
 2. **Settings → Devices & services**: your printer should show up as discovered. If not, **Add integration → Home Print** and enter the printer's IP address.
@@ -34,6 +46,12 @@ entry_id: <printer>   # the visual editor fills this in; default is the first pr
 title: Printer
 show_ink: true
 ```
+
+<p>
+  <img src="docs/images/history.png" alt="History dialog, Prints tab" width="270">
+  <img src="docs/images/scans.png" alt="History dialog, Scans tab" width="270">
+  <img src="docs/images/preview.png" alt="Preview of a printed file" width="270">
+</p>
 
 The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (from files, photo library, take photo) on Android phones and tablets.
 
@@ -76,6 +94,16 @@ Not yet: scanner-only devices without a printer entry, SANE for old USB scanners
 
 **Privacy:** scans are visible to every logged-in Home Assistant user (list, preview and download). "Only admins can print" limits starting, renaming and deleting scans, not viewing them. The files live in your media folder, so they are included in Home Assistant backups if you back up media, and deleting a scan doesn't remove it from backups already taken. Removing the printer entry deletes the archive records but leaves the files in the media folder alone. Set **Keep scans (days)** low if you scan sensitive documents.
 
+## FAQ
+
+**Do I need Home Assistant's built-in IPP integration too?** No. Home Print talks to the printer itself. If both are set up, the printer just gets two sets of sensors; you can remove the built-in one.
+
+**Can I print when I'm not at home?** Yes, wherever you can open your Home Assistant: the card uploads through Home Assistant's own login, so Tailscale, Nabu Casa or any other remote access you already use works. Nothing extra is exposed to the internet.
+
+**Where are my scans?** In Home Assistant's media folder, under `home_print/scans/YYYY-MM/` (`/media` on Home Assistant OS), so they also show up in the **Media** panel. Kept print files are under `<config>/home_print/<entry_id>/`.
+
+**The card says "Custom element doesn't exist".** See [Troubleshooting](docs/troubleshooting.md#the-card-doesnt-show-up).
+
 ## Contributing
 
 This started as a small weekend project to print at home from a phone, and it would be great to see it grow. If you have a printer that behaves differently, an idea for a feature, or a fix (big or tiny), please open an issue or send a pull request. You don't need to ask first. Typos, translations and "this didn't work on my printer" reports are just as welcome as code.
@@ -92,7 +120,7 @@ npm install && npm test      # card tests
 
 `scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`) and prints the scanner's raw answers (status codes, `Location` header). Run it from the repo folder. The saved `escl_*.xml` files contain device identifiers (serial number, UUID); don't post them publicly.
 
-**Releases:** bump `version` in `manifest.json`, push, then publish a GitHub release tagged `v<version>`. The *Release zip* workflow builds `home_print.zip` from that tag (it fails if the tag and manifest disagree or a required file is missing) and attaches it; HACS installs that single archive (`zip_release` in `hacs.json`), so an update is never half-installed.
+**Releases:** bump `version` in `manifest.json`, commit and push, then push a matching tag: `git tag v<version> && git push origin v<version>`. The *Release zip* workflow builds `home_print.zip` from that tag (it fails if the tag and manifest disagree or a required file is missing) and publishes an English GitHub release with generated notes and the zip attached. HACS installs that single archive (`zip_release` in `hacs.json`), so an update is never half-installed. **CI** runs ruff, pytest, the card tests, hassfest and the HACS validation on every push and pull request.
 
 ---
 
@@ -107,6 +135,8 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 - PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir. Telefonla çekilmiş büyük fotoğraflar otomatik küçültülür (JPEG 175 MP'ye, PNG 50 MP'ye kadar).
 - Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
 - Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** düğmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
+
+**Sorun giderme:** Kart görünmüyorsa ya da "Custom element doesn't exist" diyorsa adım adım çözümü [docs/troubleshooting.md](docs/troubleshooting.md#the-card-doesnt-show-up) sayfasında (İngilizce): kart adresini aç, 404 ise HACS'ta **Redownload** yap, Home Assistant'ı yeniden başlat, sayfayı Cmd/Ctrl+Shift+R ile yenile.
 
 **Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
 
