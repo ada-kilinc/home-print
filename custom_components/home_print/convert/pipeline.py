@@ -26,6 +26,7 @@ from .render import (
     page_spec_for,
     parse_page_ranges,
     png_to_jpeg,
+    shrink_image,
 )
 from .urf import DM_SHEET_BACK, encode_urf
 
@@ -224,6 +225,9 @@ def prepare(
     target = choose_target(src_fmt, caps, gray=gray)
     if target is None:
         raise NoConversionRoute(src_fmt)
+    if src_fmt in (JPEG, PNG):
+        # Big phone photos: shrink to the working size instead of refusing.
+        data = shrink_image(data, src_fmt)
     if target == src_fmt:
         if src_fmt == JPEG:
             data = fit_jpeg(data, caps.jpeg)

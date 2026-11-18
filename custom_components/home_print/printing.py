@@ -37,7 +37,7 @@ from .convert.errors import (
     OutputTooLarge,
     TooManyPages,
 )
-from .convert.render import MAX_IMAGE_PIXELS
+from .convert.render import source_pixel_limit
 from .models import JobResult, LastJob, PrinterInfo, PrintOptions
 
 if TYPE_CHECKING:
@@ -422,7 +422,8 @@ async def _async_prepare(
         if reason in _PAGE_SELECTION_REASONS:
             raise InvalidPrintOption(option="page_ranges") from err
         if reason == "too_large":
-            raise ImageTooLargeError(limit=MAX_IMAGE_PIXELS // 1_000_000) from err
+            limit = source_pixel_limit(document_format) // 1_000_000
+            raise ImageTooLargeError(limit=limit) from err
         if reason == "unsupported_format":
             raise UnsupportedFileType() from err
         raise InvalidDocumentError() from err

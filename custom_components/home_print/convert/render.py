@@ -7,8 +7,10 @@ Pages are produced one at a time so only one page bitmap is alive at once.
 from __future__ import annotations
 
 import io
+import math
 import re
 import threading
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -30,6 +32,13 @@ DEFAULT_MAX_PAGES = 200
 # an A4 sheet at ~570 dpi; a decoded RGBA image this size is ~100 MB, which
 # is as much as we want to hold on a small Home Assistant host.
 MAX_IMAGE_PIXELS = 25_000_000
+# Uploaded photos may be bigger (phone cameras: 48-200 MP); ``shrink_image``
+# brings them down to ``MAX_IMAGE_PIXELS`` first. A JPEG decodes at a reduced
+# scale, so its header cap can be high (kept under Pillow's own bomb error at
+# 2 x 89.5 MP); a PNG has to be decoded whole, so its cap is lower.
+MAX_JPEG_SOURCE_PIXELS = 175_000_000
+MAX_PNG_SOURCE_PIXELS = 50_000_000
+SHRUNK_JPEG_QUALITY = 92
 
 _A4_HMM = (21000, 29700)
 _DEFAULT_MARGIN_HMM = 300  # 3 mm
@@ -110,7 +119,11 @@ def _open_image(
     Images over ``max_pixels`` (default ``MAX_IMAGE_PIXELS``) are too large.
     """
     try:
-        image = Image.open(io.BytesIO(data), formats=formats)
+        with warnings.catch_warnings():
+            # Our own caps decide; Pillow's 89 MP warning would only add noise
+            # to the log for an accepted phone photo.
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            image = Image.open(io.BytesIO(data), formats=formats)
     except Image.DecompressionBombError as err:
         raise InvalidDocument("too_large") from err
     except UnidentifiedImageError as err:
@@ -122,6 +135,45 @@ def _open_image(
         image.close()
         raise InvalidDocument("too_large")
     return image
+
+
+def source_pixel_limit(fmt: str) -> int:
+    """Largest upload (pixels) of format ``fmt`` that is accepted and shrunk."""
+    return MAX_JPEG_SOURCE_PIXELS if fmt == JPEG else MAX_PNG_SOURCE_PIXELS
+
+
+def shrink_image(data: bytes, fmt: str) -> bytes:
+    """An uploaded JPEG/PNG at most ``MAX_IMAGE_PIXELS``; unchanged if it fits.
+
+    Over ``source_pixel_limit`` is ``too_large`` (decided from the header).
+    The result keeps its format, is upright (EXIF orientation applied) and
+    has any transparency flattened onto white.
+    """
+    pil_format = "JPEG" if fmt == JPEG else "PNG"
+    image = _open_image(data, [pil_format], source_pixel_limit(fmt))
+    pixels = image.width * image.height
+    if pixels <= MAX_IMAGE_PIXELS:
+        image.close()
+        return data
+    scale = math.sqrt(MAX_IMAGE_PIXELS / pixels)
+    box = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+    try:
+        if pil_format == "JPEG":
+            # libjpeg decodes at 1/2, 1/4 or 1/8 scale, never below the size
+            # asked for. Asking for 60% of the box lets it pick the next step
+            # down, so a 100 MP photo isn't decoded whole; the result (at
+            # least ~9 MP) is still well above a 300 dpi A4 sheet (8.7 MP).
+            image.draft(None, (box[0] * 3 // 5, box[1] * 3 // 5))
+        flat = _flatten(image, box)
+    except (OSError, ValueError, SyntaxError) as err:
+        raise InvalidDocument("corrupt") from err
+    finally:
+        image.close()
+    if pil_format == "JPEG":
+        return _encode_jpeg(flat, SHRUNK_JPEG_QUALITY)
+    out = io.BytesIO()
+    flat.save(out, "PNG")
+    return out.getvalue()
 
 
 def _unidentified_reason(data: bytes) -> str:
@@ -491,7 +543,7 @@ def preview_jpeg(
     PDF pages render at ``dpi``, images keep their size; both shrink to at
     most ``max_width`` pixels wide. A page outside the document raises
     ``InvalidDocument("no_pages")``. ``max_pixels`` caps image sources
-    (default ``MAX_IMAGE_PIXELS``; scans allow more).
+    (default: the upload caps of ``source_pixel_limit``).
     """
     if page < 1:
         raise InvalidDocument("no_pages")
@@ -543,7 +595,18 @@ def _preview_pdf_page(data: bytes, page: int, dpi: int, max_width: int) -> Image
 def _preview_image(
     data: bytes, max_width: int, max_pixels: int | None = None
 ) -> Image.Image:
-    image = _open_image(data, ["PNG", "JPEG"], max_pixels)
+    image = _open_image(
+        data,
+        ["PNG", "JPEG"],
+        max_pixels if max_pixels is not None else MAX_JPEG_SOURCE_PIXELS,
+    )
+    if (
+        max_pixels is None
+        and image.format == "PNG"
+        and image.width * image.height > MAX_PNG_SOURCE_PIXELS
+    ):
+        image.close()
+        raise InvalidDocument("too_large")
     box = (max_width, max(1, MAX_IMAGE_PIXELS // max_width))
     try:
         if image.format == "JPEG":

@@ -472,10 +472,96 @@ def test_exif_orientation_applied_after_downscale():
 def test_preview_jpeg_max_pixels(monkeypatch):
     from custom_components.home_print.convert import render
 
-    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 1000)
+    monkeypatch.setattr(render, "MAX_JPEG_SOURCE_PIXELS", 1000)
     jpeg = samples.image_bytes(Image.new("RGB", (60, 80), "white"), "JPEG")
     with pytest.raises(InvalidDocument, match="too_large"):
         render.preview_jpeg(jpeg, 1)
     assert render.preview_jpeg(jpeg, 1, max_pixels=10_000).startswith(b"\xff\xd8")
     with pytest.raises(InvalidDocument, match="too_large"):
         render.preview_jpeg(jpeg, 1, max_pixels=100)
+
+
+# --- shrinking big uploads (issue #2) -----------------------------------------
+
+
+def _jpeg_with_orientation(size, orientation):
+    image = Image.new("RGB", size, "white")
+    image.paste((255, 0, 0), (0, 0, 10, 10))  # red mark in the top-left
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    out = io.BytesIO()
+    image.save(out, "JPEG", exif=exif, quality=95)
+    return out.getvalue()
+
+
+def test_source_caps_above_the_working_cap():
+    from custom_components.home_print.convert import render
+
+    assert render.MAX_IMAGE_PIXELS == 25_000_000
+    # JPEG decodes at a reduced scale; stays under Pillow's own bomb error.
+    assert render.MAX_JPEG_SOURCE_PIXELS == 175_000_000
+    assert render.MAX_JPEG_SOURCE_PIXELS < 2 * Image.MAX_IMAGE_PIXELS
+    assert render.MAX_PNG_SOURCE_PIXELS == 50_000_000
+    assert render.source_pixel_limit("image/jpeg") == 175_000_000
+    assert render.source_pixel_limit("image/png") == 50_000_000
+
+
+@pytest.mark.parametrize(("fmt", "pil"), [("image/jpeg", "JPEG"), ("image/png", "PNG")])
+def test_shrink_image_small_is_unchanged(fmt, pil):
+    from custom_components.home_print.convert.render import shrink_image
+
+    data = samples.image_bytes(Image.new("RGB", (120, 80), "white"), pil)
+    assert shrink_image(data, fmt) is data
+
+
+@pytest.mark.parametrize(("fmt", "pil"), [("image/jpeg", "JPEG"), ("image/png", "PNG")])
+def test_shrink_image_big_fits_the_working_cap(monkeypatch, fmt, pil):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    data = samples.image_bytes(Image.new("RGB", (400, 300), "white"), pil)
+    out = render.shrink_image(data, fmt)
+    image = Image.open(io.BytesIO(out))
+    assert image.format == pil
+    assert image.width * image.height <= 10_000
+    # JPEG may decode a scale step lower (libjpeg draft), never below ~36%.
+    assert image.width * image.height >= (3_500 if pil == "JPEG" else 9_000)
+    assert abs(image.width / image.height - 4 / 3) < 0.05
+
+
+def test_shrink_image_applies_exif_orientation(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    # Stored landscape, orientation 6: shown portrait (rotated 90° clockwise).
+    out = render.shrink_image(_jpeg_with_orientation((300, 100), 6), "image/jpeg")
+    image = Image.open(io.BytesIO(out))
+    assert image.height > image.width
+    assert image.getexif().get(0x0112, 1) == 1
+
+
+def test_shrink_image_over_source_cap_rejected_from_header(monkeypatch):
+    from PIL import ImageFile
+
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_JPEG_SOURCE_PIXELS", 10_000)
+    data = samples.image_bytes(Image.new("RGB", (200, 100), "white"), "JPEG")
+
+    def no_decode(self):
+        raise AssertionError("decoded")
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", no_decode)
+    with pytest.raises(InvalidDocument, match="too_large"):
+        render.shrink_image(data, "image/jpeg")
+
+
+def test_preview_of_big_photo_uses_source_cap(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 1000)
+    jpeg = samples.image_bytes(Image.new("RGB", (60, 80), "white"), "JPEG")
+    assert render.preview_jpeg(jpeg, 1).startswith(b"\xff\xd8")
+    monkeypatch.setattr(render, "MAX_JPEG_SOURCE_PIXELS", 1000)
+    with pytest.raises(InvalidDocument, match="too_large"):
+        render.preview_jpeg(jpeg, 1)

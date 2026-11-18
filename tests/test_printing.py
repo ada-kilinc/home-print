@@ -587,11 +587,16 @@ async def test_async_print_colour_scan_output_is_bounded(
     assert peak < budget + len(pdf) + 3 * A4_300DPI_RGB_BYTES
 
 
-async def test_async_print_too_large_image_has_its_own_error(hass, mock_client):
-    """M1: not "damaged or password protected"."""
+async def test_async_print_too_large_image_has_its_own_error(
+    hass, mock_client, monkeypatch
+):
+    """M1: not "damaged or password protected". The limit is the PNG source cap."""
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_PNG_SOURCE_PIXELS", 2_000_000)
     entry = await _deskjet_entry(hass, mock_client)
     events = async_capture_events(hass, EVENT_JOB)
-    png = image_bytes(Image.new("L", (5000, 5001), 255), "PNG")
+    png = image_bytes(Image.new("L", (1500, 1500), 255), "PNG")
     with pytest.raises(ImageTooLargeError) as exc:
         await async_print(
             hass, entry, png, file_name="huge.png", options=PrintOptions(), user=None
@@ -599,7 +604,7 @@ async def test_async_print_too_large_image_has_its_own_error(hass, mock_client):
     await hass.async_block_till_done()
     assert exc.value.key == "image_too_large"
     assert exc.value.http_status == 400
-    assert exc.value.translation_placeholders == {"limit": "25"}
+    assert exc.value.translation_placeholders == {"limit": "2"}
     assert events[0].data["error"] == "image_too_large"
 
 

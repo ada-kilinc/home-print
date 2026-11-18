@@ -10,7 +10,7 @@ Print to your network printer from the Home Assistant dashboard, from anywhere y
 
 - **Finds your printer** on the network (IPP / AirPrint), or you add it by IP.
 - **Sensors** for printer status, ink/toner levels and problems (paper out, jam, cover open), plus the last job.
-- **Prints PDF, JPEG and PNG.** If the printer doesn't take a format directly, Home Print converts it to PWG Raster, Apple Raster (URF) or JPEG first. Duplex, copies, colour/mono and page ranges are supported where the printer supports them.
+- **Prints PDF, JPEG and PNG.** If the printer doesn't take a format directly, Home Print converts it to PWG Raster, Apple Raster (URF) or JPEG first. Duplex, copies, colour/mono and page ranges are supported where the printer supports them. Large phone photos are shrunk automatically (JPEG up to 175 MP, PNG up to 50 MP).
 - **Dashboard card** to pick a file or photo on your phone, choose options and follow the job until it's done.
 - **`home_print.print_file` action** for automations.
 - **Scans** with the printer's scanner (eSCL / AirScan): a **Scan** button on the card, an archive in the Media panel and a `home_print.scan` action. See [Scanning](#scanning).
@@ -102,7 +102,7 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 
 - Yazıcıyı ağda kendisi bulur ya da IP ile eklersin.
 - Durum, mürekkep seviyesi ve sorun (kâğıt bitti, sıkıştı, kapak açık) sensörleri.
-- PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir.
+- PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir. Telefonla çekilmiş büyük fotoğraflar otomatik küçültülür (JPEG 175 MP'ye, PNG 50 MP'ye kadar).
 - Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
 - Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** düğmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
 

@@ -366,3 +366,50 @@ def test_prepare_unknown_urf_duplex_mode_is_ignored():
         PrintOptions(sides="two-sided-long-edge"),
     )
     assert len(urf_decoder.decode(job.data)) == 2
+
+
+# --- big photos are shrunk, not rejected (issue #2) ---------------------------
+
+
+def test_prepare_big_jpeg_passthrough_is_shrunk(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    data = image_bytes(page_image(400, 300), "JPEG")
+    job = prepare(data, JPEG, DESKJET, PrintOptions())
+    assert job.document_format == JPEG
+    image = Image.open(io.BytesIO(job.data))
+    assert image.width * image.height <= 10_000
+
+
+@pytest.mark.parametrize(("fmt", "pil"), [(JPEG, "JPEG"), (PNG, "PNG")])
+def test_prepare_big_photo_through_pwg_raster(monkeypatch, fmt, pil):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    data = image_bytes(page_image(400, 300), pil)
+    pwg_only = _only(PWG, raster=DESKJET.raster)
+    job = prepare(data, fmt, pwg_only, PrintOptions())
+    assert job.document_format == PWG
+    assert job.page_count == 1
+    assert len(pwg_decoder.decode(job.data)) == 1
+
+
+def test_prepare_big_photo_through_urf_raster(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_IMAGE_PIXELS", 10_000)
+    data = image_bytes(page_image(400, 300), "JPEG")
+    urf_only = _only(URF, raster=DESKJET.raster)
+    job = prepare(data, JPEG, urf_only, PrintOptions())
+    assert job.document_format == URF
+    assert len(urf_decoder.decode(job.data)) == 1
+
+
+def test_prepare_photo_over_source_cap_rejected(monkeypatch):
+    from custom_components.home_print.convert import render
+
+    monkeypatch.setattr(render, "MAX_JPEG_SOURCE_PIXELS", 10_000)
+    data = image_bytes(page_image(400, 300), "JPEG")
+    with pytest.raises(InvalidDocument, match="too_large"):
+        prepare(data, JPEG, DESKJET, PrintOptions())
