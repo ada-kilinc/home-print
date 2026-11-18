@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -17,6 +19,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import HomePrintConfigEntry
 from .coordinator import HomePrintCoordinator
 from .entity import HomePrintEntity
+from .models import Marker
 from .scanning import active_state
 
 PARALLEL_UPDATES = 0
@@ -28,6 +31,40 @@ SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"]
 def reasons_of(state_reasons: tuple[str, ...]) -> list[str]:
     """Return the reasons list; the IPP value ``none`` means no reasons."""
     return [r for r in state_reasons if r != "none"]
+
+
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+_SINGLE_COLORS = {
+    "#000000": "black",
+    "#00ffff": "cyan",
+    "#ff00ff": "magenta",
+    "#ffff00": "yellow",
+}
+_COLOR_WORDS = ("tri-color", "tricolor", "tri-colour", "tricolour", "color", "colour")
+
+
+def _marker_key(marker: Marker) -> str | None:
+    """Translation key for a common ink/toner, or None to keep its own name."""
+    if "waste" in marker.kind or "maintenance" in marker.kind:
+        return None
+    name = marker.name.lower()
+    colors = [c.lower() for c in _HEX.findall(marker.color or "")]
+    if len(colors) > 1 or any(word in name for word in _COLOR_WORDS):
+        return "color"
+    if colors:
+        return _SINGLE_COLORS.get(colors[0])
+    for key in ("black", "cyan", "magenta", "yellow"):
+        if key in name:
+            return key
+    return None
+
+
+def marker_keys(markers: Sequence[Marker]) -> list[str | None]:
+    """Keys per marker; a key two markers would share (photo + matte black)
+    is dropped for both, so their own names tell them apart."""
+    keys = [_marker_key(m) for m in markers]
+    counts = Counter(k for k in keys if k is not None)
+    return [k if k is not None and counts[k] == 1 else None for k in keys]
 
 
 async def async_setup_entry(
@@ -43,8 +80,8 @@ async def async_setup_entry(
     if entry.runtime_data.scanner is not None:
         entities.append(ScannerStatusSensor(coordinator))
     entities.extend(
-        MarkerSensor(coordinator, index)
-        for index in range(len(coordinator.data.markers))
+        MarkerSensor(coordinator, index, key)
+        for index, key in enumerate(marker_keys(coordinator.data.markers))
     )
     async_add_entities(entities)
 
@@ -76,11 +113,18 @@ class MarkerSensor(HomePrintEntity, SensorEntity):
     _attr_suggested_display_precision = 0
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: HomePrintCoordinator, index: int) -> None:
+    def __init__(
+        self, coordinator: HomePrintCoordinator, index: int, key: str | None = None
+    ) -> None:
         super().__init__(coordinator, f"marker_{index}")
         self._index = index
         marker = coordinator.data.markers[index]
-        self._attr_name = marker.name
+        if key is not None:
+            # "Black" / "Siyah" etc.; the unique ID (and so the entity ID of
+            # an existing install) stays marker_<index>.
+            self._attr_translation_key = f"marker_{key}"
+        else:
+            self._attr_name = marker.name
         # Ink/toner levels are primary; waste/maintenance boxes are diagnostic.
         if "waste" in marker.kind or "maintenance" in marker.kind:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC

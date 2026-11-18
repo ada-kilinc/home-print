@@ -113,6 +113,21 @@
           "adf_loaded": "Paper in the feeder",
           "stopped": "Stopped"
         }
+      },
+      "marker_black": {
+        "name": "Black"
+      },
+      "marker_color": {
+        "name": "Colour"
+      },
+      "marker_cyan": {
+        "name": "Cyan"
+      },
+      "marker_magenta": {
+        "name": "Magenta"
+      },
+      "marker_yellow": {
+        "name": "Yellow"
       }
     },
     "binary_sensor": {

@@ -62,10 +62,10 @@ async def test_status_and_marker_sensors_created(hass, mock_client):
     assert status.attributes["reasons"] == []
 
     expected = {
-        "black_ink": ("80", "#000000", "ink-cartridge"),
-        "cyan_ink": ("55", "#00FFFF", "ink-cartridge"),
-        "magenta_ink": ("30", "#FF00FF", "ink-cartridge"),
-        "yellow_ink": (STATE_UNKNOWN, "#FFFF00", "ink-cartridge"),
+        "black": ("80", "#000000", "ink-cartridge"),
+        "cyan": ("55", "#00FFFF", "ink-cartridge"),
+        "magenta": ("30", "#FF00FF", "ink-cartridge"),
+        "yellow": (STATE_UNKNOWN, "#FFFF00", "ink-cartridge"),
         "maintenance_box": ("90", None, "waste-ink"),
     }
     for slug, (level, color, kind) in expected.items():
@@ -194,8 +194,8 @@ async def test_marker_sensor_category_and_state_class(hass, mock_client):
     await setup_entry(hass)
     registry = er.async_get(hass)
     for slug, diagnostic in (
-        ("black_ink", False),
-        ("yellow_ink", False),
+        ("black", False),
+        ("yellow", False),
         ("maintenance_box", True),
     ):
         entity_id = f"sensor.generic_ippe_4000_series_{slug}"
@@ -257,3 +257,67 @@ async def test_status_sensor_scanning_while_scan_runs_without_status(
     await hass.async_block_till_done()
     sensor = hass.states.get("sensor.generic_ippe_4000_series_scanner_status")
     assert sensor.state == STATE_UNAVAILABLE
+
+
+# --- translated marker names (issue #3) ---------------------------------------
+
+
+def _marker(name, color, kind="ink-cartridge"):
+    from custom_components.home_print.models import Marker
+
+    return Marker(name=name, color=color, level=50, kind=kind)
+
+
+@pytest.mark.parametrize(
+    ("name", "color", "kind", "key"),
+    [
+        ("tri-color ink", "#00FFFF#FF00FF#FFFF00", "ink-cartridge", "color"),
+        ("Colour cartridge", None, "ink-cartridge", "color"),
+        ("black ink", "#000000", "ink-cartridge", "black"),
+        ("Black toner", None, "toner-cartridge", "black"),
+        ("Cyan ink", "#00FFFF", "ink-cartridge", "cyan"),
+        ("Magenta ink", "#FF00FF", "ink-cartridge", "magenta"),
+        ("Yellow ink", "#FFFF00", "ink-cartridge", "yellow"),
+        ("Maintenance box", None, "waste-ink", None),
+        ("Black waste", "#000000", "waste-toner", None),
+        ("Light gray ink", "#C0C0C0", "ink-cartridge", None),
+    ],
+)
+def test_marker_key(name, color, kind, key):
+    from custom_components.home_print.sensor import marker_keys
+
+    assert marker_keys([_marker(name, color, kind)]) == [key]
+
+
+def test_marker_keys_shared_by_two_markers_fall_back_to_printer_names():
+    from custom_components.home_print.sensor import marker_keys
+
+    markers = [
+        _marker("Photo black ink", "#000000"),
+        _marker("Matte black ink", "#000000"),
+        _marker("Cyan ink", "#00FFFF"),
+    ]
+    assert marker_keys(markers) == [None, None, "cyan"]
+
+
+async def test_deskjet_marker_names_in_turkish(hass, mock_client):
+    from .test_printing import DESKJET
+
+    hass.config.language = "tr"
+    mock_client.get_printer.return_value = DESKJET
+    entry = await setup_entry(hass)
+    registry = er.async_get(hass)
+    names = {}
+    for index in (0, 1):
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.unique_id}_marker_{index}"
+        )
+        names[index] = hass.states.get(entity_id).attributes["friendly_name"]
+    assert names[0].endswith(" Renkli")
+    assert names[1].endswith(" Siyah")
+
+
+async def test_unknown_marker_keeps_printer_name(hass, mock_client):
+    await setup_entry(hass)
+    state = hass.states.get("sensor.generic_ippe_4000_series_maintenance_box")
+    assert state.attributes["friendly_name"].endswith(" Maintenance box")

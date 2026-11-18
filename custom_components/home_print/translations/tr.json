@@ -113,6 +113,21 @@
           "adf_loaded": "ADF'de kağıt var",
           "stopped": "Durdu"
         }
+      },
+      "marker_black": {
+        "name": "Siyah"
+      },
+      "marker_color": {
+        "name": "Renkli"
+      },
+      "marker_cyan": {
+        "name": "Camgöbeği"
+      },
+      "marker_magenta": {
+        "name": "Macenta"
+      },
+      "marker_yellow": {
+        "name": "Sarı"
       }
     },
     "binary_sensor": {
