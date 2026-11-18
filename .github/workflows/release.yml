@@ -1,10 +1,15 @@
-# Attach home_print.zip to every published release. HACS installs that one
-# archive (hacs.json: zip_release), so an update is never half-downloaded.
+# Release: push a tag (git tag v0.3.6 && git push origin v0.3.6) and this
+# builds home_print.zip, checks it against manifest.json, and publishes an
+# English GitHub release with generated notes and the zip attached. HACS
+# installs that one archive (hacs.json: zip_release), so an update is never
+# half-downloaded. A release made by hand gets its zip attached as well.
 # Run it by hand to add the zip to an existing release:
 #   gh workflow run release.yml -f tag=v0.3.4
 name: Release zip
 
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
   workflow_dispatch:
@@ -17,13 +22,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-zip-${{ github.event.release.tag_name || inputs.tag }}
+  group: release-zip-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
 
 jobs:
   zip:
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
     steps:
       # The default branch provides the build script; the zip is made from
       # the tag's own files (works for older tags too).
@@ -44,7 +49,13 @@ jobs:
             --source "$RUNNER_TEMP/tag/custom_components/home_print" \
             --out dist/home_print.zip
 
-      - name: Upload to the release
+      - name: Publish the release, or add the zip to an existing one
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/home_print.zip --clobber
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/home_print.zip --clobber
+          else
+            gh release create "$TAG" dist/home_print.zip \
+              --verify-tag --title "${TAG#v}" --generate-notes
+          fi

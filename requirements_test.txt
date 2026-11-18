@@ -1,5 +1,6 @@
-pytest-homeassistant-custom-component
-ruff
+pytest-homeassistant-custom-component==0.13.316
+ruff==0.17.5
+pyipp==0.17.0
 pypdfium2==5.15.2
 Pillow>=12.0.0
 numpy>=2.3.2
