@@ -51,7 +51,7 @@ If your printer has a scanner, Home Print finds it on the printer's own address 
 - **History:** the clock icon in the card header opens a window with two tabs, **Prints** and **Scans**.
 - **Where files go:** every scan is saved as `home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) in the default media root (`/media` on Home Assistant OS) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
 - **Options** (per printer, **Configure**):
-  - **Scanner address:** leave empty to find it automatically, or enter an address like `http://192.168.1.20/eSCL` if the scanner isn't found (`http://` and `/eSCL` are added when left out). If no scanner answers at start-up (printer asleep), Home Print looks again after 1, 5 and 30 minutes, then hourly.
+  - **Scanner address:** leave empty to find it automatically, or enter an address like `http://192.168.1.20/eSCL` if the scanner isn't found (`http://` and `/eSCL` are added when left out). If no scanner answers at start-up (printer asleep), Home Print looks again after 1, 5 and 30 minutes, then hourly for a day (forever if you typed an address). Reloading the integration starts the search over.
   - **Keep scans (days):** default 30, 0 keeps them forever.
   - **Max space for scans (MB):** default 2000, 0 means no limit. When it's exceeded, the oldest scans are deleted.
 - **HTTPS certificate:** if the printer was added over plain IPP, the scanner's https address (HP printers use a self-signed certificate) is used without checking its certificate; for printers added over IPPS the **verify SSL** setting applies.
@@ -122,7 +122,7 @@ Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bul
 - **Geçmiş:** Kartın başlığındaki saat simgesi **Baskılar** ve **Taramalar** diye iki sekmeli bir pencere açar.
 - **Dosyalar nerede:** Her tarama varsayılan medya klasöründe (Home Assistant OS'ta `/media`) `home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
 - **Ayarlar** (her yazıcının **Yapılandır** ekranında):
-  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa `http://192.168.1.20/eSCL` gibi elle yaz (`http://` ve `/eSCL` yazmazsan eklenir). Açılışta tarayıcı yanıt vermezse (yazıcı uykudaysa) Home Print 1, 5 ve 30 dakika sonra, sonra da saatte bir yeniden bakar.
+  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa `http://192.168.1.20/eSCL` gibi elle yaz (`http://` ve `/eSCL` yazmazsan eklenir). Açılışta tarayıcı yanıt vermezse (yazıcı uykudaysa) Home Print 1, 5 ve 30 dakika sonra, ardından bir gün boyunca saatte bir yeniden bakar (adresi elle yazdıysan aramayı hiç bırakmaz). Entegrasyonu yeniden yüklersen arama baştan başlar.
   - **Taramaları sakla (gün):** varsayılan 30, 0 hiç silme demek.
   - **Taramalar için en fazla alan (MB):** varsayılan 2000, 0 sınırsız demek. Aşılırsa en eski taramalar silinir.
 - **HTTPS sertifikası:** Yazıcı düz IPP ile eklendiyse tarayıcının https adresi (HP yazıcılar kendinden imzalı sertifika kullanır) sertifikası kontrol edilmeden kullanılır. IPPS ile eklenen yazıcılarda **SSL doğrula** ayarı geçerlidir.

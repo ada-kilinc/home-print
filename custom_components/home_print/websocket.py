@@ -23,6 +23,7 @@ from .scanning import (
     async_cancel_scan,
     async_start_scan,
     scan_defaults,
+    usable_sources,
 )
 
 if TYPE_CHECKING:
@@ -125,6 +126,7 @@ def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
                 "resolutions": list(allowed_resolutions(src)),
             }
             for name, src in scanner.caps.sources.items()
+            if name in usable_sources(scanner.caps)
         },
         "formats": ["pdf", "jpeg"],
         "defaults": scan_defaults(scanner.caps),

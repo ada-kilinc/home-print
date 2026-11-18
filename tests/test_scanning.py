@@ -455,3 +455,31 @@ async def test_cancel_scan_sets_canceled(hass, entry):
     # Cancelling again (or a finished scan) changes nothing.
     assert await scanning.async_cancel_scan(entry, state.scan_id) is state
     assert await scanning.async_cancel_scan(entry, "0" * 32) is None
+
+
+def test_unusable_source_hidden_from_defaults_and_rejected():
+    huge = SourceCaps(0, 2550, 0, 3507, ("color",), (1200,), ("image/jpeg",))
+    ok = SourceCaps(0, 2550, 0, 3507, ("gray",), (300,), ("image/jpeg",))
+    caps = ScannerCaps("2.0", None, None, {"platen": huge, "adf": ok})
+    assert scanning.usable_sources(caps) == ("adf",)
+    defaults = scanning.scan_defaults(caps)
+    assert defaults["source"] == "adf"
+    assert defaults["resolution"] == 300
+    with pytest.raises(ScanOptionError):
+        validate_request(caps, ScanRequest("platen", "color", 1200, "pdf"))
+
+
+async def test_scan_start_and_end_refresh_entities(hass, entry, monkeypatch):
+    """The scanner status sensor shows 'scanning' right away, not at next poll."""
+    coordinator = entry.runtime_data.coordinator
+    calls = []
+    original = coordinator.async_update_listeners
+
+    def spy():
+        calls.append(entry.runtime_data.scanner.active.state)
+        original()
+
+    monkeypatch.setattr(coordinator, "async_update_listeners", spy)
+    await _run(hass, entry)
+    assert calls[0] == "scanning"
+    assert calls[-1] == "done"

@@ -7,7 +7,7 @@ import ipaddress
 import logging
 import time
 from collections.abc import Callable
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -90,7 +90,9 @@ class EsclClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._session = session
-        self._ssl: bool | None = None if verify_ssl else False
+        # True verifies with the default context; False skips verification.
+        # (aiohttp 3.13 deprecates ``ssl=None``.)
+        self._ssl = bool(verify_ssl)
 
     @property
     def base_url(self) -> str:
@@ -120,27 +122,25 @@ class EsclClient:
 
         Only the path and query of ``Location`` are used: some scanners name
         another host or scheme (e.g. their own https address) for the job.
+        The path is checked after percent-decoding, because the HTTP client
+        resolves ``%2e%2e`` before sending.
         """
         parts = urlsplit(urljoin(self._base_url + "/", location))
         base = urlsplit(self._base_url)
-        job = urlunsplit(
-            (base.scheme, base.netloc, parts.path.rstrip("/"), parts.query, "")
-        )
-        segments = parts.path.split("/")
+        base_path = base.path.rstrip("/")
+        decoded = unquote(parts.path)
+        segments = decoded.split("/")
         if (
-            not parts.path.startswith(base.path.rstrip("/") + "/")
+            not decoded.startswith(base_path + "/")
             or ".." in segments
             or "." in segments
-            or parts.path.rstrip("/") == base.path.rstrip("/")
+            or "\\" in decoded
+            or decoded.rstrip("/") == base_path
         ):
             return None
-        return job
-
-    def _rejected_url(self, location: str) -> str:
-        """Where to DELETE a job whose Location was rejected (our origin)."""
-        parts = urlsplit(urljoin(self._base_url + "/", location))
-        base = urlsplit(self._base_url)
-        return urlunsplit((base.scheme, base.netloc, parts.path, parts.query, ""))
+        return urlunsplit(
+            (base.scheme, base.netloc, parts.path.rstrip("/"), parts.query, "")
+        )
 
     async def _post_job(self, body: bytes) -> tuple[int, str | None]:
         try:
@@ -156,10 +156,34 @@ class EsclClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ScannerUnavailable() from err
 
+    async def _post_job_shielded(self, body: bytes) -> tuple[int, str | None]:
+        """``_post_job`` that survives cancellation.
+
+        If the caller is cancelled while the POST is in flight, the scanner
+        may still create the job; it is closed once the reply arrives, so the
+        next scan doesn't find the scanner busy.
+        """
+        post = asyncio.ensure_future(self._post_job(body))
+        try:
+            return await asyncio.shield(post)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._discard_job(post))
+            raise
+
+    async def _discard_job(self, post: asyncio.Future[tuple[int, str | None]]) -> None:
+        try:
+            status, location = await post
+        except Exception:  # noqa: BLE001 - nothing was created
+            return
+        if status == 201 and location:
+            job_url = self._job_url(location)
+            if job_url is not None:
+                await self._close_job(job_url)
+
     async def _create_job(self, body: bytes, source: str) -> str:
         deadline = time.monotonic() + CREATE_BUSY_WAIT
         while True:
-            status, location = await self._post_job(body)
+            status, location = await self._post_job_shielded(body)
             if status != 503:
                 break
             if time.monotonic() + RETRY_DELAY > deadline:
@@ -181,8 +205,8 @@ class EsclClient:
             raise EsclError("bad_response")
         job_url = self._job_url(location)
         if job_url is None:
+            # Nothing is sent to a path outside the eSCL base, not even DELETE.
             _LOGGER.debug("Scanner gave an unexpected job location %s", location)
-            await asyncio.shield(self._close_job(self._rejected_url(location)))
             raise EsclError("bad_response")
         return job_url
 
@@ -284,11 +308,15 @@ def _url_host(host: str) -> str:
 async def _probe(
     session: aiohttp.ClientSession, base: str, verify_ssl: bool, timeout: float
 ) -> tuple[str, ScannerCaps]:
-    """Read capabilities at ``base``; return the base after redirects too."""
+    """Read capabilities at ``base``; return the base after redirects too.
+
+    A redirect may change the scheme or port (HP: http to https) but not the
+    host: a scanner that sends us elsewhere is not used.
+    """
     try:
         async with session.get(
             f"{base}{_CAPS_PATH}",
-            ssl=None if verify_ssl else False,
+            ssl=bool(verify_ssl),
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             if resp.status != 200:
@@ -297,6 +325,10 @@ async def _probe(
             final = str(resp.url.with_query(None).with_fragment(None))
     except (aiohttp.ClientError, TimeoutError) as err:
         raise ScannerUnavailable() from err
+    final_host = (urlsplit(final).hostname or "").lower()
+    if final_host != (urlsplit(base).hostname or "").lower():
+        _LOGGER.debug("Scanner at %s redirected to another host: %s", base, final)
+        raise EsclError("bad_response")
     if final.endswith(_CAPS_PATH):
         base = final[: -len(_CAPS_PATH)]
     return base, caps

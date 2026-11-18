@@ -32,6 +32,9 @@ DETECT_TIMEOUT = 5  # seconds
 # When no scanner answered at setup (asleep, or no scanner at all).
 RETRY_DELAYS = (60, 300, 1800)  # seconds
 RETRY_INTERVAL = 3600  # seconds, after RETRY_DELAYS
+# Automatic detection stops after this much waiting (most printers simply
+# have no scanner); a reload starts over. A typed-in address keeps retrying.
+AUTO_RETRY_LIMIT = 86400  # seconds
 
 _ERRORS = (EsclError, aiohttp.ClientError, TimeoutError, OSError)
 
@@ -97,9 +100,13 @@ async def _async_detect(
         return None
 
 
-def _retry_delays() -> Iterator[int]:
-    yield from RETRY_DELAYS
-    while True:
+def _retry_delays(forever: bool) -> Iterator[int]:
+    waited = 0
+    for delay in RETRY_DELAYS:
+        waited += delay
+        yield delay
+    while forever or waited + RETRY_INTERVAL <= AUTO_RETRY_LIMIT:
+        waited += RETRY_INTERVAL
         yield RETRY_INTERVAL
 
 
@@ -113,7 +120,7 @@ def _async_schedule_retry(
     nothing lingers between attempts; unloading cancels both. Once a scanner
     answers the entry is reloaded.
     """
-    delays = _retry_delays()
+    delays = _retry_delays(forever=bool(entry.options.get(CONF_SCANNER_URL)))
     cancel_timer: CALLBACK_TYPE | None = None
 
     async def attempt() -> None:
@@ -133,7 +140,11 @@ def _async_schedule_retry(
 
     def schedule() -> None:
         nonlocal cancel_timer
-        cancel_timer = async_call_later(hass, next(delays), fire)
+        delay = next(delays, None)
+        if delay is None:
+            _LOGGER.debug("No scanner found for %s; giving up", entry.title)
+            return
+        cancel_timer = async_call_later(hass, delay, fire)
 
     @callback
     def stop() -> None:
@@ -157,6 +168,11 @@ async def async_setup_scanner(
         _async_schedule_retry(hass, entry, session)
         return None
     client, caps = detected
+    from .scanning import usable_sources  # noqa: PLC0415 - avoids an import cycle
+
+    if not usable_sources(caps):
+        _LOGGER.debug("Scanner at %s offers nothing that can be saved", client.base_url)
+        return None
 
     try:
         archive = ScanArchive(hass, entry)

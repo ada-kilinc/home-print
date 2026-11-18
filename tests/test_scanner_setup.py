@@ -305,3 +305,54 @@ async def test_manual_https_scanner_url_cert_rule(
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert mock_escl.call_args.args[2] is expected
+
+
+async def test_auto_detection_gives_up_after_a_day(
+    hass, mock_client, mock_find_scanner, freezer
+):
+    """A printer without a scanner isn't probed forever; a reload starts over."""
+    entry = await setup_entry(hass)
+    assert entry.runtime_data.scanner is None
+    for _ in range(30):
+        freezer.tick(timedelta(hours=1))
+        await _tick(hass, 0)
+    attempts = mock_find_scanner.await_count
+    assert attempts < 30
+    for _ in range(48):
+        freezer.tick(timedelta(hours=1))
+        await _tick(hass, 0)
+    assert mock_find_scanner.await_count == attempts
+
+
+async def test_manual_url_detection_keeps_retrying(
+    hass, mock_client, mock_escl, freezer
+):
+    mock_escl.client.capabilities.side_effect = ScannerUnavailable("down")
+    entry = await setup_entry(hass, make_entry(**{CONF_SCANNER_URL: "http://n/eSCL"}))
+    assert entry.runtime_data.scanner is None
+    for _ in range(48):
+        freezer.tick(timedelta(hours=1))
+        await _tick(hass, 0)
+    calls = mock_escl.client.capabilities.await_count
+    freezer.tick(timedelta(hours=1))
+    await _tick(hass, 0)
+    assert mock_escl.client.capabilities.await_count == calls + 1
+
+
+async def test_scanner_without_usable_source_is_ignored(
+    hass, mock_client, mock_escl, mock_find_scanner, freezer
+):
+    """Only resolutions above the save limit: no scan button, no retries."""
+    from custom_components.home_print.escl.models import ScannerCaps, SourceCaps
+
+    huge = SourceCaps(0, 2550, 0, 3507, ("color",), (1200, 2400), ("image/jpeg",))
+    mock_find_scanner.return_value = (
+        URL,
+        ScannerCaps("2.5", None, None, {"platen": huge}),
+    )
+    entry = await setup_entry(hass)
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.scanner is None
+    freezer.tick(timedelta(hours=2))
+    await _tick(hass, 0)
+    assert mock_find_scanner.await_count == 1

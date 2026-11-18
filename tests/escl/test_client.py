@@ -195,16 +195,51 @@ async def test_scan_foreign_location_rewritten_to_base_origin(env):
 
 
 @pytest.mark.parametrize(
-    "location", ["/other/ScanJobs/abc", "/eSCL/../admin/abc", "/eSCLx/abc"]
+    "location",
+    [
+        "/other/ScanJobs/abc",
+        "/eSCL/../admin/abc",
+        "/eSCLx/abc",
+        "/eSCL/%2e%2e/admin",
+        "/eSCL/%2E%2E/admin",
+        "/eSCL/ScanJobs/%2e%2e/%2e%2e/admin",
+    ],
 )
-async def test_scan_location_outside_base_path_rejected_and_deleted(env, location):
+async def test_scan_location_outside_base_path_rejected(env, location):
+    """No request at all goes to a path outside the eSCL base (not even DELETE)."""
     fake = FakeScanner([b"p1"], location=location)
     client, _ = await env(fake)
     with pytest.raises(EsclError) as err:
         await client.scan(parse_capabilities(CAPS_XML), SETTINGS)
     assert err.value.code == "bad_response"
     assert fake.next_calls == 0
-    assert len(fake.deleted) == 1
+    assert fake.deleted == []
+
+
+async def test_cancel_during_job_post_closes_created_job(env):
+    """A scan cancelled while ScanJobs is in flight still closes that job."""
+    fake = FakeScanner([b"p1"])
+    client, _ = await env(fake)
+    posted = asyncio.Event()
+    client_mod_post = client._post_job
+
+    async def post(body):
+        posted.set()
+        await asyncio.sleep(0.2)
+        return await client_mod_post(body)
+
+    client._post_job = post
+    task = asyncio.create_task(client.scan(parse_capabilities(CAPS_XML), SETTINGS))
+    await posted.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(50):
+        if fake.deleted:
+            break
+        await asyncio.sleep(0.02)
+    assert fake.deleted == ["/eSCL/ScanJobs/abc"]
+    assert fake.next_calls == 0
 
 
 async def test_scan_location_query_is_kept(env):
@@ -387,6 +422,45 @@ async def test_find_scanner_uses_url_after_redirect(env):
         await server.close()
     assert found is not None
     assert found[0] == f"http://127.0.0.1:{target.port}/eSCL"
+
+
+async def test_find_scanner_rejects_redirect_to_other_host(env):
+    fake = FakeScanner([])
+    _, target = await env(fake)
+    final = f"http://localhost:{target.port}/eSCL/ScannerCapabilities"
+
+    async def redirect(request):
+        raise web.HTTPFound(final)
+
+    app = web.Application()
+    app.router.add_get("/eSCL/ScannerCapabilities", redirect)
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        async with aiohttp.ClientSession() as session:
+            found = await find_scanner(
+                session, f"127.0.0.1:{server.port}", False, False
+            )
+    finally:
+        await server.close()
+    assert found is None
+
+
+@pytest.mark.parametrize(("verify", "expected"), [(True, True), (False, False)])
+async def test_ssl_argument_is_a_bool(monkeypatch, verify, expected):
+    """aiohttp deprecates ssl=None; pass True (verify) or False (don't)."""
+    seen = []
+
+    class Session:
+        def get(self, url, **kw):
+            seen.append(kw["ssl"])
+            raise aiohttp.ClientError
+
+    await find_scanner(Session(), "h", False, verify)
+    client = EsclClient("http://h/eSCL", Session(), verify)
+    with pytest.raises(ScannerUnavailable):
+        await client.status()
+    assert seen and all(v is expected for v in seen)
 
 
 @pytest.mark.parametrize(

@@ -117,6 +117,15 @@ def allowed_resolutions(src: SourceCaps) -> tuple[int, ...]:
     )
 
 
+def usable_sources(caps: ScannerCaps) -> tuple[str, ...]:
+    """Sources the card can offer: some colour mode and a savable resolution."""
+    return tuple(
+        name
+        for name, src in caps.sources.items()
+        if src.color_modes and allowed_resolutions(src)
+    )
+
+
 def validate_request(
     caps: ScannerCaps, req: ScanRequest, archive: ScanArchive | None = None
 ) -> ScanSettings:
@@ -277,6 +286,7 @@ async def _run(
             raise
     finally:
         state.finished_at = time.monotonic()
+        _notify_entities(entry)
         hass.bus.async_fire(
             EVENT_SCAN,
             {
@@ -317,12 +327,19 @@ async def async_start_scan(
         raise ScannerBusy
     state = ScanJobState(scan_id=uuid4().hex, state="scanning", user=user)
     runtime.active = state
+    # Before the task: it starts eagerly and may move past "scanning" at once.
+    _notify_entities(entry)
     runtime.task = entry.async_create_background_task(
         hass,
         _run(hass, entry, runtime, req, settings, state),
         f"home_print scan {entry.entry_id}",
     )
     return state
+
+
+def _notify_entities(entry: HomePrintConfigEntry) -> None:
+    """Let the scanner status sensor show a scan's start and end right away."""
+    entry.runtime_data.coordinator.async_update_listeners()
 
 
 async def async_cancel_scan(
@@ -366,14 +383,11 @@ async def async_scan_and_wait(
 
 def scan_defaults(caps: ScannerCaps) -> dict[str, Any]:
     """Defaults for the card: 300 dpi (or the closest), color, platen, PDF."""
-    source = "platen" if "platen" in caps.sources else next(iter(caps.sources))
+    sources = usable_sources(caps) or tuple(caps.sources)
+    source = "platen" if "platen" in sources else sources[0]
     src = caps.sources[source]
-    resolutions = allowed_resolutions(src)
-    resolution = (
-        min(resolutions, key=lambda r: abs(r - PREFERRED_RESOLUTION))
-        if resolutions
-        else PREFERRED_RESOLUTION
-    )
+    resolutions = allowed_resolutions(src) or src.resolutions
+    resolution = min(resolutions, key=lambda r: abs(r - PREFERRED_RESOLUTION))
     return {
         "source": source,
         "color_mode": "color" if "color" in src.color_modes else src.color_modes[0],
