@@ -119,6 +119,12 @@ const ICONS = {
     "M13.81 22H6C4.89 22 4 21.11 4 20V4C4 2.9 4.89 2 6 2H14L20 8V13.09C19.67 13.04 19.34 13 19 13S18.33 13.04 18 13.09V9H13V4H6V20H13.09C13.21 20.72 13.46 21.39 13.81 22M23 18H20V15H18V18H15V20H18V23H20V20H23V18Z",
   chevron_left: "M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z",
   chevron_right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
+  printer:
+    "M18,3H6V7H18M19,12A1,1 0 0,1 18,11A1,1 0 0,1 19,10A1,1 0 0,1 20,11A1,1 0 0,1 19,12M16,19H8V14H16M19,8H5A3,3 0 0,0 2,11V17H6V21H18V17H22V11A3,3 0 0,0 19,8Z",
+  // mdi:unfold-more-horizontal
+  unfold:
+    "M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z",
+  check: "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z",
 };
 
 const svg = (name) =>
@@ -170,6 +176,7 @@ const STRINGS = {
     ink_color: "Renkli",
     percent: "%{value}",
     picker: "Yazıcı",
+    switch_printer: "Yazıcı değiştir",
     loading: "Yazıcılar yükleniyor…",
     load_failed:
       "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Böyle sürerse entegrasyonun kurulu olup olmadığına bak.",
@@ -304,6 +311,7 @@ const STRINGS = {
     ink_color: "Colour",
     percent: "{value}%",
     picker: "Printer",
+    switch_printer: "Switch printer",
     loading: "Loading printers…",
     load_failed:
       "Couldn't load the printer list. Home Print may still be loading; I'll try again shortly. If this persists, check that the integration is installed.",
@@ -590,6 +598,29 @@ function scanOptionLabel(lang, kind, value) {
   return key in STRINGS.en ? t(lang, key) : String(value);
 }
 
+// The printer picked in this browser, kept per card entry_id so two cards
+// pinned to different printers don't share one choice.
+function storageKey(entryId) {
+  return `home-print-card:printer:${entryId ?? ""}`;
+}
+
+function readStored(key) {
+  try {
+    const value = globalThis.localStorage?.getItem(key);
+    return typeof value === "string" && value ? value : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function writeStored(key, value) {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+  } catch (_err) {
+    // Private mode or storage off: the choice lasts until the page reloads.
+  }
+}
+
 function svgIcon(name) {
   const ns = "http://www.w3.org/2000/svg";
   const icon = document.createElementNS(ns, "svg");
@@ -627,7 +658,27 @@ const STYLE = `
     min-width: 0;
   }
   [hidden] { display: none !important; }
-  .header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+  .header { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .header-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .who {
+    flex: 0 1 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: start;
+  }
+  button.who { cursor: pointer; padding: 0 4px; margin: 0 -4px; }
+  button.who:hover { background: var(--secondary-background-color, rgba(127, 127, 127, 0.12)); }
+  .who svg { display: block; color: var(--secondary-text-color); }
+  .who-icon, .chevron { flex: none; }
   .title {
     font-size: 1.2em;
     font-weight: 500;
@@ -636,8 +687,47 @@ const STYLE = `
     white-space: nowrap;
     min-width: 0;
   }
-  .state { color: var(--secondary-text-color); }
-  .picker-slot { margin-left: auto; }
+  .state {
+    margin-left: auto;
+    flex: none;
+    color: var(--secondary-text-color);
+    white-space: nowrap;
+  }
+  .printer-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .printer-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 16px;
+    cursor: pointer;
+    min-width: 0;
+    outline: none;
+  }
+  .printer-option + .printer-option { border-top: 1px solid var(--divider-color); }
+  .printer-option:hover, .printer-option:focus-visible {
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+  }
+  .printer-option .check { width: 24px; flex: none; color: var(--primary-color); }
+  .printer-option .check svg { display: block; }
+  .printer-option[aria-selected="false"] .check svg { visibility: hidden; }
+  .printer-option .name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .printer-option .status { flex: none; color: var(--secondary-text-color); white-space: nowrap; }
   svg { width: 24px; height: 24px; flex: none; fill: currentColor; }
   .icon-button {
     flex: none;
@@ -994,14 +1084,20 @@ const TEMPLATE = `
   <ha-card>
     <div class="card">
       <div class="header">
-        <span aria-hidden="true">🖨</span>
-        <span class="title" data-role="title"></span>
-        <span class="state" data-role="state-dash" aria-hidden="true">—</span>
-        <span class="state" data-role="state"></span>
-        <span class="picker-slot" data-role="picker-slot"></span>
-        <button type="button" class="icon-button" data-role="history-button" data-aria="history">
-          ${svg("history")}
-        </button>
+        <div class="header-row">
+          <span class="who" data-role="who">
+            <span class="who-icon" data-role="who-icon">${svg("printer")}</span>
+            <span class="title" data-role="title"></span>
+          </span>
+          <button type="button" class="who" data-role="switcher" aria-haspopup="listbox" aria-expanded="false" aria-controls="printer-list" hidden>
+            <span class="chevron">${svg("unfold")}</span>
+          </button>
+          <span class="state" data-role="state"></span>
+          <button type="button" class="icon-button" data-role="history-button" data-aria="history">
+            ${svg("history")}
+          </button>
+        </div>
+        <ul class="printer-list" id="printer-list" data-role="printer-list" role="listbox" hidden></ul>
       </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
       <div class="ink" data-role="ink"></div>
@@ -1143,7 +1239,9 @@ class HomePrintCard extends HTMLElement {
     this._loading = false;
     this._pickedId = null;
     this._appliedId = null;
-    this._pickerKey = "";
+    this._storageKey = null;
+    this._listKey = "";
+    this._uploadEntryId = null;
     this._file = null;
     this._uploading = false;
     this._message = null;
@@ -1175,6 +1273,7 @@ class HomePrintCard extends HTMLElement {
     // Buttons waiting for their second tap: button -> {timer, children, label}.
     this._armed = new Map();
     this._onDocumentClick = (ev) => this._closeMenuOutside(ev);
+    this._onDocumentClickList = (ev) => this._closeListOutside(ev);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
     for (const name of FILE_INPUTS) {
@@ -1189,6 +1288,14 @@ class HomePrintCard extends HTMLElement {
       this._role(name).addEventListener("focusout", (ev) => this._onMenuFocusOut(ev));
     }
     this._role("print").addEventListener("click", () => this._onPrint());
+    this._role("switcher").addEventListener("click", () => this._onSwitcher());
+    this._role("switcher").addEventListener("keydown", (ev) => this._onSwitcherKey(ev));
+    const list = this._role("printer-list");
+    list.addEventListener("keydown", (ev) => this._onListKey(ev));
+    list.addEventListener("click", (ev) => this._onListClick(ev));
+    for (const name of ["switcher", "printer-list"]) {
+      this._role(name).addEventListener("focusout", (ev) => this._onListFocusOut(ev));
+    }
     this._role("history-button").addEventListener("click", () => this._openHistory());
     this._role("history-close").addEventListener("click", () => this._closeHistory());
     this._role("preview-close").addEventListener("click", () => this._closePreview());
@@ -1230,7 +1337,11 @@ class HomePrintCard extends HTMLElement {
       title: typeof config.title === "string" && config.title ? config.title : undefined,
       show_ink: config.show_ink !== false,
     };
-    if (next.entry_id !== this._config.entry_id) this._pickedId = null;
+    const key = storageKey(next.entry_id);
+    if (key !== this._storageKey) {
+      this._storageKey = key;
+      this._pickedId = readStored(key);
+    }
     this._config = next;
     this._update();
   }
@@ -1258,6 +1369,7 @@ class HomePrintCard extends HTMLElement {
   disconnectedCallback() {
     this._closeHistory();
     this._closeMenu();
+    this._closeList();
     clearInterval(this._refreshTimer);
     clearTimeout(this._pollTimer);
     clearTimeout(this._scanTimer);
@@ -1291,8 +1403,14 @@ class HomePrintCard extends HTMLElement {
     this._update();
   }
 
+  // The printer picked in this browser while it is still listed, then the
+  // card's entry_id, then (null) the first printer.
   _wantedId() {
-    return this._pickedId ?? this._config.entry_id ?? null;
+    const picked = this._pickedId;
+    if (picked && (this._printers === null || this._printers.some((p) => p.entry_id === picked))) {
+      return picked;
+    }
+    return this._config.entry_id ?? null;
   }
 
   _printer() {
@@ -1318,16 +1436,16 @@ class HomePrintCard extends HTMLElement {
 
   // A running job holds the Print button, unless its status has been out of
   // reach for longer than STALL_MS.
-  _jobHolds() {
+  _jobHolds(printer) {
     const job = this._job;
-    if (!job) return false;
+    if (!job || job.entryId !== printer?.entry_id) return false;
     return job.troubleSince === null || Date.now() - job.troubleSince <= STALL_MS;
   }
 
   _canSubmit(printer) {
     return (
       !this._uploading &&
-      !this._jobHolds() &&
+      !this._jobHolds(printer) &&
       Boolean(printer) &&
       this._reachable(printer) &&
       printer.can_print !== false &&
@@ -1349,9 +1467,95 @@ class HomePrintCard extends HTMLElement {
     this._update();
   }
 
-  _onPick(ev) {
-    this._pickedId = ev.target.value || null;
+  _selectPrinter(entryId) {
+    if (!entryId) return;
+    const changed = entryId !== this._printer()?.entry_id;
+    this._pickedId = entryId;
+    writeStored(this._storageKey, entryId);
     this._update();
+    // A fresh list, so a scan running on that printer is picked up at once.
+    if (changed) this._loadPrinters();
+  }
+
+  // ------------------------------------------------------------ printer switcher
+
+  _listItems() {
+    return [...this._role("printer-list").querySelectorAll('[role="option"]')];
+  }
+
+  _onSwitcher() {
+    if (this._role("printer-list").hidden) this._openList();
+    else this._closeList(true);
+  }
+
+  _onSwitcherKey(ev) {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault();
+    this._openList();
+  }
+
+  _openList() {
+    const list = this._role("printer-list");
+    if (this._role("switcher").hidden || !list.hidden) return;
+    list.hidden = false;
+    this._role("switcher").setAttribute("aria-expanded", "true");
+    document.addEventListener("click", this._onDocumentClickList, true);
+    const items = this._listItems();
+    (items.find((el) => el.getAttribute("aria-selected") === "true") ?? items[0])?.focus();
+  }
+
+  _closeList(focusButton = false) {
+    const list = this._role("printer-list");
+    document.removeEventListener("click", this._onDocumentClickList, true);
+    if (list.hidden) return;
+    list.hidden = true;
+    this._role("switcher").setAttribute("aria-expanded", "false");
+    if (focusButton) this._role("switcher").focus();
+  }
+
+  _onListKey(ev) {
+    const items = this._listItems();
+    const index = items.indexOf(this.shadowRoot.activeElement);
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this._closeList(true);
+      return;
+    }
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (index >= 0) this._chooseFromList(items[index].dataset.entryId);
+      return;
+    }
+    const moves = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: items.length - 1 };
+    if (!(ev.key in moves) || items.length === 0) return;
+    ev.preventDefault();
+    items[(moves[ev.key] + items.length) % items.length].focus();
+  }
+
+  _onListClick(ev) {
+    const item = ev.target.closest?.('[role="option"]');
+    if (item) this._chooseFromList(item.dataset.entryId);
+  }
+
+  _chooseFromList(entryId) {
+    this._closeList(true);
+    this._selectPrinter(entryId);
+  }
+
+  // As with the file menu, a null relatedTarget is left to the outside-click
+  // handler so a tap on an option in Safari isn't swallowed.
+  _onListFocusOut(ev) {
+    const next = ev.relatedTarget;
+    if (!next || this._role("printer-list").hidden) return;
+    if (this._role("printer-list").contains(next) || next === this._role("switcher")) return;
+    this._closeList();
+  }
+
+  _closeListOutside(ev) {
+    const path = ev.composedPath();
+    if (path.includes(this._role("printer-list")) || path.includes(this._role("switcher"))) return;
+    this._closeList();
   }
 
   // ------------------------------------------------------------ file picker
@@ -1901,8 +2105,9 @@ class HomePrintCard extends HTMLElement {
     this._pollTimer = null;
     this._job = null;
     this._uploading = true;
-    this._setMessage(t(lang, "uploading"));
     const entryId = printer.entry_id;
+    this._uploadEntryId = entryId;
+    this._setMessage(t(lang, "uploading"));
     const form = buildForm(this._file, { ...this._options(printer), page_ranges: pages });
 
     const controller = new AbortController();
@@ -1950,6 +2155,7 @@ class HomePrintCard extends HTMLElement {
     // The upload is confirmed: follow the job, which holds the button, and
     // clear the picked file so choosing the same one again fires "change".
     this._uploading = false;
+    this._uploadEntryId = null;
     this._file = null;
     for (const name of FILE_INPUTS) this._role(name).value = "";
     this._job = {
@@ -2062,15 +2268,23 @@ class HomePrintCard extends HTMLElement {
   }
 
   _finish(text, kind, detail = "") {
+    const entryId = this._messageEntryId();
     clearTimeout(this._pollTimer);
     this._pollTimer = null;
     this._job = null;
     this._uploading = false;
-    this._setMessage(text, kind, detail);
+    this._uploadEntryId = null;
+    this._setMessage(text, kind, detail, entryId);
   }
 
-  _setMessage(text, kind = "info", detail = "") {
-    this._message = { text, kind, detail };
+  // The printer a print message is about: the job's or upload's printer,
+  // else the one shown. Only that printer shows it.
+  _messageEntryId() {
+    return this._job?.entryId ?? this._uploadEntryId ?? this._printer()?.entry_id ?? null;
+  }
+
+  _setMessage(text, kind = "info", detail = "", entryId = this._messageEntryId()) {
+    this._message = { text, kind, detail, entryId };
     this._update();
   }
 
@@ -2672,10 +2886,14 @@ class HomePrintCard extends HTMLElement {
     const unknown = Boolean(wanted) && this._printers !== null && !printer;
 
     this._renderNotice(lang, printer, unknown, wanted);
-    this._role("title").textContent = this._config.title || printer?.title || "Home Print";
+    // With a choice of printers the header names the one shown; the card's
+    // own title is for a single printer.
+    const multi = printers.length > 1;
+    const name = printer ? printer.title || printer.entry_id : "";
+    this._role("title").textContent =
+      (multi ? name : this._config.title || name) || this._config.title || "Home Print";
     this._role("state").textContent = printer ? this._statusText(lang, printer) : "";
-    this._role("state-dash").hidden = !printer;
-    this._renderPicker(lang, printers, printer, unknown);
+    this._renderSwitcher(lang, printers, printer, unknown);
     this._applyPrinter(printer);
     this._renderInk(lang, printer);
     this._renderOptions(printer);
@@ -2719,33 +2937,62 @@ class HomePrintCard extends HTMLElement {
     return text;
   }
 
-  _renderPicker(lang, printers, printer, unknown) {
-    const slot = this._role("picker-slot");
-    const show = printers.length > 1 || (unknown && printers.length > 0);
-    if (!show) {
-      slot.replaceChildren();
-      this._pickerKey = "";
+  _renderSwitcher(lang, printers, printer, unknown) {
+    const multi = printers.length > 1 || (unknown && printers.length > 0);
+    const who = this._role("who");
+    const button = this._role("switcher");
+    // With a choice the icon and name sit in the button, before the chevron;
+    // a single printer gets them in a plain span, with nothing to press.
+    const home = multi ? button : who;
+    if (this._role("title").parentNode !== home) {
+      home.prepend(this._role("who-icon"), this._role("title"));
+    }
+    who.hidden = multi;
+    button.hidden = !multi;
+    if (!multi) {
+      this._closeList();
+      this._listKey = "";
+      this._role("printer-list").replaceChildren();
       return;
     }
-    const key = JSON.stringify([unknown, printers.map((p) => [p.entry_id, p.title])]);
-    let select = slot.querySelector("select");
-    if (!select || key !== this._pickerKey) {
-      select = document.createElement("select");
-      select.dataset.role = "picker";
-      select.addEventListener("change", (ev) => this._onPick(ev));
-      const option = (label, value) => {
-        const el = document.createElement("option");
-        el.value = value;
-        el.textContent = label;
-        return el;
-      };
-      if (unknown) select.append(option("—", ""));
-      for (const p of printers) select.append(option(p.title || p.entry_id, p.entry_id));
-      slot.replaceChildren(select);
-      this._pickerKey = key;
-    }
-    select.setAttribute("aria-label", t(lang, "picker"));
-    select.value = printer?.entry_id ?? "";
+    const label = t(lang, "switch_printer");
+    button.setAttribute("aria-label", `${label}: ${this._role("title").textContent}`);
+    button.title = label;
+    this._role("printer-list").setAttribute("aria-label", t(lang, "picker"));
+    const current = printer?.entry_id ?? null;
+    const rows = printers.map((p) => [
+      p.entry_id,
+      p.title || p.entry_id,
+      this._statusText(lang, p),
+      p.entry_id === current,
+    ]);
+    const key = JSON.stringify(rows);
+    if (key === this._listKey) return;
+    this._listKey = key;
+    const list = this._role("printer-list");
+    const focused = this.shadowRoot.activeElement?.dataset?.entryId;
+    const items = rows.map(([id, name, status, selected], i) => {
+      const li = document.createElement("li");
+      li.className = "printer-option";
+      li.setAttribute("role", "option");
+      li.id = `printer-option-${i}`;
+      li.dataset.entryId = id;
+      li.tabIndex = -1;
+      li.setAttribute("aria-selected", String(selected));
+      const check = document.createElement("span");
+      check.className = "check";
+      check.append(svgIcon("check"));
+      const nameEl = document.createElement("span");
+      nameEl.className = "name";
+      nameEl.textContent = name;
+      const statusEl = document.createElement("span");
+      statusEl.className = "status";
+      statusEl.textContent = status;
+      li.append(check, nameEl, statusEl);
+      return li;
+    });
+    list.replaceChildren(...items);
+    if (focused) items.find((el) => el.dataset.entryId === focused)?.focus();
   }
 
   _applyPrinter(printer) {
@@ -2786,6 +3033,7 @@ class HomePrintCard extends HTMLElement {
     const message = this._role("message");
     const check = this._fileCheck(printer);
     let shown = this._message;
+    if (shown?.entryId && shown.entryId !== printer?.entry_id) shown = null;
     if (!shown && check && !check.ok) {
       shown = { text: t(lang, check.key, { mb: printer?.max_file_mb }), kind: "error" };
     }

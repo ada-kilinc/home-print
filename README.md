@@ -43,7 +43,7 @@ Home Print works on every installation type (OS, Supervised, Container, Core). N
 type: custom:home-print-card
 # all optional:
 entry_id: <printer>   # the visual editor fills this in; default is the first printer
-title: Printer
+title: Printer        # used with a single printer; with several, the header names the one shown
 show_ink: true
 ```
 
@@ -54,6 +54,8 @@ show_ink: true
 </p>
 
 The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (from files, photo library, take photo) on Android phones and tablets.
+
+With more than one printer, tap the printer's name in the header to switch: the list shows each printer's status, and the card's ink, options, history and scanner follow your choice. The choice is remembered in that browser; without one the card uses `entry_id`, then the first printer. A print or scan already running carries on, and you see its progress again when you switch back.
 
 ## Options
 
@@ -141,6 +143,8 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 **Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
 
 **Ayarlar:** Her yazıcının **Yapılandır** ekranında varsayılan çift taraf ve renk, en büyük dosya boyutu, yoklama aralığı, "yalnızca yöneticiler yazdırabilir" ve **Dosyaları sakla (gün)** var. Sonuncusu varsayılan olarak 7 gün, 0 ile 90 arası olabilir. 0 seçersen dosya saklanmaz, yalnızca geçmiş kaydı tutulur.
+
+**Birden fazla yazıcı:** Kartın başlığındaki yazıcı adına dokunup yazıcı değiştirebilirsin. Listede her yazıcının durumu görünür; mürekkep, seçenekler, geçmiş ve tarayıcı seçtiğin yazıcıya geçer. Seçimin o tarayıcıda hatırlanır. Seçim yoksa kart `entry_id`'deki yazıcıyı, o da yoksa ilk yazıcıyı açar. Süren bir baskı ya da tarama yarıda kalmaz, geri döndüğünde durumunu yine görürsün.
 
 **Gizlilik:** Ön izleme gösterebilmek için yazdırılan her dosyanın aslı bu süre boyunca `<config>/home_print/<entry_id>/` altında durur. Bu dosyalar Home Assistant yedeklerine de girer. Geçmişten sildiğin bir kayıt, önceden alınmış yedeklerde kalır. Geçmiş listesini ve ön izlemeleri Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği görmeyi değil, yazdırmayı ve silmeyi kısıtlar. Hiç dosya saklanmasın istiyorsan **Dosyaları sakla (gün)** değerini 0 yap.
 

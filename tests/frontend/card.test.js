@@ -24,6 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  localStorage.clear();
   expect(errorSpy).not.toHaveBeenCalled();
   errorSpy.mockRestore();
   vi.restoreAllMocks();
@@ -61,6 +62,7 @@ const optVisible = (card, name) => {
   return Boolean(row) && !row.hidden;
 };
 const text = (card, name) => (role(card, name)?.textContent ?? "").trim();
+const visible = (card, name) => Boolean(role(card, name)) && !role(card, name).hidden;
 
 function makeFile(name, type, size = 1234) {
   const file = new File(["x"], name, { type });
@@ -71,6 +73,15 @@ function makeFile(name, type, size = 1234) {
 async function selectFile(card, file, input = role(card, "input-file")) {
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   input.dispatchEvent(new Event("change"));
+  await flush();
+}
+
+// Picks a printer through the header switcher: open the list, tap the row.
+async function switchTo(card, entryId) {
+  role(card, "switcher").click();
+  await flush();
+  const item = $(card, `[role="option"][data-entry-id="${entryId}"]`);
+  item.click();
   await flush();
 }
 
@@ -871,16 +882,13 @@ describe("several printers", () => {
     }),
   ];
 
-  it("picks the first printer and switches with the picker", async () => {
+  it("picks the first printer and switches from the header", async () => {
     const hass = makeHass({ printers: two(), jobs: [{ job_id: 1, state: "processing" }] });
     const card = await mount(hass);
-    const picker = role(card, "picker");
-    expect(picker).toBeTruthy();
+    expect(visible(card, "switcher")).toBe(true);
     expect(text(card, "title")).toContain("DeskJet 4670");
     expect(optVisible(card, "duplex")).toBe(true);
-    picker.value = "laser";
-    picker.dispatchEvent(new Event("change"));
-    await flush();
+    await switchTo(card, "laser");
     expect(text(card, "title")).toContain("Laser");
     expect(optVisible(card, "duplex")).toBe(false);
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
@@ -902,9 +910,9 @@ describe("several printers", () => {
     expect(role(card, "print").disabled).toBe(true);
   });
 
-  it("hides the picker for a single printer", async () => {
+  it("hides the switcher for a single printer", async () => {
     const card = await mount(makeHass());
-    expect(role(card, "picker")).toBeNull();
+    expect(visible(card, "switcher")).toBe(false);
   });
 });
 
@@ -1384,10 +1392,7 @@ describe("history", () => {
     const printers = [deskjetPrinter(), deskjetPrinter({ entry_id: "laser", title: "Laser" })];
     const card = await mount(makeHass({ printers, history: entries() }));
     await openHistory(card);
-    const picker = role(card, "picker");
-    picker.value = "laser";
-    picker.dispatchEvent(new Event("change"));
-    await flush();
+    await switchTo(card, "laser");
     expect(dialog(card).open).toBe(false);
   });
 
@@ -1890,7 +1895,6 @@ describe("scan", () => {
   const options = (card, name) =>
     [...role(card, name).querySelectorAll("option")].map((o) => o.value);
   const wsCalls = (hass, type) => hass.calls.filter((m) => m.type === type);
-  const visible = (card, name) => Boolean(role(card, name)) && !role(card, name).hidden;
 
   async function openPanel(card) {
     role(card, "scan-toggle").click();
@@ -2362,8 +2366,7 @@ describe("scan", () => {
     role(card, "scan-start").click();
     await flush();
     expect(role(card, "scan-start").disabled).toBe(true);
-    setInput(card, "picker", "other");
-    await flush();
+    await switchTo(card, "other");
     expect(visible(card, "scan-panel")).toBe(false);
     expect(role(card, "scan-toggle").getAttribute("aria-expanded")).toBe("false");
     await vi.advanceTimersByTimeAsync(5000);
@@ -2485,5 +2488,263 @@ describe("scan", () => {
     await flush();
     expect(text(card, "tab-prints")).toBe("Prints");
     expect(text(card, "tab-scans")).toBe("Scans");
+  });
+});
+
+describe("printer switcher (issue #7)", () => {
+  const laser = (overrides = {}) =>
+    deskjetPrinter({
+      entry_id: "laser",
+      title: "Laser",
+      entities: {
+        status: "sensor.laser_status",
+        problem: "binary_sensor.laser_problem",
+        last_job: "sensor.laser_last_job",
+        markers: ["sensor.laser_toner"],
+      },
+      capabilities: { ...deskjetPrinter().capabilities, sides: ["one-sided"] },
+      defaults: { sides: "one-sided", color_mode: null },
+      ...overrides,
+    });
+  const states = () => ({
+    ...deskjetStates(),
+    "sensor.laser_status": { state: "processing", attributes: {} },
+    "binary_sensor.laser_problem": { state: "off", attributes: {} },
+    "sensor.laser_toner": {
+      state: "75",
+      attributes: { color: "#000000", kind: "toner", friendly_name: "Laser toner" },
+    },
+  });
+  const two = (extra = {}) => makeHass({ printers: [deskjetPrinter(), laser()], states: states(), ...extra });
+  const list = (card) => role(card, "printer-list");
+  const items = (card) => [...card.shadowRoot.querySelectorAll('[role="option"]')];
+  const active = (card) => card.shadowRoot.activeElement;
+  const key = (el, k) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+  const wsCalls = (hass, type) => hass.calls.filter((m) => m.type === type);
+
+  it("one printer: icon and name, no chevron, status left of history", async () => {
+    const card = await mount(makeHass());
+    expect(visible(card, "switcher")).toBe(false);
+    expect(visible(card, "who")).toBe(true);
+    expect(role(card, "who").contains(role(card, "title"))).toBe(true);
+    expect(role(card, "who").querySelector("svg")).toBeTruthy();
+    expect(card.shadowRoot.querySelector(".chevron")?.closest('[hidden]')).toBeTruthy();
+    expect(text(card, "state")).toBe("Hazır");
+    expect(role(card, "state").nextElementSibling).toBe(role(card, "history-button"));
+    expect(card.shadowRoot.querySelector("select:not([data-role^='scan'])")).toBeNull();
+  });
+
+  it("two printers: one button with name and chevron, list closed", async () => {
+    const card = await mount(two());
+    const button = role(card, "switcher");
+    expect(visible(card, "switcher")).toBe(true);
+    expect(visible(card, "who")).toBe(false);
+    expect(button.contains(role(card, "title"))).toBe(true);
+    expect(button.querySelector(".chevron svg")).toBeTruthy();
+    expect(button.getAttribute("aria-haspopup")).toBe("listbox");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(visible(card, "printer-list")).toBe(false);
+    expect(role(card, "state").nextElementSibling).toBe(role(card, "history-button"));
+  });
+
+  it("the list shows each printer with status and a check on the current one", async () => {
+    const card = await mount(two());
+    role(card, "switcher").click();
+    await flush();
+    expect(role(card, "switcher").getAttribute("aria-expanded")).toBe("true");
+    expect(list(card).getAttribute("role")).toBe("listbox");
+    const rows = items(card);
+    expect(rows.map((el) => el.querySelector(".name").textContent)).toEqual(["DeskJet 4670", "Laser"]);
+    expect(rows.map((el) => el.querySelector(".status").textContent)).toEqual(["Hazır", "Yazdırıyor"]);
+    expect(rows.map((el) => el.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+    expect(active(card)).toBe(rows[0]);
+  });
+
+  it("choosing a printer switches ink, options and history", async () => {
+    const hass = two({ history: [historyEntry()] });
+    const card = await mount(hass);
+    expect(optVisible(card, "duplex")).toBe(true);
+    await switchTo(card, "laser");
+    expect(text(card, "title")).toBe("Laser");
+    expect(text(card, "state")).toBe("Yazdırıyor");
+    expect(optVisible(card, "duplex")).toBe(false);
+    expect(text(card, "ink")).toContain("75");
+    expect(visible(card, "printer-list")).toBe(false);
+    expect(active(card)).toBe(role(card, "switcher"));
+    role(card, "history-button").click();
+    await flush();
+    expect(wsCalls(hass, "home_print/history").at(-1).entry_id).toBe("laser");
+  });
+
+  it("choosing a printer switches the scanner", async () => {
+    const scanning = laser({ scanner: scannerBlock() });
+    const card = await mount(makeHass({ printers: [deskjetPrinter(), scanning], states: states() }));
+    expect(visible(card, "scan-toggle")).toBe(false);
+    await switchTo(card, "laser");
+    expect(visible(card, "scan-toggle")).toBe(true);
+  });
+
+  it("keeps the choice across a reload", async () => {
+    const hass = two();
+    const card = await mount(hass);
+    await switchTo(card, "laser");
+    card.remove();
+    const again = await mount(hass);
+    expect(text(again, "title")).toBe("Laser");
+  });
+
+  it("the saved choice beats entry_id; entry_id and then the first printer are fallbacks", async () => {
+    const hass = two();
+    const pinned = await mount(hass, { entry_id: "laser" });
+    expect(text(pinned, "title")).toBe("Laser");
+    await switchTo(pinned, "deskjet");
+    pinned.remove();
+    expect(text(await mount(hass, { entry_id: "laser" }), "title")).toBe("DeskJet 4670");
+
+    // A saved printer that is gone falls back to entry_id, with no warning.
+    document.body.innerHTML = "";
+    localStorage.setItem("home-print-card:printer:laser", "removed");
+    const fallback = await mount(hass, { entry_id: "laser" });
+    expect(text(fallback, "title")).toBe("Laser");
+    expect(visible(fallback, "notice")).toBe(false);
+
+    document.body.innerHTML = "";
+    localStorage.setItem("home-print-card:printer:", "removed");
+    expect(text(await mount(hass), "title")).toBe("DeskJet 4670");
+  });
+
+  it("Escape closes the list without a change and returns focus", async () => {
+    const card = await mount(two());
+    role(card, "switcher").click();
+    await flush();
+    key(items(card)[0], "ArrowDown");
+    expect(active(card)).toBe(items(card)[1]);
+    key(items(card)[1], "Escape");
+    await flush();
+    expect(visible(card, "printer-list")).toBe(false);
+    expect(role(card, "switcher").getAttribute("aria-expanded")).toBe("false");
+    expect(active(card)).toBe(role(card, "switcher"));
+    expect(text(card, "title")).toBe("DeskJet 4670");
+  });
+
+  it("an outside tap or focus leaving closes the list without a change", async () => {
+    const card = await mount(two());
+    role(card, "switcher").click();
+    await flush();
+    document.body.click();
+    expect(visible(card, "printer-list")).toBe(false);
+
+    role(card, "switcher").click();
+    await flush();
+    items(card)[1].dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: role(card, "print") }),
+    );
+    expect(visible(card, "printer-list")).toBe(false);
+    expect(text(card, "title")).toBe("DeskJet 4670");
+  });
+
+  it("arrow keys and Enter choose a printer", async () => {
+    const card = await mount(two());
+    const button = role(card, "switcher");
+    button.focus();
+    key(button, "ArrowDown");
+    await flush();
+    expect(visible(card, "printer-list")).toBe(true);
+    expect(active(card)).toBe(items(card)[0]);
+    key(items(card)[0], "ArrowUp");
+    expect(active(card)).toBe(items(card)[1]);
+    key(items(card)[1], "Enter");
+    await flush();
+    expect(text(card, "title")).toBe("Laser");
+    expect(visible(card, "printer-list")).toBe(false);
+  });
+
+  it("an unavailable printer is listed with its state and can be chosen", async () => {
+    const card = await mount(
+      makeHass({ printers: [deskjetPrinter(), laser({ available: false })], states: states() }),
+    );
+    role(card, "switcher").click();
+    await flush();
+    expect(items(card)[1].querySelector(".status").textContent).toBe("Ulaşılamıyor");
+    items(card)[1].click();
+    await flush();
+    expect(text(card, "title")).toBe("Laser");
+    expect(text(card, "state")).toBe("Ulaşılamıyor");
+  });
+
+  it("a print keeps running while another printer is shown and is followed again", async () => {
+    const hass = two({ jobs: [{ job_id: 42, state: "processing" }] });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(role(card, "print").disabled).toBe(true);
+    await switchTo(card, "laser");
+    // Laser isn't busy and doesn't show DeskJet's job.
+    expect(text(card, "message")).toBe("");
+    await vi.advanceTimersByTimeAsync(3000);
+    const polls = wsCalls(hass, "home_print/job");
+    expect(polls.length).toBeGreaterThan(0);
+    expect(polls.every((m) => m.entry_id === "deskjet")).toBe(true);
+    await switchTo(card, "deskjet");
+    expect(text(card, "message")).not.toBe("");
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    expect(role(card, "print").disabled).toBe(true);
+  });
+
+  it("a scan keeps running while another printer is shown and is followed again", async () => {
+    const deskjet = deskjetPrinter({ scanner: scannerBlock() });
+    const hass = makeHass({
+      printers: [deskjet, laser()],
+      states: states(),
+      scanStates: [scanState()],
+    });
+    const card = await mount(hass);
+    role(card, "scan-toggle").click();
+    await flush();
+    role(card, "scan-start").click();
+    await flush();
+    deskjet.scanner.active_scan_id = "s1";
+    await switchTo(card, "laser");
+    const before = wsCalls(hass, "home_print/scan/state").length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(before);
+    expect(wsCalls(hass, "home_print/scan/cancel")).toHaveLength(0);
+    await switchTo(card, "deskjet");
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(role(card, "scan-start").disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(wsCalls(hass, "home_print/scan/state").length).toBeGreaterThan(before);
+  });
+
+  it("long names truncate so status and history never wrap", async () => {
+    const long = "A very long printer name ".repeat(6).trim();
+    const card = await mount(makeHass({ printers: [deskjetPrinter({ title: long }), laser()], states: states() }));
+    expect(text(card, "title")).toBe(long);
+    const style = card.shadowRoot.querySelector("style").textContent;
+    const rule = (sel) => style.match(new RegExp(`\\n\\s*${sel.replace(".", "\\.")} \\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule(".header-row")).not.toContain("wrap");
+    expect(rule(".title")).toContain("text-overflow: ellipsis");
+    expect(rule(".title")).toContain("min-width: 0");
+    expect(rule(".state")).toContain("flex: none");
+    expect(rule(".state")).toContain("white-space: nowrap");
+    expect(rule(".who")).toContain("min-height: 44px");
+    expect(rule(".printer-option")).toContain("min-height: 48px");
+  });
+
+  it("names the printer shown even when the card has a title", async () => {
+    const card = await mount(two(), { title: "Ev" });
+    expect(text(card, "title")).toBe("DeskJet 4670");
+    await switchTo(card, "laser");
+    expect(text(card, "title")).toBe("Laser");
+    const single = await mount(makeHass(), { title: "Ev" });
+    expect(text(single, "title")).toBe("Ev");
+  });
+
+  it("speaks English too", async () => {
+    const card = await mount(two({ language: "en" }));
+    expect(role(card, "switcher").getAttribute("aria-label")).toBe("Switch printer: DeskJet 4670");
+    expect(list(card).getAttribute("aria-label")).toBe("Printer");
+    const tr = await mount(two());
+    expect(role(tr, "switcher").getAttribute("aria-label")).toBe("Yazıcı değiştir: DeskJet 4670");
   });
 });
