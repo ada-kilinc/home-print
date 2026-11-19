@@ -23,9 +23,9 @@ from custom_components.home_print.escl.models import ScanSettings
 from custom_components.home_print.escl.parse import parse_capabilities
 
 FIX = Path(__file__).parent.parent / "fixtures" / "escl"
-CAPS_XML = (FIX / "hp_capabilities_platen.xml").read_bytes()
+CAPS_XML = (FIX / "deskjet4670_capabilities.xml").read_bytes()
 SETTINGS = ScanSettings("platen", "color", 300, "image/jpeg")
-ADF_CAPS_XML = (FIX / "hp_capabilities_adf.xml").read_bytes()
+ADF_CAPS_XML = (FIX / "synthetic_capabilities_duplex.xml").read_bytes()
 ADF = ScanSettings("adf", "color", 300, "image/jpeg")
 
 
@@ -45,7 +45,7 @@ class FakeScanner:
         self.next_calls = 0
         self.next_paths: list[str] = []
         self.caps_body = CAPS_XML
-        self.status_body = (FIX / "status_idle.xml").read_bytes()
+        self.status_body = (FIX / "deskjet4670_status_idle.xml").read_bytes()
         self.page_delay = 0.0
         self.stall_body = False
         self.app = web.Application()

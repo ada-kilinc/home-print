@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- synthetic, HP layout; replace with a real dump -->
+<!-- synthetic: a duplex feeder and black & white, which the real DeskJet 4670 (deskjet4670_capabilities.xml) lacks -->
 <scan:ScannerCapabilities xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm" xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03">
   <pwg:Version>2.63</pwg:Version>
   <pwg:MakeAndModel>HP DeskJet 4670 series</pwg:MakeAndModel>

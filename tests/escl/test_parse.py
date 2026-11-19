@@ -29,27 +29,34 @@ def _find(xml: bytes, ns: str, tag: str) -> str | None:
     return None if el is None else el.text
 
 
-def test_parse_platen_caps():
-    caps = parse_capabilities(_read("hp_capabilities_platen.xml"))
-    assert caps.sources.keys() == {"platen"}
-    src = caps.sources["platen"]
-    assert src.resolutions == (75, 100, 200, 300, 600)
-    assert src.color_modes == ("color", "gray", "bw")
-    assert src.max_width == 2550
-    assert src.max_height == 3508
-    assert src.formats == ("image/jpeg", "application/pdf")
-    assert caps.version == "2.63"
-    assert caps.make_model == "HP DeskJet 4670 series"
-    assert caps.uuid == "11111111-2222-3333-4444-555555555555"
+def test_parse_real_deskjet_caps():
+    """A redacted dump from a real HP DeskJet 4670: glass and a simplex feeder."""
+    caps = parse_capabilities(_read("deskjet4670_capabilities.xml"))
+    assert caps.sources.keys() == {"platen", "adf"}
+    platen = caps.sources["platen"]
+    assert platen.resolutions == (75, 100, 200, 300, 600, 1200)
+    assert platen.color_modes == ("gray", "color")
+    assert (platen.max_width, platen.max_height) == (2550, 3508)
+    assert platen.formats == (
+        "application/octet-stream",
+        "image/jpeg",
+        "application/pdf",
+    )
+    adf = caps.sources["adf"]
+    assert adf.resolutions == (75, 100, 200, 300, 600)
+    assert (adf.max_width, adf.max_height) == (2550, 4200)
+    assert caps.version == "2.5"
+    assert caps.make_model == "DeskJet Ink Advantage 4670 All-in-One Printer series"
+    assert caps.uuid is None
 
 
 def test_parse_adf_caps():
-    caps = parse_capabilities(_read("hp_capabilities_adf.xml"))
+    caps = parse_capabilities(_read("synthetic_capabilities_duplex.xml"))
     assert caps.sources.keys() == {"platen", "adf", "adf_duplex"}
 
 
 def test_parse_status_variants():
-    idle = parse_status(_read("status_idle.xml"))
+    idle = parse_status(_read("deskjet4670_status_idle.xml"))
     assert (idle.state, idle.adf_loaded) == ("idle", False)
     busy = parse_status(_read("status_processing.xml"))
     assert (busy.state, busy.adf_loaded) == ("processing", None)
@@ -58,7 +65,7 @@ def test_parse_status_variants():
 
 
 def test_build_settings_platen():
-    caps = parse_capabilities(_read("hp_capabilities_platen.xml"))
+    caps = parse_capabilities(_read("deskjet4670_capabilities.xml"))
     xml = build_settings(caps, ScanSettings("platen", "color", 300, "image/jpeg"))
     assert _find(xml, PWG, "InputSource") == "Platen"
     assert _find(xml, SCAN, "ColorMode") == "RGB24"
@@ -73,7 +80,7 @@ def test_build_settings_platen():
 
 
 def test_build_settings_duplex():
-    caps = parse_capabilities(_read("hp_capabilities_adf.xml"))
+    caps = parse_capabilities(_read("synthetic_capabilities_duplex.xml"))
     xml = build_settings(caps, ScanSettings("adf_duplex", "gray", 200, "image/jpeg"))
     assert _find(xml, PWG, "InputSource") == "Feeder"
     assert _find(xml, SCAN, "Duplex") == "true"

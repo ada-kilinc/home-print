@@ -483,3 +483,29 @@ async def test_scan_start_and_end_refresh_entities(hass, entry, monkeypatch):
     await _run(hass, entry)
     assert calls[0] == "scanning"
     assert calls[-1] == "done"
+
+
+def test_real_deskjet_caps_offer_what_can_be_saved():
+    """The real DeskJet 4670 offers 1200 dpi on the glass, too big to save."""
+    from pathlib import Path
+
+    from custom_components.home_print.escl.parse import parse_capabilities
+
+    xml = Path(__file__).parent / "fixtures" / "escl" / "deskjet4670_capabilities.xml"
+    caps = parse_capabilities(xml.read_bytes())
+    assert scanning.usable_sources(caps) == ("platen", "adf")
+    assert scanning.allowed_resolutions(caps.sources["platen"]) == (
+        75,
+        100,
+        200,
+        300,
+        600,
+    )
+    assert scanning.allowed_resolutions(caps.sources["adf"]) == (75, 100, 200, 300, 600)
+    assert scanning.scan_defaults(caps) == {
+        "source": "platen",
+        "color_mode": "color",
+        "resolution": 300,
+        "format": "pdf",
+    }
+    assert scanning.scan_mime(caps, "platen") == "image/jpeg"

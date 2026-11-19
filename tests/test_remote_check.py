@@ -733,13 +733,15 @@ class _FakeScanner:
         if not self.present:
             return self._web.Response(status=404)
         return self._web.Response(
-            body=(ESCL_FIX / "hp_capabilities_platen.xml").read_bytes()
+            body=(ESCL_FIX / "deskjet4670_capabilities.xml").read_bytes()
         )
 
     async def status(self, request):
         if not self.status_ok:
             return self._web.Response(status=500)
-        return self._web.Response(body=(ESCL_FIX / "status_idle.xml").read_bytes())
+        return self._web.Response(
+            body=(ESCL_FIX / "deskjet4670_status_idle.xml").read_bytes()
+        )
 
     async def create(self, request):
         self.posted.append(await request.read())

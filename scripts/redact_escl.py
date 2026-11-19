@@ -6,7 +6,7 @@ serial number, UUID, addresses and host name. This removes those and
 writes the result where the tests read fixtures:
 
     python scripts/redact_escl.py escl_capabilities.xml \
-        tests/fixtures/escl/hp_capabilities_platen.xml
+        tests/fixtures/escl/deskjet4670_capabilities.xml
 
 Check the output by eye before committing it.
 """
