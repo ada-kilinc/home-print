@@ -82,4 +82,6 @@ export const NOISE_REASONS = [
 ];
 export const PRINTER_ERROR_LIMIT = 3;
 export const KNOWN_STATES = ["idle", "processing", "stopped"];
+// States of the scanner status sensor (a scanner without a printer).
+export const SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"];
 export const HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];

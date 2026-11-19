@@ -1,4 +1,4 @@
-"""The eSCL scanner attached to a printer config entry."""
+"""The eSCL scanner of a config entry: a printer's, or a scanner on its own."""
 
 from __future__ import annotations
 
@@ -12,8 +12,16 @@ import aiohttp
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.helpers.event import async_call_later
 
-from .const import CONF_HOST, CONF_SCANNER_URL, CONF_SSL, CONF_VERIFY_SSL
-from .escl.client import EsclClient, EsclError, find_scanner
+from .const import (
+    CONF_HOST,
+    CONF_KIND,
+    CONF_SCANNER_ANNOUNCED,
+    CONF_SCANNER_URL,
+    CONF_SSL,
+    CONF_VERIFY_SSL,
+    KIND_SCANNER,
+)
+from .escl.client import EsclClient, EsclError, find_scanner, probe_scanner
 from .escl.models import ScannerCaps, ScannerStatus
 from .scans import ScanArchive
 
@@ -53,6 +61,11 @@ class ScannerRuntime:
     task: asyncio.Task[Any] | None = None
 
 
+def is_scanner_only(entry: ConfigEntry) -> bool:
+    """Whether the entry is a scanner without a printer."""
+    return entry.data.get(CONF_KIND) == KIND_SCANNER
+
+
 def scanner_verify_ssl(entry: ConfigEntry) -> bool:
     """Whether to verify the scanner's https certificate.
 
@@ -73,12 +86,27 @@ async def _async_detect(
     """
     verify_ssl = scanner_verify_ssl(entry)
     manual = str(entry.options.get(CONF_SCANNER_URL) or "").strip()
+    announced = str(entry.data.get(CONF_SCANNER_ANNOUNCED) or "").strip()
     try:
         if manual:
             client = EsclClient(manual, session, verify_ssl)
             async with asyncio.timeout(DETECT_TIMEOUT):
                 caps = await client.capabilities()
             return client, caps
+        if announced:
+            # The address the scanner announced beats guessing /eSCL; a
+            # printer's scanner still falls back to the guess.
+            try:
+                url, caps = await probe_scanner(
+                    session, announced, verify_ssl, timeout=DETECT_TIMEOUT
+                )
+            except _ERRORS:
+                if is_scanner_only(entry):
+                    raise
+            else:
+                return EsclClient(url, session, verify_ssl), caps
+        if is_scanner_only(entry):
+            return None
         found = await find_scanner(
             session,
             entry.data[CONF_HOST],
@@ -91,9 +119,9 @@ async def _async_detect(
         url, caps = found
         return EsclClient(url, session, verify_ssl), caps
     except _ERRORS as err:
-        if manual:
+        if manual or is_scanner_only(entry):
             log = _LOGGER.warning if warn else _LOGGER.debug
-            log("Scanner at %s could not be read: %s", manual, err)
+            log("Scanner at %s could not be read: %s", manual or announced, err)
         return None
     except Exception:  # noqa: BLE001 - a scanner must never fail the entry
         _LOGGER.debug("Unexpected error while setting up the scanner", exc_info=True)
@@ -156,16 +184,22 @@ def _async_schedule_retry(
 
 
 async def async_setup_scanner(
-    hass: HomeAssistant, entry: ConfigEntry, session: aiohttp.ClientSession
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    session: aiohttp.ClientSession,
+    *,
+    retry: bool = True,
 ) -> ScannerRuntime | None:
     """Find the entry's scanner; None when there is none or it can't be read.
 
     When no scanner answers, detection is retried in the background
-    (``RETRY_DELAYS``, then hourly) and the entry reloads once one does.
+    (``RETRY_DELAYS``, then hourly) and the entry reloads once one does,
+    unless ``retry`` is off (a scanner-only entry retries its whole setup).
     """
-    detected = await _async_detect(entry, session, warn=True)
+    detected = await _async_detect(entry, session, warn=not is_scanner_only(entry))
     if detected is None:
-        _async_schedule_retry(hass, entry, session)
+        if retry:
+            _async_schedule_retry(hass, entry, session)
         return None
     client, caps = detected
     from .scanning import usable_sources  # noqa: PLC0415 - avoids an import cycle

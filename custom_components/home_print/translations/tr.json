@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Yazıcı ekle",
-        "description": "IPP destekleyen ağ yazıcısının adresini gir.",
+        "description": "IPP destekleyen ağ yazıcısının adresini gir. Yazıcısı olmayan bir tarayıcıyı da ekleyebilirsin: adresini ya da http://192.168.1.20/eSCL gibi eSCL adresini yaz.",
         "data": {
           "host": "Adres",
           "port": "Port",
@@ -16,10 +16,14 @@
       "zeroconf_confirm": {
         "title": "Bulunan yazıcıyı ekle",
         "description": "{host} adresinde {name} bulundu. Home Assistant'a eklensin mi?"
+      },
+      "zeroconf_confirm_scanner": {
+        "title": "Bulunan tarayıcıyı ekle",
+        "description": "{host} adresinde {name} tarayıcısı bulundu. Yazıcısı olmadığı için sadece tarama için eklenecek. Home Assistant'a eklensin mi?"
       }
     },
     "error": {
-      "cannot_connect": "Yazıcıya bağlanılamadı. Adresi ve yazıcının açık olduğunu kontrol et.",
+      "cannot_connect": "Yazıcıya ya da tarayıcıya bağlanılamadı. Adresi ve cihazın açık olduğunu kontrol et.",
       "unknown": "Beklenmedik bir sorun çıktı."
     },
     "abort": {
@@ -304,6 +308,9 @@
     },
     "scan_error_copy_failed": {
       "message": "Tarama kaydedildi ama {path} klasörüne kopyalanamadı."
+    },
+    "not_a_printer": {
+      "message": "Bu cihaz yazıcısı olmayan bir tarayıcı, yazdıramaz."
     }
   }
 }

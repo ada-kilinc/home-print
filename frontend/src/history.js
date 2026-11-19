@@ -60,9 +60,11 @@ export class HistoryPart {
     const printer = this._printer();
     if (!printer) return;
     this._historyEntryId = printer.entry_id;
-    this._historyTab = "prints";
-    // Without a scanner there are no tabs, so the list is no tab panel.
-    const tabbed = Boolean(printer.scanner);
+    // A scanner without a printer has only scans; without a scanner there
+    // are only prints. Either way: no tabs, and the list is no tab panel.
+    const scannerOnly = printer.kind === "scanner";
+    this._historyTab = scannerOnly ? "scans" : "prints";
+    const tabbed = Boolean(printer.scanner) && !scannerOnly;
     this._role("history-tabs").hidden = !tabbed;
     const panel = this._role("history-panel");
     if (tabbed) panel.setAttribute("role", "tabpanel");

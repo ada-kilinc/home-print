@@ -1,6 +1,13 @@
 // The card element: state, data loading and the render loop.
 
-import { CONFIRM_MS, EDITOR_TYPE, FILE_INPUTS, KNOWN_STATES, REFRESH_MS } from "./constants.js";
+import {
+  CONFIRM_MS,
+  EDITOR_TYPE,
+  FILE_INPUTS,
+  KNOWN_STATES,
+  REFRESH_MS,
+  SCANNER_STATES,
+} from "./constants.js";
 import { readStored, storageKey, usesPickMenu } from "./helpers.js";
 import { HistoryPart } from "./history.js";
 import { pickLanguage, t } from "./i18n.js";
@@ -205,8 +212,9 @@ export class HomePrintCard extends HTMLElement {
 
   _reachable(printer) {
     if (!printer || !printer.available) return false;
-    const status = this._entityState(printer.entities?.status);
-    return status?.state !== "unavailable";
+    const entities = printer.entities ?? {};
+    const own = printer.kind === "scanner" ? entities.scanner_status : entities.status;
+    return this._entityState(own)?.state !== "unavailable";
   }
 
   _entityState(entityId) {
@@ -341,6 +349,12 @@ export class HomePrintCard extends HTMLElement {
 
   _statusText(lang, printer) {
     if (!this._reachable(printer)) return t(lang, "state_unreachable");
+    if (printer.kind === "scanner") {
+      const state = this._entityState(printer.entities?.scanner_status)?.state;
+      return SCANNER_STATES.includes(state)
+        ? t(lang, `scanner_state_${state}`)
+        : t(lang, "state_unknown");
+    }
     const entity = this._entityState(printer.entities?.status)?.state;
     const state = KNOWN_STATES.includes(entity) ? entity : printer.state;
     let text = KNOWN_STATES.includes(state) ? t(lang, `state_${state}`) : t(lang, "state_unknown");

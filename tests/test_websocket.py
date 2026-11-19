@@ -127,12 +127,14 @@ async def test_printers_lists_setup_retry_entry(hass, mock_client, hass_ws_clien
     ident = entry.unique_id
     assert printer == {
         "entry_id": entry.entry_id,
+        "kind": "printer",
         "title": "Printer",
         "available": False,
         "can_print": True,
         "state": None,
         "entities": {
             "status": by_uid[f"{ident}_status"],
+            "scanner_status": None,
             "problem": by_uid[f"{ident}_problem"],
             "last_job": by_uid[f"{ident}_last_job"],
             "markers": [
@@ -163,6 +165,7 @@ async def test_printers_never_loaded_retry_entry(hass, mock_client, hass_ws_clie
     assert printer["capabilities"] is None
     assert printer["entities"] == {
         "status": None,
+        "scanner_status": None,
         "problem": None,
         "last_job": None,
         "markers": [],

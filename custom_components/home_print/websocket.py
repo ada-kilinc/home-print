@@ -11,10 +11,18 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from .client import CannotConnect, HomePrintError, PrinterRejected
-from .const import CONF_ADMIN_ONLY, CONF_DEFAULT_COLOR_MODE, CONF_DEFAULT_SIDES, DOMAIN
+from .const import (
+    CONF_ADMIN_ONLY,
+    CONF_DEFAULT_COLOR_MODE,
+    CONF_DEFAULT_SIDES,
+    DOMAIN,
+    KIND_PRINTER,
+    KIND_SCANNER,
+)
 from .convert.pipeline import accepted_formats
 from .escl.errors import EsclError
 from .printing import COLOR_AUTO, max_file_mb
+from .scanner import is_scanner_only
 from .scanning import (
     ScanError,
     ScanRequest,
@@ -92,6 +100,7 @@ def _entities(hass: HomeAssistant, entry: HomePrintConfigEntry) -> dict[str, Any
     )
     return {
         "status": by_uid.get(f"{ident}_status"),
+        "scanner_status": by_uid.get(f"{ident}_scanner_status"),
         "problem": by_uid.get(f"{ident}_problem"),
         "last_job": by_uid.get(f"{ident}_last_job"),
         "markers": [entity_id for _, entity_id in markers],
@@ -138,10 +147,12 @@ def _scanner_block(entry: HomePrintConfigEntry) -> dict[str, Any] | None:
 def _printer(
     hass: HomeAssistant, entry: HomePrintConfigEntry, connection: Any
 ) -> dict[str, Any]:
+    kind = KIND_SCANNER if is_scanner_only(entry) else KIND_PRINTER
     if entry.state is not ConfigEntryState.LOADED:
         # Not set up yet (printer off at start-up): no client, no data.
         return {
             "entry_id": entry.entry_id,
+            "kind": kind,
             "title": entry.title,
             "available": False,
             "can_print": _can_print(entry, connection),
@@ -153,6 +164,22 @@ def _printer(
             "scanner": None,
         }
     coordinator = entry.runtime_data.coordinator
+    if kind == KIND_SCANNER:
+        # A scanner without a printer: nothing to print, the card shows the
+        # Scan panel only.
+        return {
+            "entry_id": entry.entry_id,
+            "kind": kind,
+            "title": entry.title,
+            "available": coordinator.last_update_success,
+            "can_print": _can_print(entry, connection),
+            "state": None,
+            "entities": _entities(hass, entry),
+            "capabilities": None,
+            "defaults": _defaults(entry),
+            "max_file_mb": max_file_mb(entry),
+            "scanner": _scanner_block(entry),
+        }
     info = coordinator.data
     capabilities = None
     if info is not None:
@@ -166,6 +193,7 @@ def _printer(
         }
     return {
         "entry_id": entry.entry_id,
+        "kind": kind,
         "title": entry.title,
         "available": coordinator.last_update_success,
         "can_print": _can_print(entry, connection),
@@ -219,8 +247,12 @@ async def ws_job(
             msg["id"], websocket_api.ERR_UNAUTHORIZED, "Administrator required"
         )
         return
+    client = entry.runtime_data.client
+    if client is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Not a printer")
+        return
     try:
-        job = await entry.runtime_data.client.get_job(msg["job_id"])
+        job = await client.get_job(msg["job_id"])
     except CannotConnect:
         connection.send_error(
             msg["id"], "printer_unavailable", "The printer could not be reached"

@@ -41,6 +41,16 @@ MAX_SCAN_MB = 100000
 CONF_SCAN_MAX_MB = "scan_max_mb"
 DEFAULT_SCAN_MAX_MB = 2000
 CONF_SCANNER_URL = "scanner_url"
+# Entry data. "kind" is "printer" (default, also for entries made before it
+# existed) or "scanner" for a scanner without a printer.
+CONF_KIND = "kind"
+KIND_PRINTER = "printer"
+KIND_SCANNER = "scanner"
+# The eSCL base URL a scanner announced over zeroconf (_uscan/_uscans), or
+# where a scanner-only entry lives.
+CONF_SCANNER_ANNOUNCED = "scanner_announced_url"
+# The scanner's zeroconf TXT record, for diagnostics.
+CONF_SCANNER_TXT = "scanner_txt"
 
 __all__ = [
     "CONF_ADMIN_ONLY",
@@ -49,8 +59,11 @@ __all__ = [
     "CONF_DEFAULT_SIDES",
     "CONF_HISTORY_DAYS",
     "CONF_HOST",
+    "CONF_KIND",
     "CONF_MAX_FILE_MB",
     "CONF_PORT",
+    "CONF_SCANNER_ANNOUNCED",
+    "CONF_SCANNER_TXT",
     "CONF_SCANNER_URL",
     "CONF_SCAN_DAYS",
     "CONF_SCAN_INTERVAL",
@@ -67,6 +80,8 @@ __all__ = [
     "DOMAIN",
     "EVENT_JOB",
     "EVENT_SCAN",
+    "KIND_PRINTER",
+    "KIND_SCANNER",
     "MAX_HISTORY_DAYS",
     "MAX_SCAN_DAYS",
     "MAX_SCAN_MB",

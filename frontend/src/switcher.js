@@ -106,6 +106,13 @@ export class SwitcherPart {
     }
     who.hidden = multi;
     button.hidden = !multi;
+    // A scanner without a printer gets the scanner icon.
+    const icon = printer?.kind === "scanner" ? "scanner" : "printer";
+    const iconBox = this._role("who-icon");
+    if (iconBox.dataset.icon !== icon) {
+      iconBox.dataset.icon = icon;
+      iconBox.replaceChildren(svgIcon(icon));
+    }
     if (!multi) {
       this._closeList();
       this._listKey = "";

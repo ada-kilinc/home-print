@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Add printer",
-        "description": "Enter the address of a network printer that supports IPP.",
+        "description": "Enter the address of a network printer that supports IPP. A scanner without a printer works too: enter its address, or its eSCL address such as http://192.168.1.20/eSCL.",
         "data": {
           "host": "Host",
           "port": "Port",
@@ -16,10 +16,14 @@
       "zeroconf_confirm": {
         "title": "Add discovered printer",
         "description": "Found {name} at {host}. Add it to Home Assistant?"
+      },
+      "zeroconf_confirm_scanner": {
+        "title": "Add discovered scanner",
+        "description": "Found the scanner {name} at {host}. It has no printer, so it is added for scanning only. Add it to Home Assistant?"
       }
     },
     "error": {
-      "cannot_connect": "Could not connect to the printer. Check the address and that the printer is on.",
+      "cannot_connect": "Could not connect to a printer or scanner. Check the address and that the device is on.",
       "unknown": "Something unexpected went wrong."
     },
     "abort": {
@@ -304,6 +308,9 @@
     },
     "scan_error_copy_failed": {
       "message": "The scan was saved, but copying it to {path} failed."
+    },
+    "not_a_printer": {
+      "message": "This device is a scanner without a printer, so it can't print."
     }
   }
 }

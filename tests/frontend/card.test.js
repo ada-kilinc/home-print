@@ -2926,3 +2926,80 @@ describe("scan colour choices", () => {
     expect(labels(card)).toEqual(["Siyah-beyaz"]);
   });
 });
+
+describe("scanner without a printer (issue #10)", () => {
+  const scannerOnly = (overrides = {}) => ({
+    entry_id: "scanner",
+    kind: "scanner",
+    title: "Test Scanner",
+    available: true,
+    can_print: true,
+    state: null,
+    entities: {
+      status: null,
+      scanner_status: "sensor.test_scanner_scanner_status",
+      problem: null,
+      last_job: null,
+      markers: [],
+    },
+    capabilities: null,
+    defaults: { sides: "one-sided", color_mode: null },
+    max_file_mb: 25,
+    scanner: scannerBlock(),
+    ...overrides,
+  });
+  const states = (state = "idle") => ({
+    ...deskjetStates(),
+    "sensor.test_scanner_scanner_status": { state, attributes: {} },
+  });
+
+  it("shows the scan panel with no tabs, no print content and no ink", async () => {
+    const card = await mount(makeHass({ printers: [scannerOnly()], states: states() }));
+    expect(text(card, "title")).toBe("Test Scanner");
+    expect(text(card, "state")).toBe("Hazır");
+    expect(role(card, "who-icon").dataset.icon).toBe("scanner");
+    expect(visible(card, "body-tabs")).toBe(false);
+    expect(visible(card, "print-panel")).toBe(false);
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(role(card, "scan-panel").hasAttribute("role")).toBe(false);
+    expect(role(card, "scan-start").disabled).toBe(false);
+  });
+
+  it("names the scanner's own states", async () => {
+    const card = await mount(
+      makeHass({ printers: [scannerOnly()], states: states("adf_loaded"), language: "en" }),
+    );
+    expect(text(card, "state")).toBe("Paper in the feeder");
+  });
+
+  it("is unreachable when its sensor is unavailable", async () => {
+    const card = await mount(makeHass({ printers: [scannerOnly()], states: states("unavailable") }));
+    expect(text(card, "state")).toBe("Ulaşılamıyor");
+  });
+
+  it("history opens on the scans, without tabs", async () => {
+    const hass = makeHass({ printers: [scannerOnly()], states: states(), scans: [scanRecord()] });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    await flush();
+    expect(visible(card, "history-tabs")).toBe(false);
+    expect(hass.calls.some((m) => m.type === "home_print/scans")).toBe(true);
+    expect(hass.calls.some((m) => m.type === "home_print/history")).toBe(false);
+  });
+
+  it("is listed among printers and switching back restores the tabs", async () => {
+    const scanning = deskjetPrinter({ scanner: scannerBlock() });
+    const card = await mount(
+      makeHass({ printers: [scanning, scannerOnly()], states: states() }),
+    );
+    expect(visible(card, "body-tabs")).toBe(true);
+    await switchTo(card, "scanner");
+    expect(visible(card, "body-tabs")).toBe(false);
+    expect(visible(card, "scan-panel")).toBe(true);
+    await switchTo(card, "deskjet");
+    expect(visible(card, "body-tabs")).toBe(true);
+    expect(visible(card, "print-panel")).toBe(true);
+    expect(visible(card, "scan-panel")).toBe(false);
+  });
+});

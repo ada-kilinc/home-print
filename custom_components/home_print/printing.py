@@ -74,6 +74,19 @@ class PrintError(HomeAssistantError):
         )
 
 
+class NotAPrinter(PrintError, ServiceValidationError):
+    """The entry is a scanner without a printer."""
+
+    key = "not_a_printer"
+    http_status = 400
+
+
+def ensure_printer(entry: HomePrintConfigEntry) -> None:
+    """Raise NotAPrinter for a scanner-only entry."""
+    if entry.runtime_data.client is None:
+        raise NotAPrinter()
+
+
 class FileTooLarge(PrintError):
     """The file is larger than the configured limit."""
 

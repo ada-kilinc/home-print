@@ -501,10 +501,14 @@ export class ScanPart {
     }
     const editable = printer?.can_print !== false;
     if (scanner) this._resumeScan(printer);
+    // A scanner without a printer: no tabs, only the scan content.
+    const scannerOnly = printer?.kind === "scanner";
     // No scanner: no tabs, only the print content.
     if (!scanner || !editable) this._tab = "print";
-    const open = this._tab === "scan";
-    this._role("body-tabs").hidden = !scanner;
+    if (scannerOnly) this._tab = "scan";
+    const open = this._tab === "scan" && (editable || !scannerOnly);
+    const tabbed = Boolean(scanner) && !scannerOnly;
+    this._role("body-tabs").hidden = !tabbed;
     const scanTab = this._role("body-tab-scan");
     scanTab.disabled = !editable;
     for (const tab of this._bodyTabs()) {
@@ -514,13 +518,13 @@ export class ScanPart {
     }
     const printPanel = this._role("print-panel");
     const scanPanel = this._role("scan-panel");
-    printPanel.hidden = open;
+    printPanel.hidden = open || scannerOnly;
     scanPanel.hidden = !open;
     for (const [panel, tab] of [
       [printPanel, "body-tab-print"],
       [scanPanel, "body-tab-scan"],
     ]) {
-      if (scanner) {
+      if (tabbed) {
         panel.setAttribute("role", "tabpanel");
         panel.setAttribute("aria-labelledby", tab);
       } else {

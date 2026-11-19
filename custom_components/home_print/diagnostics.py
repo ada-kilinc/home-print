@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.loader import async_get_integration
 
 from . import HomePrintConfigEntry
-from .const import CONF_HOST, CONF_SCANNER_URL, DOMAIN
+from .const import CONF_HOST, CONF_SCANNER_TXT, CONF_SCANNER_URL, DOMAIN
 from .redact import redact_value, redact_xml
 from .scanning import active_state, allowed_resolutions, scan_defaults, usable_sources
 
@@ -37,6 +37,8 @@ IPP_KEYS = frozenset(
         "printer-contact-col",
     }
 )
+# The scanner's zeroconf TXT stays (model, path, formats); its UUID and
+# addresses are replaced like everywhere else.
 ENTRY_KEYS = frozenset({CONF_HOST, CONF_SCANNER_URL})
 INFO_KEYS = frozenset({"uuid", "serial"})
 CAPS_KEYS = frozenset({"uuid"})
@@ -55,17 +57,21 @@ async def async_get_config_entry_diagnostics(
     integration = await async_get_integration(hass, DOMAIN)
     host = str(entry.data.get(CONF_HOST, ""))
     data = entry.runtime_data
-    info = data.coordinator.data
+    # A scanner-only entry has no printer: no IPP client, no printer info.
+    info = data.coordinator.data if data.client is not None else None
     serial = info.serial if info is not None else None
     extra = tuple(v for v in (host, serial) if v)
 
-    try:
-        ipp: Any = await data.client.get_printer_attributes()
-    except Exception as err:  # noqa: BLE001 - reported, never raised
-        ipp = _error(err)
+    ipp: Any = None
+    if data.client is not None:
+        try:
+            ipp = await data.client.get_printer_attributes()
+        except Exception as err:  # noqa: BLE001 - reported, never raised
+            ipp = _error(err)
 
     result: dict[str, Any] = {
         "version": str(integration.version),
+        "kind": "printer" if data.client is not None else "scanner",
         "entry": {
             "title": redact_value(entry.title, frozenset(), extra),
             "data": redact_value(dict(entry.data), ENTRY_KEYS, extra),
@@ -77,6 +83,10 @@ async def async_get_config_entry_diagnostics(
         "ipp_attributes": redact_value(ipp, IPP_KEYS, extra),
         "history_entries": len(data.history.entries()),
         "scanner": await _scanner(data.scanner, extra),
+        # What the scanner announced over zeroconf (_uscan), if it did.
+        "scanner_txt": redact_value(
+            entry.data.get(CONF_SCANNER_TXT), frozenset(), extra
+        ),
     }
     return result
 

@@ -86,6 +86,7 @@ var NOISE_REASONS = [
 ];
 var PRINTER_ERROR_LIMIT = 3;
 var KNOWN_STATES = ["idle", "processing", "stopped"];
+var SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"];
 var HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
 
 // frontend/src/i18n.js
@@ -130,6 +131,10 @@ var STRINGS = {
     state_stopped: "Durdu",
     state_unreachable: "Ulaşılamıyor",
     state_unknown: "Bilinmiyor",
+    scanner_state_idle: "Hazır",
+    scanner_state_scanning: "Tarıyor",
+    scanner_state_adf_loaded: "Besleyicide kâğıt var",
+    scanner_state_stopped: "Durdu",
     problem: "Sorun var",
     ink_black: "Siyah",
     ink_color: "Renkli",
@@ -262,6 +267,10 @@ var STRINGS = {
     state_stopped: "Stopped",
     state_unreachable: "Unreachable",
     state_unknown: "Unknown",
+    scanner_state_idle: "Ready",
+    scanner_state_scanning: "Scanning",
+    scanner_state_adf_loaded: "Paper in the feeder",
+    scanner_state_stopped: "Stopped",
     problem: "Needs attention",
     ink_black: "Black",
     ink_color: "Colour",
@@ -618,8 +627,9 @@ var HistoryPart = class {
     const printer = this._printer();
     if (!printer) return;
     this._historyEntryId = printer.entry_id;
-    this._historyTab = "prints";
-    const tabbed = Boolean(printer.scanner);
+    const scannerOnly = printer.kind === "scanner";
+    this._historyTab = scannerOnly ? "scans" : "prints";
+    const tabbed = Boolean(printer.scanner) && !scannerOnly;
     this._role("history-tabs").hidden = !tabbed;
     const panel = this._role("history-panel");
     if (tabbed) panel.setAttribute("role", "tabpanel");
@@ -1770,9 +1780,12 @@ var ScanPart = class {
     }
     const editable = printer?.can_print !== false;
     if (scanner) this._resumeScan(printer);
+    const scannerOnly = printer?.kind === "scanner";
     if (!scanner || !editable) this._tab = "print";
-    const open = this._tab === "scan";
-    this._role("body-tabs").hidden = !scanner;
+    if (scannerOnly) this._tab = "scan";
+    const open = this._tab === "scan" && (editable || !scannerOnly);
+    const tabbed = Boolean(scanner) && !scannerOnly;
+    this._role("body-tabs").hidden = !tabbed;
     const scanTab = this._role("body-tab-scan");
     scanTab.disabled = !editable;
     for (const tab of this._bodyTabs()) {
@@ -1782,13 +1795,13 @@ var ScanPart = class {
     }
     const printPanel = this._role("print-panel");
     const scanPanel = this._role("scan-panel");
-    printPanel.hidden = open;
+    printPanel.hidden = open || scannerOnly;
     scanPanel.hidden = !open;
     for (const [panel, tab] of [
       [printPanel, "body-tab-print"],
       [scanPanel, "body-tab-scan"]
     ]) {
-      if (scanner) {
+      if (tabbed) {
         panel.setAttribute("role", "tabpanel");
         panel.setAttribute("aria-labelledby", tab);
       } else {
@@ -1919,6 +1932,12 @@ var SwitcherPart = class {
     }
     who.hidden = multi;
     button.hidden = !multi;
+    const icon = printer?.kind === "scanner" ? "scanner" : "printer";
+    const iconBox = this._role("who-icon");
+    if (iconBox.dataset.icon !== icon) {
+      iconBox.dataset.icon = icon;
+      iconBox.replaceChildren(svgIcon(icon));
+    }
     if (!multi) {
       this._closeList();
       this._listKey = "";
@@ -2719,8 +2738,9 @@ var HomePrintCard = class extends HTMLElement {
   }
   _reachable(printer) {
     if (!printer || !printer.available) return false;
-    const status = this._entityState(printer.entities?.status);
-    return status?.state !== "unavailable";
+    const entities = printer.entities ?? {};
+    const own = printer.kind === "scanner" ? entities.scanner_status : entities.status;
+    return this._entityState(own)?.state !== "unavailable";
   }
   _entityState(entityId) {
     return entityId ? this._hass?.states?.[entityId] : void 0;
@@ -2838,6 +2858,10 @@ var HomePrintCard = class extends HTMLElement {
   }
   _statusText(lang, printer) {
     if (!this._reachable(printer)) return t(lang, "state_unreachable");
+    if (printer.kind === "scanner") {
+      const state2 = this._entityState(printer.entities?.scanner_status)?.state;
+      return SCANNER_STATES.includes(state2) ? t(lang, `scanner_state_${state2}`) : t(lang, "state_unknown");
+    }
     const entity = this._entityState(printer.entities?.status)?.state;
     const state = KNOWN_STATES.includes(entity) ? entity : printer.state;
     let text = KNOWN_STATES.includes(state) ? t(lang, `state_${state}`) : t(lang, "state_unknown");

@@ -32,6 +32,7 @@ from .printing import (
     async_report_result,
     build_options,
     clean_file_name,
+    ensure_printer,
     max_file_bytes,
     max_file_mb,
 )
@@ -155,6 +156,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 raise Unauthorized(context=call.context)
             if entry.options.get(CONF_ADMIN_ONLY) and not user.is_admin:
                 raise Unauthorized(context=call.context)
+        ensure_printer(entry)
 
         options = build_options(
             entry,

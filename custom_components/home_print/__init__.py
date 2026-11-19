@@ -9,6 +9,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
@@ -23,13 +24,18 @@ from .const import (
     CONF_VERIFY_SSL,
     DOMAIN,
 )
-from .coordinator import HomePrintCoordinator
+from .coordinator import HomePrintCoordinator, ScannerCoordinator
 from .frontend import async_register_frontend
 from .history import PrintHistory
 from .http import HomePrintUploadView
 from .preview import HomePrintPreviewView
 from .scan_views import ScanFileView, ScanPreviewView
-from .scanner import ScannerRuntime, async_refresh_status, async_setup_scanner
+from .scanner import (
+    ScannerRuntime,
+    async_refresh_status,
+    async_setup_scanner,
+    is_scanner_only,
+)
 from .scans import ScanArchive
 from .services import async_setup_services
 from .websocket import async_setup_websocket
@@ -44,10 +50,14 @@ HISTORY_CLEANUP_INTERVAL = timedelta(hours=6)
 
 @dataclass
 class HomePrintData:
-    """Runtime data stored on the config entry."""
+    """Runtime data stored on the config entry.
 
-    client: HomePrintClient
-    coordinator: HomePrintCoordinator
+    A scanner-only entry has no IPP client and a ScannerCoordinator; its
+    print history stays empty.
+    """
+
+    client: HomePrintClient | None
+    coordinator: HomePrintCoordinator | ScannerCoordinator
     history: PrintHistory
     scanner: ScannerRuntime | None = None
 
@@ -69,6 +79,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) -> bool:
     """Set up Home Print from a config entry."""
+    if is_scanner_only(entry):
+        return await _async_setup_scanner_entry(hass, entry)
     session = async_get_clientsession(hass, verify_ssl=entry.data[CONF_VERIFY_SSL])
     client = HomePrintClient(
         entry.data[CONF_HOST],
@@ -107,6 +119,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomePrintConfigEntry) ->
                 hass, scanner.archive.async_schedule_cleanup, HISTORY_CLEANUP_INTERVAL
             )
         )
+    return True
+
+
+async def _async_setup_scanner_entry(
+    hass: HomeAssistant, entry: HomePrintConfigEntry
+) -> bool:
+    """Set up a scanner that has no printer: scanner status and scanning."""
+    session = async_get_clientsession(
+        hass, verify_ssl=bool(entry.data.get(CONF_VERIFY_SSL))
+    )
+    scanner = await async_setup_scanner(hass, entry, session, retry=False)
+    if scanner is None:
+        # Asleep or off: Home Assistant retries the setup on its own.
+        raise ConfigEntryNotReady("The scanner did not answer")
+    coordinator = ScannerCoordinator(hass, entry, scanner)
+    await coordinator.async_config_entry_first_refresh()
+
+    history = PrintHistory(hass, entry)
+    await history.async_load()
+    entry.runtime_data = HomePrintData(
+        client=None, coordinator=coordinator, history=history, scanner=scanner
+    )
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, scanner.archive.async_schedule_cleanup, HISTORY_CLEANUP_INTERVAL
+        )
+    )
     return True
 
 

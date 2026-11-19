@@ -298,7 +298,7 @@ class EsclClient:
         return pages
 
 
-def _url_host(host: str) -> str:
+def url_host(host: str) -> str:
     """``host`` for a URL: IPv6 literals get brackets."""
     bare = host.strip("[]")
     try:
@@ -338,6 +338,20 @@ async def _probe(
     return base, caps
 
 
+async def probe_scanner(
+    session: aiohttp.ClientSession,
+    base: str,
+    verify_ssl: bool,
+    timeout: float = REQUEST_TIMEOUT,
+) -> tuple[str, ScannerCaps]:
+    """Read the capabilities at a known eSCL base URL (e.g. an announced one).
+
+    Returns the base after redirects and the capabilities; raises EsclError
+    or ScannerUnavailable.
+    """
+    return await _probe(session, base.rstrip("/"), verify_ssl, timeout)
+
+
 async def find_scanner(
     session: aiohttp.ClientSession,
     host: str,
@@ -352,11 +366,11 @@ async def find_scanner(
     from the final URL after redirects. ``timeout`` applies per candidate.
     """
     schemes = ("https", "http") if ssl else ("http", "https")
-    url_host = _url_host(host)
+    bracketed = url_host(host)
     for scheme in schemes:
         try:
             return await _probe(
-                session, f"{scheme}://{url_host}/eSCL", verify_ssl, timeout
+                session, f"{scheme}://{bracketed}/eSCL", verify_ssl, timeout
             )
         except (EsclError, aiohttp.ClientError, TimeoutError):
             continue

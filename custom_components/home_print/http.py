@@ -22,6 +22,7 @@ from .printing import (
     async_report_result,
     build_options,
     clean_file_name,
+    ensure_printer,
     max_file_bytes,
     max_file_mb,
 )
@@ -150,6 +151,7 @@ class HomePrintUploadView(HomeAssistantView):
         user = request["hass_user"]
         if entry.options.get(CONF_ADMIN_ONLY) and not user.is_admin:
             raise _RequestError(HTTPStatus.FORBIDDEN, "admin_required")
+        ensure_printer(entry)
 
         limit = max_file_bytes(entry)
         mb = max_file_mb(entry)

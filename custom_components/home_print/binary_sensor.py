@@ -44,7 +44,9 @@ async def async_setup_entry(
     entry: HomePrintConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    async_add_entities([ProblemBinarySensor(entry.runtime_data.coordinator)])
+    coordinator = entry.runtime_data.coordinator
+    if isinstance(coordinator, HomePrintCoordinator):
+        async_add_entities([ProblemBinarySensor(coordinator)])
 
 
 class ProblemBinarySensor(HomePrintEntity, BinarySensorEntity):

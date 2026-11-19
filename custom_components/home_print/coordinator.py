@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .client import CannotConnect, HomePrintClient, HomePrintError
 from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .escl.models import ScannerStatus
 from .models import LastJob, PrinterInfo
 from .scanner import ScannerRuntime, async_fetch_status
 
@@ -74,3 +75,35 @@ class HomePrintCoordinator(DataUpdateCoordinator[PrinterInfo]):
         """Record the latest submitted job and notify entities."""
         self.last_job = job
         self.async_update_listeners()
+
+
+class ScannerCoordinator(DataUpdateCoordinator[ScannerStatus]):
+    """Poll a scanner that has no printer (a scanner-only entry)."""
+
+    config_entry: HomePrintConfigEntry
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: HomePrintConfigEntry,
+        scanner: ScannerRuntime,
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=entry,
+            name=DOMAIN,
+            update_interval=timedelta(
+                seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            ),
+        )
+        self.scanner: ScannerRuntime | None = scanner
+        self.last_job: LastJob | None = None
+
+    async def _async_update_data(self) -> ScannerStatus:
+        assert self.scanner is not None
+        status = await async_fetch_status(self.scanner)
+        self.scanner.status = status
+        if status is None:
+            raise UpdateFailed("Scanner unreachable")
+        return status

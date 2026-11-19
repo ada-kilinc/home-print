@@ -22,4 +22,5 @@ Plan 4 (tarama) uygulandı: eSCL istemcisi, arşiv, `home_print.scan`, kartta Ta
 - Plan 6'nın kod tarafı bitti: CI (ruff, pytest, vitest, hassfest, ignore'suz HACS doğrulaması), tag ile release, sadece İngilizce kısa README, yeni ekran görüntüleri, tanılama dosyası. README artık tr+en değil, sadece İngilizce.
 - eSCL fixture'ları gerçek DeskJet 4670 dökümlerinden geliyor. Çift taraflı besleyici ve siyah-beyaz için tek sentetik dosya kaldı.
 - Kart `frontend/src/` altında modüllere bölündü, esbuild ile tek dosyaya derleniyor (ADR 1).
-- Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5), tarama için kâğıt boyutu ve tarayıcı keşfi (ayrı issue'lar).
+- Tarayıcı keşfi (`_uscan`/`_uscans`) ve yazıcısı olmayan tarayıcılar eklendi (#10).
+- Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5), tarama için kâğıt boyutu.

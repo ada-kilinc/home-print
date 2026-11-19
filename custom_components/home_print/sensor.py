@@ -17,8 +17,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HomePrintConfigEntry
-from .coordinator import HomePrintCoordinator
-from .entity import HomePrintEntity
+from .coordinator import HomePrintCoordinator, ScannerCoordinator
+from .entity import HomePrintEntity, HomePrintScannerEntity
 from .models import Marker
 from .scanning import active_state
 
@@ -73,6 +73,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data.coordinator
+    if isinstance(coordinator, ScannerCoordinator):
+        async_add_entities([ScannerOnlyStatusSensor(coordinator)])
+        return
     entities: list[SensorEntity] = [
         StatusSensor(coordinator),
         LastJobSensor(coordinator),
@@ -169,15 +172,17 @@ class LastJobSensor(HomePrintEntity, SensorEntity):
         }
 
 
-class ScannerStatusSensor(HomePrintEntity, SensorEntity):
-    """Scanner state (idle / scanning / paper in the ADF / stopped)."""
+class _ScannerStatus:
+    """Scanner state (idle / scanning / paper in the ADF / stopped).
+
+    A mixin, listed before the entity base so ``available`` extends the
+    coordinator entity's.
+    """
 
     _attr_translation_key = "scanner_status"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = SCANNER_STATES
-
-    def __init__(self, coordinator: HomePrintCoordinator) -> None:
-        super().__init__(coordinator, "scanner_status")
+    coordinator: HomePrintCoordinator | ScannerCoordinator
 
     def _scan_running(self) -> bool:
         """A scan of ours is running (the scanner may be too busy to answer)."""
@@ -209,3 +214,17 @@ class ScannerStatusSensor(HomePrintEntity, SensorEntity):
         if status.state == "idle":
             return "adf_loaded" if status.adf_loaded else "idle"
         return None
+
+
+class ScannerStatusSensor(_ScannerStatus, HomePrintEntity, SensorEntity):
+    """The scanner state of a printer's scanner."""
+
+    def __init__(self, coordinator: HomePrintCoordinator) -> None:
+        super().__init__(coordinator, "scanner_status")
+
+
+class ScannerOnlyStatusSensor(_ScannerStatus, HomePrintScannerEntity, SensorEntity):
+    """The state of a scanner that has no printer."""
+
+    def __init__(self, coordinator: ScannerCoordinator) -> None:
+        super().__init__(coordinator, "scanner_status")

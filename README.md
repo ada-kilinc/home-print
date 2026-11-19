@@ -15,10 +15,10 @@ Print and scan with your network printer from a Home Assistant dashboard, wherev
 
 ## Features
 
-- Finds IPP / AirPrint printers on the network, or add one by IP.
+- Finds IPP / AirPrint printers and eSCL / AirScan scanners on the network, or add one by IP.
 - Sensors for status, ink or toner levels, problems and the last job.
 - Prints PDF, JPEG and PNG, converting when the printer can't take a format. Supports two-sided, copies, colour and page ranges. Shrinks large phone photos.
-- Scans over eSCL / AirScan to PDF or JPEG, saved in the **Media** panel.
+- Scans over eSCL / AirScan to PDF or JPEG, saved in the **Media** panel. Network scanners without a printer work too.
 - A dashboard card with Print and Scan tabs, history and previews.
 - `home_print.print_file` and `home_print.scan` actions for automations.
 
@@ -30,7 +30,7 @@ Not supported yet: Word/ODF files (save as PDF), USB-only printers, SANE scanner
 [![Add the Home Print integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=home_print)
 
 1. In HACS, add `https://github.com/ada-kilinc/home-print` as a custom repository (type **Integration**), download **Home Print** and restart Home Assistant.
-2. Go to **Settings → Devices & services**. Your printer should appear as discovered. If it doesn't, add **Home Print** and enter the printer's IP address.
+2. Go to **Settings → Devices & services**. Your printer or scanner should appear as discovered. If it doesn't, add **Home Print** and enter its IP address (for a scanner, an eSCL address like `http://192.168.1.20/eSCL` works too).
 3. On a dashboard: **Edit → Add card → Home Print**. No resource setup is needed.
 
 Works on all installation types. Nothing is exposed to the internet: the card goes through Home Assistant's own login.
@@ -66,7 +66,7 @@ Under **Configure** for each printer:
 | Polling interval | 60 s |
 | Only admins can print | off (limits printing, scanning and deleting, not viewing) |
 | Keep files (days) | 7 (0 keeps no files) |
-| Scanner address | found automatically, e.g. `http://192.168.1.20/eSCL` |
+| Scanner address | found automatically (the address the scanner announces, else a guess), e.g. `http://192.168.1.20/eSCL` |
 | Keep scans (days) | 30 (0 keeps them forever) |
 | Max space for scans | 2000 MB (oldest scans are deleted first) |
 
@@ -99,6 +99,8 @@ response_variable: scan  # scan.path, scan.copy, scan.name, scan.pages
 **Do I also need the built-in IPP integration?** No. If both are set up, the printer just gets two sets of sensors.
 
 **Can I print away from home?** Yes, through any remote access you already use (Tailscale, Nabu Casa, …).
+
+**I have a scanner without a printer.** It's added as a scanner only: the card shows just the scan panel, with no Print tab or ink, and the history shows its scans. It has only the scanning settings.
 
 **Where are my scans?** In the **Media** panel, under `home_print/scans/` (`/media` on Home Assistant OS).
 
