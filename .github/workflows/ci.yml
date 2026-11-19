@@ -56,5 +56,3 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # Brand images ship in the integration's own brand/ folder.
-          ignore: brands
