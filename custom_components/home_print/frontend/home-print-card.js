@@ -7,8 +7,8 @@
  * (`home_print/history`, `home_print/history/delete`) and a page preview
  * served by `/api/home_print/history/<entry_id>/<id>/page/<n>`.
  *
- * A printer with a scanner also gets a Scan button under Print: it opens a
- * panel that starts `home_print/scan/start`, polls `home_print/scan/state`
+ * A printer with a scanner splits the card body into Print and Scan tabs; the
+ * Scan tab holds a panel that starts `home_print/scan/start`, polls `home_print/scan/state`
  * (stopped with `home_print/scan/cancel`) and shows the result (preview, rename, download, add page, delete). The
  * history popup then has a second tab listing `home_print/scans`.
  */
@@ -176,6 +176,8 @@ const STRINGS = {
     ink_color: "Renkli",
     percent: "%{value}",
     picker: "Yazıcı",
+    tab_print: "Yazdır",
+    tab_scan: "Tara",
     switch_printer: "Yazıcı değiştir",
     loading: "Yazıcılar yükleniyor…",
     load_failed:
@@ -311,6 +313,8 @@ const STRINGS = {
     ink_color: "Colour",
     percent: "{value}%",
     picker: "Printer",
+    tab_print: "Print",
+    tab_scan: "Scan",
     switch_printer: "Switch printer",
     loading: "Loading printers…",
     load_failed:
@@ -775,6 +779,7 @@ const STYLE = `
   }
   .bar-fill { height: 100%; }
   .pct { color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+  .print-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .file-row {
     position: relative;
     display: flex;
@@ -783,6 +788,10 @@ const STYLE = `
     gap: 8px;
     min-width: 0;
   }
+  /* Choose file and Copies share one row, even on a ~300 px card. */
+  .file-row .option[data-opt="copies"] { margin-left: auto; }
+  .file-row .option input[type="number"] { width: 56px; }
+  .file-info { flex: 1 1 100%; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .file-button {
     flex: none;
     display: inline-flex;
@@ -837,7 +846,7 @@ const STYLE = `
     white-space: nowrap;
   }
   .file-size { flex: none; color: var(--secondary-text-color); }
-  .options { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  .options { display: flex; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
   .option { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
   .option input[type="checkbox"] { width: 24px; height: 24px; margin: 10px; accent-color: var(--primary-color); }
   .option input[type="number"] { width: 72px; }
@@ -999,24 +1008,6 @@ const STYLE = `
   .preview-body .sheet-status { padding: 0; }
 
   /* Scanning */
-  .scan-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 48px;
-    width: 100%;
-    border: 1px solid var(--primary-color);
-    border-radius: 8px;
-    font: inherit;
-    font-weight: 500;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--primary-color);
-    background: none;
-    cursor: pointer;
-  }
-  .scan-toggle:disabled { opacity: 0.5; cursor: default; }
   .scan-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .scan-fields {
     display: grid;
@@ -1076,6 +1067,7 @@ const STYLE = `
     cursor: pointer;
   }
   .tab[aria-selected="true"] { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+  .tab:disabled { opacity: 0.5; cursor: default; }
   .history-mark svg { color: var(--secondary-text-color); vertical-align: middle; }
 `;
 
@@ -1100,13 +1092,24 @@ const TEMPLATE = `
         <ul class="printer-list" id="printer-list" data-role="printer-list" role="listbox" hidden></ul>
       </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
+      <div class="tabs" role="tablist" data-role="body-tabs" hidden>
+        <button type="button" role="tab" class="tab" id="body-tab-print" data-role="body-tab-print" data-body-tab="print" data-t="tab_print" aria-controls="print-panel" aria-selected="true"></button>
+        <button type="button" role="tab" class="tab" id="body-tab-scan" data-role="body-tab-scan" data-body-tab="scan" data-t="tab_scan" aria-controls="scan-panel" aria-selected="false" tabindex="-1"></button>
+      </div>
+      <div class="print-panel" id="print-panel" data-role="print-panel">
       <div class="ink" data-role="ink"></div>
-      <div class="file-row">
+      <div class="file-row" data-role="file-row">
         <button type="button" class="file-button" data-role="pick">
           ${svg("paperclip")}<span data-t="choose_file"></span>
         </button>
-        <span class="file-name" data-role="file-name"></span>
-        <span class="file-size" data-role="file-size"></span>
+        <label class="option" data-opt="copies">
+          <span data-t="copies"></span>
+          <input type="number" data-role="copies" min="1" value="1" inputmode="numeric" />
+        </label>
+        <span class="file-info" data-role="file-info" hidden>
+          <span class="file-name" data-role="file-name"></span>
+          <span class="file-size" data-role="file-size"></span>
+        </span>
         <div class="pick-menu" data-role="pick-menu" role="menu" hidden>
           <button type="button" role="menuitem" data-option="file">
             ${svg("paperclip")}<span data-t="pick_file"></span>
@@ -1122,11 +1125,7 @@ const TEMPLATE = `
         <input type="file" class="hidden-input" data-role="input-photo" accept="${PHOTO_ACCEPT}" tabindex="-1" aria-hidden="true" />
         <input type="file" class="hidden-input" data-role="input-camera" accept="${CAMERA_ACCEPT}" capture="environment" tabindex="-1" aria-hidden="true" />
       </div>
-      <div class="options">
-        <label class="option" data-opt="copies">
-          <span data-t="copies"></span>
-          <input type="number" data-role="copies" min="1" value="1" inputmode="numeric" />
-        </label>
+      <div class="options" data-role="options">
         <label class="option" data-opt="duplex">
           <span data-t="duplex"></span>
           <input type="checkbox" data-role="duplex" />
@@ -1141,9 +1140,9 @@ const TEMPLATE = `
         <input type="text" data-role="pages" autocomplete="off" />
       </label>
       <button type="button" class="print" data-role="print" data-t="print"></button>
-      <button type="button" class="scan-toggle" data-role="scan-toggle" aria-expanded="false" aria-controls="scan-panel" hidden>
-        ${svg("scanner")}<span data-t="scan"></span>
-      </button>
+      <div class="message" data-role="message" aria-live="polite"></div>
+      <div class="detail" data-role="detail" hidden></div>
+      </div>
       <div class="scan-panel" id="scan-panel" data-role="scan-panel" hidden>
         <div class="scan-fields">
           <label class="scan-field" data-scan="source">
@@ -1192,8 +1191,6 @@ const TEMPLATE = `
           </div>
         </div>
       </div>
-      <div class="message" data-role="message" aria-live="polite"></div>
-      <div class="detail" data-role="detail" hidden></div>
     </div>
   </ha-card>
   <dialog data-role="history-dialog" aria-labelledby="history-title">
@@ -1260,7 +1257,8 @@ class HomePrintCard extends HTMLElement {
     this._savedOverflow = null;
     // Scanning. _scan is the scan being followed ({entryId, scanId, started,
     // appendPages}); _scanResult the finished document shown in the panel.
-    this._scanOpen = false;
+    // "print" or "scan": the card body's tab.
+    this._tab = "print";
     this._scan = null;
     this._scanTimer = null;
     this._scanResult = null;
@@ -1301,7 +1299,10 @@ class HomePrintCard extends HTMLElement {
     this._role("preview-close").addEventListener("click", () => this._closePreview());
     this._wireDialog(this._role("history-dialog"), () => this._closeHistory());
     this._wireDialog(this._role("preview-dialog"), () => this._closePreview());
-    this._role("scan-toggle").addEventListener("click", () => this._onScanToggle());
+    for (const tab of this._bodyTabs()) {
+      tab.addEventListener("click", () => this._selectTab(tab.dataset.bodyTab));
+    }
+    this._role("body-tabs").addEventListener("keydown", (ev) => this._onBodyTabKey(ev));
     this._role("scan-source").addEventListener("change", () => this._update());
     this._role("scan-start").addEventListener("click", () => this._onScanStart());
     this._role("scan-cancel").addEventListener("click", () => this._onScanCancel());
@@ -1316,7 +1317,7 @@ class HomePrintCard extends HTMLElement {
     const name = this._role("scan-name");
     name.addEventListener("keydown", (ev) => this._onScanNameKey(ev));
     name.addEventListener("blur", () => this._renameScan());
-    for (const tab of this.shadowRoot.querySelectorAll('[role="tab"]')) {
+    for (const tab of this._role("history-tabs").querySelectorAll('[role="tab"]')) {
       tab.addEventListener("click", () => this._switchHistoryTab(tab.dataset.tab));
     }
     this._role("history-tabs").addEventListener("keydown", (ev) => this._onTabKey(ev));
@@ -1721,7 +1722,7 @@ class HomePrintCard extends HTMLElement {
     const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key];
     if (!step) return;
     ev.preventDefault();
-    const tabs = [...this.shadowRoot.querySelectorAll('[role="tab"]')];
+    const tabs = [...this._role("history-tabs").querySelectorAll('[role="tab"]')];
     const index = tabs.findIndex((tab) => tab.dataset.tab === this._historyTab);
     const next = tabs[(index + step + tabs.length) % tabs.length];
     this._switchHistoryTab(next.dataset.tab);
@@ -2294,10 +2295,26 @@ class HomePrintCard extends HTMLElement {
     return this._scan !== null;
   }
 
-  _onScanToggle() {
-    if (this._role("scan-toggle").disabled) return;
-    this._scanOpen = !this._scanOpen;
+  _bodyTabs() {
+    return [...this._role("body-tabs").querySelectorAll('[role="tab"]')];
+  }
+
+  _selectTab(tab) {
+    if (tab === "scan" && this._role("body-tab-scan").disabled) return;
+    if (tab === this._tab) return;
+    this._tab = tab;
     this._update();
+  }
+
+  _onBodyTabKey(ev) {
+    const tabs = this._bodyTabs().filter((tab) => !tab.disabled);
+    const index = tabs.findIndex((tab) => tab.dataset.bodyTab === this._tab);
+    const moves = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 };
+    if (!(ev.key in moves) || tabs.length === 0) return;
+    ev.preventDefault();
+    const next = tabs[(moves[ev.key] + tabs.length) % tabs.length];
+    this._selectTab(next.dataset.bodyTab);
+    next.focus();
   }
 
   _onScanStart() {
@@ -2378,7 +2395,7 @@ class HomePrintCard extends HTMLElement {
       resumed: true,
     };
     this._clearScanResult();
-    this._scanOpen = true;
+    this._tab = "scan";
     this._scanMessage = { text: t(pickLanguage(this._hass), "scan_scanning"), kind: "info" };
     if (this.isConnected) this._scheduleScanPoll();
   }
@@ -2514,7 +2531,7 @@ class HomePrintCard extends HTMLElement {
     if (this._scan?.scanId) this._scanSeen.delete(this._scan.scanId);
     this._scan = null;
     this._scanMessage = null;
-    this._scanOpen = false;
+    this._tab = "print";
     this._clearScanResult();
   }
 
@@ -2813,12 +2830,30 @@ class HomePrintCard extends HTMLElement {
     }
     const editable = printer?.can_print !== false;
     if (scanner) this._resumeScan(printer);
-    const toggle = this._role("scan-toggle");
-    const open = Boolean(scanner) && editable && this._scanOpen;
-    toggle.hidden = !scanner;
-    toggle.disabled = !editable;
-    toggle.setAttribute("aria-expanded", String(open));
-    this._role("scan-panel").hidden = !open;
+    // No scanner: no tabs, only the print content.
+    if (!scanner || !editable) this._tab = "print";
+    const open = this._tab === "scan";
+    this._role("body-tabs").hidden = !scanner;
+    const scanTab = this._role("body-tab-scan");
+    scanTab.disabled = !editable;
+    for (const tab of this._bodyTabs()) {
+      const selected = tab.dataset.bodyTab === this._tab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    const printPanel = this._role("print-panel");
+    const scanPanel = this._role("scan-panel");
+    printPanel.hidden = open;
+    scanPanel.hidden = !open;
+    for (const [panel, tab] of [[printPanel, "body-tab-print"], [scanPanel, "body-tab-scan"]]) {
+      if (scanner) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", tab);
+      } else {
+        panel.removeAttribute("role");
+        panel.removeAttribute("aria-labelledby");
+      }
+    }
     if (!scanner) return;
 
     const busy = this._scanBusy();
@@ -3019,6 +3054,7 @@ class HomePrintCard extends HTMLElement {
     // default applies and no color_mode is sent.
     const modes = caps?.color_modes ?? [];
     this._row("color").hidden = !(modes.includes("color") && modes.includes("monochrome"));
+    this._role("options").hidden = this._row("duplex").hidden && this._row("color").hidden;
     const format = this._file ? fileFormat(this._file) : "application/pdf";
     const pdfOk = (caps?.formats ?? []).includes("application/pdf");
     // PDFs always take a page range (conversion selects the pages); images
@@ -3030,6 +3066,7 @@ class HomePrintCard extends HTMLElement {
   _renderFile(lang, printer) {
     this._role("file-name").textContent = this._file ? this._file.name : "";
     this._role("file-size").textContent = this._file ? formatSize(this._file.size, lang) : "";
+    this._role("file-info").hidden = !this._file;
     const message = this._role("message");
     const check = this._fileCheck(printer);
     let shown = this._message;

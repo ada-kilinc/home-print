@@ -1897,7 +1897,7 @@ describe("scan", () => {
   const wsCalls = (hass, type) => hass.calls.filter((m) => m.type === type);
 
   async function openPanel(card) {
-    role(card, "scan-toggle").click();
+    role(card, "body-tab-scan").click();
     await flush();
   }
 
@@ -1917,24 +1917,23 @@ describe("scan", () => {
     return { hass, card };
   }
 
-  it("scan toggle hidden without scanner", async () => {
+  it("no tabs without scanner", async () => {
     const card = await mount(makeHass());
-    expect(visible(card, "scan-toggle")).toBe(false);
+    expect(visible(card, "body-tabs")).toBe(false);
+    expect(visible(card, "print-panel")).toBe(true);
     expect(visible(card, "scan-panel")).toBe(false);
+    expect(role(card, "print-panel").hasAttribute("role")).toBe(false);
   });
 
-  it("scan toggle opens panel with caps options", async () => {
+  it("Scan tab opens panel with caps options", async () => {
     const card = await mount(makeHass({ printers: [scanPrinter()] }));
-    const toggle = role(card, "scan-toggle");
-    expect(visible(card, "scan-toggle")).toBe(true);
-    expect(toggle.textContent.trim()).toBe("Tara");
-    expect(toggle.querySelector("svg path")).toBeTruthy();
-    // Right under the Print button.
-    expect(role(card, "print").nextElementSibling).toBe(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const tab = role(card, "body-tab-scan");
+    expect(visible(card, "body-tabs")).toBe(true);
+    expect(tab.textContent.trim()).toBe("Tara");
+    expect(tab.getAttribute("aria-selected")).toBe("false");
     expect(visible(card, "scan-panel")).toBe(false);
     await openPanel(card);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(tab.getAttribute("aria-selected")).toBe("true");
     expect(visible(card, "scan-panel")).toBe(true);
     expect(options(card, "scan-source")).toEqual(["platen", "adf"]);
     expect(role(card, "scan-source").value).toBe("platen");
@@ -1944,8 +1943,10 @@ describe("scan", () => {
     expect(role(card, "scan-resolution").value).toBe("300");
     expect(options(card, "scan-format")).toEqual(["pdf", "jpeg"]);
     expect(text(card, "scan-start")).toBe("Taramayı başlat");
-    await openPanel(card);
+    role(card, "body-tab-print").click();
+    await flush();
     expect(visible(card, "scan-panel")).toBe(false);
+    expect(visible(card, "print-panel")).toBe(true);
 
     // A single source needs no source choice.
     document.body.innerHTML = "";
@@ -2224,7 +2225,7 @@ describe("scan", () => {
     });
     const card = await mount(hass);
     expect(visible(card, "scan-panel")).toBe(true);
-    expect(role(card, "scan-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(role(card, "body-tab-scan").getAttribute("aria-selected")).toBe("true");
     expect(role(card, "scan-start").disabled).toBe(true);
     await vi.advanceTimersByTimeAsync(1500);
     expect(wsCalls(hass, "home_print/scan/state")[0]).toEqual({
@@ -2314,14 +2315,16 @@ describe("scan", () => {
     }
   });
 
-  it("admin_only disables scan toggle", async () => {
+  it("admin_only disables the Scan tab", async () => {
     const hass = makeHass({
       printers: [scanPrinter({ active_scan_id: "s9" }, { can_print: false })],
       scans: [scanRecord()],
     });
     const card = await mount(hass);
-    expect(visible(card, "scan-toggle")).toBe(true);
-    expect(role(card, "scan-toggle").disabled).toBe(true);
+    expect(visible(card, "body-tabs")).toBe(true);
+    expect(role(card, "body-tab-scan").disabled).toBe(true);
+    role(card, "body-tab-scan").click();
+    await flush();
     expect(visible(card, "scan-panel")).toBe(false);
     await vi.advanceTimersByTimeAsync(3000);
     expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
@@ -2368,7 +2371,7 @@ describe("scan", () => {
     expect(role(card, "scan-start").disabled).toBe(true);
     await switchTo(card, "other");
     expect(visible(card, "scan-panel")).toBe(false);
-    expect(role(card, "scan-toggle").getAttribute("aria-expanded")).toBe("false");
+    expect(role(card, "body-tab-print").getAttribute("aria-selected")).toBe("true");
     await vi.advanceTimersByTimeAsync(5000);
     expect(wsCalls(hass, "home_print/scan/state")).toHaveLength(0);
     await openPanel(card);
@@ -2481,7 +2484,8 @@ describe("scan", () => {
 
   it("has English scan texts", async () => {
     const card = await mount(makeHass({ language: "en", printers: [scanPrinter()] }));
-    expect(role(card, "scan-toggle").textContent.trim()).toBe("Scan");
+    expect(text(card, "body-tab-print")).toBe("Print");
+    expect(text(card, "body-tab-scan")).toBe("Scan");
     await openPanel(card);
     expect(text(card, "scan-start")).toBe("Start scan");
     role(card, "history-button").click();
@@ -2579,9 +2583,9 @@ describe("printer switcher (issue #7)", () => {
   it("choosing a printer switches the scanner", async () => {
     const scanning = laser({ scanner: scannerBlock() });
     const card = await mount(makeHass({ printers: [deskjetPrinter(), scanning], states: states() }));
-    expect(visible(card, "scan-toggle")).toBe(false);
+    expect(visible(card, "body-tabs")).toBe(false);
     await switchTo(card, "laser");
-    expect(visible(card, "scan-toggle")).toBe(true);
+    expect(visible(card, "body-tabs")).toBe(true);
   });
 
   it("keeps the choice across a reload", async () => {
@@ -2699,7 +2703,7 @@ describe("printer switcher (issue #7)", () => {
       scanStates: [scanState()],
     });
     const card = await mount(hass);
-    role(card, "scan-toggle").click();
+    role(card, "body-tab-scan").click();
     await flush();
     role(card, "scan-start").click();
     await flush();
@@ -2746,5 +2750,130 @@ describe("printer switcher (issue #7)", () => {
     expect(list(card).getAttribute("aria-label")).toBe("Printer");
     const tr = await mount(two());
     expect(role(tr, "switcher").getAttribute("aria-label")).toBe("Yazıcı değiştir: DeskJet 4670");
+  });
+});
+
+describe("Print and Scan tabs (issue #8)", () => {
+  const scanPrinter = (overrides = {}) => deskjetPrinter({ scanner: scannerBlock(), ...overrides });
+  const key = (el, k) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+
+  it("Print is the default tab", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    const tabs = role(card, "body-tabs");
+    expect(tabs.getAttribute("role")).toBe("tablist");
+    const print = role(card, "body-tab-print");
+    const scan = role(card, "body-tab-scan");
+    expect([print.textContent, scan.textContent]).toEqual(["Yazdır", "Tara"]);
+    expect(print.getAttribute("aria-selected")).toBe("true");
+    expect(scan.getAttribute("aria-selected")).toBe("false");
+    expect(print.getAttribute("aria-controls")).toBe("print-panel");
+    expect(scan.getAttribute("aria-controls")).toBe("scan-panel");
+    expect(visible(card, "print-panel")).toBe(true);
+    expect(visible(card, "scan-panel")).toBe(false);
+    expect(role(card, "print-panel").getAttribute("role")).toBe("tabpanel");
+    expect(role(card, "scan-panel").getAttribute("aria-labelledby")).toBe("body-tab-scan");
+    // Under the header and the notice, above the print content.
+    expect(tabs.previousElementSibling).toBe(role(card, "notice"));
+    expect(tabs.nextElementSibling).toBe(role(card, "print-panel"));
+  });
+
+  it("the Scan tab shows the panel; the header stays", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    role(card, "body-tab-scan").click();
+    await flush();
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(visible(card, "print-panel")).toBe(false);
+    expect(text(card, "title")).toBe("DeskJet 4670");
+    expect(text(card, "state")).toBe("Hazır");
+    expect(visible(card, "history-button")).toBe(true);
+  });
+
+  it("arrow keys move between the tabs", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    const print = role(card, "body-tab-print");
+    print.focus();
+    key(print, "ArrowRight");
+    await flush();
+    expect(role(card, "body-tab-scan").getAttribute("aria-selected")).toBe("true");
+    expect(card.shadowRoot.activeElement).toBe(role(card, "body-tab-scan"));
+    expect(print.tabIndex).toBe(-1);
+    key(role(card, "body-tab-scan"), "ArrowLeft");
+    await flush();
+    expect(print.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("the print tab is laid out in rows, top to bottom", async () => {
+    const card = await mount(makeHass({ printers: [scanPrinter()] }));
+    const panel = role(card, "print-panel");
+    const order = [...panel.children].filter((el) => !el.hidden || el.dataset.role === "message");
+    const names = order.map((el) => el.dataset.role ?? el.dataset.opt);
+    expect(names.slice(0, 5)).toEqual(["ink", "file-row", "options", "pages", "print"]);
+    const fileRow = role(card, "file-row");
+    expect(fileRow.children[0]).toBe(role(card, "pick"));
+    expect(fileRow.children[1]).toBe($(card, '[data-opt="copies"]'));
+    const options = role(card, "options");
+    expect([...options.children].map((el) => el.dataset.opt)).toEqual(["duplex", "color"]);
+    expect(card.shadowRoot.querySelector(".scan-toggle")).toBeNull();
+  });
+
+  it("long file names ellipsize under the Choose file row", async () => {
+    const card = await mount(makeHass());
+    expect(visible(card, "file-info")).toBe(false);
+    const name = `${"uzun-bir-dosya-adi-".repeat(8)}.pdf`;
+    await selectFile(card, makeFile(name, "application/pdf"));
+    expect(visible(card, "file-info")).toBe(true);
+    expect(text(card, "file-name")).toBe(name);
+    const style = card.shadowRoot.querySelector("style").textContent;
+    expect(style).toMatch(/\.file-name \{[^}]*text-overflow: ellipsis/);
+    expect(style).toMatch(/\.file-info \{[^}]*min-width: 0/);
+    expect(style).toMatch(/\.file-row \{[^}]*flex-wrap: wrap/);
+    expect(style).toMatch(/\.options \{[^}]*flex-wrap: wrap/);
+    expect(style).toMatch(/\.tab \{[^}]*min-height: 48px/);
+  });
+
+  it("a row with nothing to show is hidden", async () => {
+    const plain = deskjetPrinter({
+      capabilities: { ...deskjetPrinter().capabilities, sides: ["one-sided"], color_modes: ["monochrome"] },
+    });
+    const card = await mount(makeHass({ printers: [plain] }));
+    expect(visible(card, "options")).toBe(false);
+  });
+
+  it("a scan already running opens on the Scan tab", async () => {
+    const hass = makeHass({
+      printers: [scanPrinter({ scanner: scannerBlock({ active_scan_id: "s9" }) })],
+      scanStates: [scanState({ scan_id: "s9" })],
+    });
+    const card = await mount(hass);
+    expect(role(card, "body-tab-scan").getAttribute("aria-selected")).toBe("true");
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(visible(card, "print-panel")).toBe(false);
+  });
+
+  it("a running scan keeps the Scan tab reachable and printing works on the Print tab", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], scanStates: [scanState()] });
+    const card = await mount(hass);
+    role(card, "body-tab-scan").click();
+    await flush();
+    role(card, "scan-start").click();
+    await flush();
+    role(card, "body-tab-print").click();
+    await flush();
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    expect(role(card, "print").disabled).toBe(false);
+    role(card, "body-tab-scan").click();
+    await flush();
+    expect(visible(card, "scan-panel")).toBe(true);
+    expect(role(card, "scan-start").disabled).toBe(true);
+    expect(visible(card, "scan-cancel")).toBe(true);
+  });
+
+  it("print messages stay on the Print tab", async () => {
+    const hass = makeHass({ printers: [scanPrinter()], jobs: [{ job_id: 42, state: "processing" }] });
+    const card = await mount(hass);
+    await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
+    await clickPrint(card);
+    expect(role(card, "print-panel").contains(role(card, "message"))).toBe(true);
+    expect(text(card, "message")).not.toBe("");
   });
 });

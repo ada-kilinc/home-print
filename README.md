@@ -22,7 +22,7 @@ Print to your network printer from the Home Assistant dashboard, from anywhere y
 - **Prints PDF, JPEG and PNG.** If the printer doesn't take a format directly, Home Print converts it to PWG Raster, Apple Raster (URF) or JPEG first. Duplex, copies, colour/mono and page ranges are supported where the printer supports them. Large phone photos are shrunk automatically (JPEG up to 175 MP, PNG up to 50 MP).
 - **Dashboard card** to pick a file or photo on your phone, choose options and follow the job until it's done.
 - **`home_print.print_file` action** for automations.
-- **Scans** with the printer's scanner (eSCL / AirScan): a **Scan** button on the card, an archive in the Media panel and a `home_print.scan` action. See [Scanning](#scanning).
+- **Scans** with the printer's scanner (eSCL / AirScan): a **Scan** tab on the card, an archive in the Media panel and a `home_print.scan` action. See [Scanning](#scanning).
 
 Not yet: Word/ODF files (save as PDF first), very old or USB-only printers (a helper add-on with CUPS is planned).
 
@@ -67,7 +67,7 @@ Per printer (**Configure**): default duplex and colour mode, maximum file size (
 
 If your printer has a scanner, Home Print finds it on the printer's own address (eSCL, also known as AirScan). Nothing extra to set up.
 
-- **Card:** the **Scan** button sits under **Print**. It opens the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. While it runs, **Cancel** stops it. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
+- **Card:** a printer with a scanner gets two tabs under the header, **Print** (open by default) and **Scan**. The Scan tab holds the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. While it runs, **Cancel** stops it. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
 - **History:** the clock icon in the card header opens a window with two tabs, **Prints** and **Scans**.
 - **Where files go:** every scan is saved as `home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) in the default media root (`/media` on Home Assistant OS) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
 - **Options** (per printer, **Configure**):
@@ -136,7 +136,7 @@ Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ
 - Durum, mürekkep seviyesi ve sorun (kâğıt bitti, sıkıştı, kapak açık) sensörleri.
 - PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir. Telefonla çekilmiş büyük fotoğraflar otomatik küçültülür (JPEG 175 MP'ye, PNG 50 MP'ye kadar).
 - Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
-- Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** düğmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
+- Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** sekmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
 
 **Sorun giderme:** Kart görünmüyorsa ya da "Custom element doesn't exist" diyorsa adım adım çözümü [docs/troubleshooting.md](docs/troubleshooting.md#the-card-doesnt-show-up) sayfasında (İngilizce): kart adresini aç, 404 ise HACS'ta **Redownload** yap, Home Assistant'ı yeniden başlat, sayfayı Cmd/Ctrl+Shift+R ile yenile.
 
@@ -154,7 +154,7 @@ Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor.
 
 Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bulur (eSCL, diğer adıyla AirScan). Ayrıca kurulum gerekmez.
 
-- **Kart:** **Tara** düğmesi **Yazdır**'ın altında. Basınca tarama paneli açılır: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Sürerken **İptal** ile durdurabilirsin. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
+- **Kart:** Tarayıcısı olan yazıcıda başlığın altında iki sekme var: **Yazdır** (açılışta bu gelir) ve **Tara**. Tarama paneli **Tara** sekmesinde: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Sürerken **İptal** ile durdurabilirsin. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
 - **Geçmiş:** Kartın başlığındaki saat simgesi **Baskılar** ve **Taramalar** diye iki sekmeli bir pencere açar.
 - **Dosyalar nerede:** Her tarama varsayılan medya klasöründe (Home Assistant OS'ta `/media`) `home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
 - **Ayarlar** (her yazıcının **Yapılandır** ekranında):
