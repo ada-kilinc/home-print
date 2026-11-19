@@ -333,10 +333,10 @@ export class ScanPart {
       entryId: result.entryId,
       record: result.record,
       page: result.page,
-      onDone: (updated) => {
+      onDone: (updated, page) => {
         if (this._scanResult !== result) return;
         result.record = { ...result.record, ...updated };
-        this._loadScanImage();
+        if (page === result.page) this._loadScanImage();
         this._reloadScans(result.entryId);
         this._update();
       },

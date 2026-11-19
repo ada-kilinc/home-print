@@ -13,56 +13,89 @@ import { pickLanguage, t } from "./i18n.js";
 const FULL_PAGE = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
 
 export class CropPart {
-  // spec: { entryId, record, page, onDone(record) }
+  // spec: { entryId, record, page, onDone(record, page) }
+  // The arrows move between the scan's pages; each page keeps its own frame
+  // while the dialog is open, and Crop saves the page shown.
   _openCrop(spec) {
     this._closeCrop();
     const lang = pickLanguage(this._hass);
     const crop = {
       spec,
       lang,
-      token: ++this._cropToken,
+      record: spec.record,
+      page: spec.page,
+      // Frames already moved on other pages, by page number.
+      boxes: new Map(),
       box: { ...FULL_PAGE },
       found: false,
       drag: null,
       saving: false,
+      load: 0,
     };
     this._crop = crop;
-    this._role("crop-title").textContent = t(lang, "crop_title", { n: spec.page });
-    this._role("crop-frame").hidden = true;
-    this._setCropStatus(t(lang, "history_loading"));
-    this._renderCropButtons();
+    this._cropToken += 1;
     this._showDialog(this._role("crop-dialog"));
-    this._loadCropImage(crop);
+    this._showCropPage(crop);
   }
 
-  async _loadCropImage(crop) {
+  _cropTotal(crop) {
+    return Math.max(1, Number(crop.record.pages) || 1);
+  }
+
+  _showCropPage(crop, note = null) {
+    const { lang } = crop;
+    const total = this._cropTotal(crop);
+    this._role("crop-title").textContent = t(lang, "crop_title", { n: crop.page });
+    this._role("crop-nav").hidden = total <= 1;
+    this._role("crop-page-label").textContent = t(lang, "scan_page_of", { n: crop.page, total });
+    this._role("crop-frame").hidden = true;
+    this._setCropStatus(note ?? t(lang, "history_loading"));
+    this._renderCropButtons();
+    this._loadCropImage(crop, note);
+  }
+
+  _onCropPage(step) {
+    const crop = this._crop;
+    if (!crop || crop.saving) return;
+    const page = Math.min(Math.max(1, crop.page + step), this._cropTotal(crop));
+    if (page === crop.page) return;
+    if (!this._role("crop-frame").hidden) crop.boxes.set(crop.page, { ...crop.box });
+    crop.drag = null;
+    crop.page = page;
+    this._showCropPage(crop);
+  }
+
+  async _loadCropImage(crop, note = null) {
     const { spec, lang } = crop;
+    const load = ++crop.load;
+    const live = () => crop === this._crop && load === crop.load;
     let path;
     try {
-      path = await this._signPath(scanPagePath(spec.entryId, spec.record.id, spec.page));
+      path = await this._signPath(scanPagePath(spec.entryId, crop.record.id, crop.page));
     } catch (_err) {
-      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+      if (live()) this._setCropStatus(t(lang, "preview_failed"), true);
       return;
     }
-    if (crop !== this._crop) return;
+    if (!live()) return;
     // A fresh image each time, so a late load of the previous one is ignored.
     const img = document.createElement("img");
     img.dataset.role = "crop-img";
     img.draggable = false;
-    img.alt = t(lang, "preview_page", { n: spec.page });
+    img.alt = t(lang, "preview_page", { n: crop.page });
     this._role("crop-img")?.remove();
     this._role("crop-stage").prepend(img);
     img.onload = () => {
-      if (crop !== this._crop) return;
-      const found = this._findPaper(img);
+      if (!live()) return;
+      const kept = crop.boxes.get(crop.page);
+      const found = kept ? null : this._findPaper(img);
       crop.found = Boolean(found);
-      crop.box = found ?? { ...FULL_PAGE };
+      crop.box = kept ?? found ?? { ...FULL_PAGE };
       this._role("crop-frame").hidden = false;
-      this._setCropStatus(t(lang, found ? "crop_found" : "crop_hint"));
+      this._setCropStatus(note ?? t(lang, kept ? "crop_hint" : found ? "crop_found" : "crop_hint"));
       this._renderCrop();
     };
     img.onerror = () => {
-      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+      if (live()) this._setCropStatus(t(lang, "preview_failed"), true);
     };
     img.src = path;
   }
@@ -106,6 +139,9 @@ export class CropPart {
     this._role("crop-save").disabled = !ready || crop.saving || whole;
     this._role("crop-full").disabled = !ready || crop.saving || whole;
     this._role("crop-cancel").disabled = Boolean(crop?.saving);
+    const total = crop ? this._cropTotal(crop) : 1;
+    this._role("crop-prev").disabled = !crop || crop.saving || crop.page <= 1;
+    this._role("crop-next").disabled = !crop || crop.saving || crop.page >= total;
   }
 
   _setCropStatus(text, error = false) {
@@ -197,8 +233,8 @@ export class CropPart {
         await this._hass.callWS({
           type: "home_print/scans/crop",
           entry_id: spec.entryId,
-          scan_record_id: spec.record.id,
-          page: spec.page,
+          scan_record_id: crop.record.id,
+          page: crop.page,
           box: roundBox(crop.box),
         })
       )?.entry;
@@ -211,8 +247,17 @@ export class CropPart {
       return;
     }
     if (crop !== this._crop) return;
-    this._closeCrop();
-    spec.onDone?.(record ?? spec.record);
+    const page = crop.page;
+    crop.record = record ?? crop.record;
+    crop.saving = false;
+    crop.boxes.delete(page);
+    spec.onDone?.(crop.record, page);
+    if (this._cropTotal(crop) <= 1) {
+      this._closeCrop();
+      return;
+    }
+    // More pages: stay, and show this one cropped.
+    this._showCropPage(crop, t(lang, "crop_done", { n: page }));
   }
 
   _closeCrop() {

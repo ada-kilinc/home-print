@@ -181,6 +181,15 @@ export const TEMPLATE = `
             <button type="button" class="crop-handle" data-corner="se" data-aria="crop_corner_se"></button>
           </div>
         </div>
+        <div class="scan-nav" data-role="crop-nav" hidden>
+          <button type="button" class="icon-button" data-role="crop-prev" data-aria="scan_prev">
+            ${svg("chevron_left")}
+          </button>
+          <span data-role="crop-page-label"></span>
+          <button type="button" class="icon-button" data-role="crop-next" data-aria="scan_next">
+            ${svg("chevron_right")}
+          </button>
+        </div>
         <div class="sheet-status" data-role="crop-status" role="status"></div>
         <div class="crop-actions">
           <button type="button" class="file-button" data-role="crop-full" data-t="crop_full"></button>

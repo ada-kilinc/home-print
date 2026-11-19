@@ -463,14 +463,17 @@ export class HistoryPart {
         entryId,
         record,
         page,
-        onDone: (updated) => {
+        onDone: (updated, cropped) => {
           preview.crop = { entryId, record: updated };
-          if (preview.token !== this._previewToken || !box.isConnected) return;
-          delete box.dataset.state;
-          box.classList.remove("loaded");
-          box.replaceChildren();
-          this._loadPage(preview, box);
           this._reloadScans(entryId);
+          if (preview.token !== this._previewToken) return;
+          // The page cropped may be another one than this button's.
+          const target = preview.body.querySelector(`[data-page="${cropped}"]`);
+          if (!target?.isConnected) return;
+          delete target.dataset.state;
+          target.classList.remove("loaded");
+          target.replaceChildren();
+          this._loadPage(preview, target);
         },
       });
     });

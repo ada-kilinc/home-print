@@ -110,6 +110,8 @@ export class HomePrintCard extends HTMLElement {
     this._role("crop-cancel").addEventListener("click", () => this._closeCrop());
     this._role("crop-full").addEventListener("click", () => this._onCropFull());
     this._role("crop-save").addEventListener("click", () => this._onCropSave());
+    this._role("crop-prev").addEventListener("click", () => this._onCropPage(-1));
+    this._role("crop-next").addEventListener("click", () => this._onCropPage(1));
     const stage = this._role("crop-stage");
     stage.addEventListener("pointerdown", (ev) => this._onCropPointerDown(ev));
     stage.addEventListener("pointermove", (ev) => this._onCropPointerMove(ev));

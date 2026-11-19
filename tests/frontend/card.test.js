@@ -3157,6 +3157,56 @@ describe("cropping scans (issue #9)", () => {
     expect(wsCalls(hass, "auth/sign_path").length).toBeGreaterThan(signsBefore);
   });
 
+  it("moves between pages, keeps each page's frame and stays open after a crop", async () => {
+    const record = scanRecord({ pages: 3 });
+    const hass = makeHass({
+      printers: [scanning()],
+      scans: [record],
+      scanStates: [scanState({ state: "done", pages: 3, record })],
+    });
+    const card = await showResult(hass);
+    role(card, "scan-crop").click();
+    await loadCropImage(card);
+    expect(visible(card, "crop-nav")).toBe(true);
+    expect(text(card, "crop-page-label")).toBe("Sayfa 1/3");
+    expect(role(card, "crop-prev").disabled).toBe(true);
+    const frame = role(card, "crop-frame");
+    const nudge = (corner, key) =>
+      $(card, `[data-corner="${corner}"]`).dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+    nudge("nw", "ArrowRight");
+    expect(frame.style.left).toBe("1%");
+
+    role(card, "crop-next").click();
+    await loadCropImage(card);
+    expect(text(card, "crop-title")).toBe("Sayfa 2: kırp");
+    expect(text(card, "crop-page-label")).toBe("Sayfa 2/3");
+    // A new page starts on its own frame.
+    expect(frame.style.left).toBe("0%");
+    role(card, "crop-prev").click();
+    await loadCropImage(card);
+    // Page 1 still has the frame moved before.
+    expect(frame.style.left).toBe("1%");
+
+    role(card, "crop-save").click();
+    await flush();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/crop").at(-1)).toMatchObject({ page: 1 });
+    expect(role(card, "crop-dialog").open).toBe(true);
+    expect(text(card, "crop-status")).toBe("Sayfa 1 kırpıldı.");
+    role(card, "crop-next").click();
+    role(card, "crop-next").click();
+    await loadCropImage(card);
+    expect(text(card, "crop-page-label")).toBe("Sayfa 3/3");
+    expect(role(card, "crop-next").disabled).toBe(true);
+    nudge("se", "ArrowUp");
+    role(card, "crop-save").click();
+    await flush();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/crop").at(-1)).toMatchObject({ page: 3 });
+  });
+
   it("Whole page resets the frame and Cancel keeps the page", async () => {
     const record = scanRecord();
     const hass = makeHass({

@@ -236,6 +236,7 @@ var STRINGS = {
     crop_found: "Kâğıdın kenarları bulundu. Gerekirse köşeleri düzelt.",
     crop_saving: "Kırpılıyor…",
     crop_failed: "Sayfa kırpılamadı.",
+    crop_done: "Sayfa {n} kırpıldı.",
     crop_corner_nw: "Sol üst köşe",
     crop_corner_ne: "Sağ üst köşe",
     crop_corner_sw: "Sol alt köşe",
@@ -394,6 +395,7 @@ var STRINGS = {
     crop_found: "Found the paper's edges. Adjust the corners if needed.",
     crop_saving: "Cropping…",
     crop_failed: "Couldn't crop the page.",
+    crop_done: "Page {n} cropped.",
     crop_corner_nw: "Top left corner",
     crop_corner_ne: "Top right corner",
     crop_corner_sw: "Bottom left corner",
@@ -687,54 +689,84 @@ function moveCropCorner(box, corner, dx, dy, min = 0.05) {
 // frontend/src/crop.js
 var FULL_PAGE = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
 var CropPart = class {
-  // spec: { entryId, record, page, onDone(record) }
+  // spec: { entryId, record, page, onDone(record, page) }
+  // The arrows move between the scan's pages; each page keeps its own frame
+  // while the dialog is open, and Crop saves the page shown.
   _openCrop(spec) {
     this._closeCrop();
     const lang = pickLanguage(this._hass);
     const crop = {
       spec,
       lang,
-      token: ++this._cropToken,
+      record: spec.record,
+      page: spec.page,
+      // Frames already moved on other pages, by page number.
+      boxes: /* @__PURE__ */ new Map(),
       box: { ...FULL_PAGE },
       found: false,
       drag: null,
-      saving: false
+      saving: false,
+      load: 0
     };
     this._crop = crop;
-    this._role("crop-title").textContent = t(lang, "crop_title", { n: spec.page });
-    this._role("crop-frame").hidden = true;
-    this._setCropStatus(t(lang, "history_loading"));
-    this._renderCropButtons();
+    this._cropToken += 1;
     this._showDialog(this._role("crop-dialog"));
-    this._loadCropImage(crop);
+    this._showCropPage(crop);
   }
-  async _loadCropImage(crop) {
+  _cropTotal(crop) {
+    return Math.max(1, Number(crop.record.pages) || 1);
+  }
+  _showCropPage(crop, note = null) {
+    const { lang } = crop;
+    const total = this._cropTotal(crop);
+    this._role("crop-title").textContent = t(lang, "crop_title", { n: crop.page });
+    this._role("crop-nav").hidden = total <= 1;
+    this._role("crop-page-label").textContent = t(lang, "scan_page_of", { n: crop.page, total });
+    this._role("crop-frame").hidden = true;
+    this._setCropStatus(note ?? t(lang, "history_loading"));
+    this._renderCropButtons();
+    this._loadCropImage(crop, note);
+  }
+  _onCropPage(step) {
+    const crop = this._crop;
+    if (!crop || crop.saving) return;
+    const page = Math.min(Math.max(1, crop.page + step), this._cropTotal(crop));
+    if (page === crop.page) return;
+    if (!this._role("crop-frame").hidden) crop.boxes.set(crop.page, { ...crop.box });
+    crop.drag = null;
+    crop.page = page;
+    this._showCropPage(crop);
+  }
+  async _loadCropImage(crop, note = null) {
     const { spec, lang } = crop;
+    const load = ++crop.load;
+    const live = () => crop === this._crop && load === crop.load;
     let path;
     try {
-      path = await this._signPath(scanPagePath(spec.entryId, spec.record.id, spec.page));
+      path = await this._signPath(scanPagePath(spec.entryId, crop.record.id, crop.page));
     } catch (_err) {
-      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+      if (live()) this._setCropStatus(t(lang, "preview_failed"), true);
       return;
     }
-    if (crop !== this._crop) return;
+    if (!live()) return;
     const img = document.createElement("img");
     img.dataset.role = "crop-img";
     img.draggable = false;
-    img.alt = t(lang, "preview_page", { n: spec.page });
+    img.alt = t(lang, "preview_page", { n: crop.page });
     this._role("crop-img")?.remove();
     this._role("crop-stage").prepend(img);
     img.onload = () => {
-      if (crop !== this._crop) return;
-      const found = this._findPaper(img);
+      if (!live()) return;
+      const kept = crop.boxes.get(crop.page);
+      const found = kept ? null : this._findPaper(img);
       crop.found = Boolean(found);
-      crop.box = found ?? { ...FULL_PAGE };
+      crop.box = kept ?? found ?? { ...FULL_PAGE };
       this._role("crop-frame").hidden = false;
-      this._setCropStatus(t(lang, found ? "crop_found" : "crop_hint"));
+      this._setCropStatus(note ?? t(lang, kept ? "crop_hint" : found ? "crop_found" : "crop_hint"));
       this._renderCrop();
     };
     img.onerror = () => {
-      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+      if (live()) this._setCropStatus(t(lang, "preview_failed"), true);
     };
     img.src = path;
   }
@@ -775,6 +807,9 @@ var CropPart = class {
     this._role("crop-save").disabled = !ready || crop.saving || whole;
     this._role("crop-full").disabled = !ready || crop.saving || whole;
     this._role("crop-cancel").disabled = Boolean(crop?.saving);
+    const total = crop ? this._cropTotal(crop) : 1;
+    this._role("crop-prev").disabled = !crop || crop.saving || crop.page <= 1;
+    this._role("crop-next").disabled = !crop || crop.saving || crop.page >= total;
   }
   _setCropStatus(text, error = false) {
     const status = this._role("crop-status");
@@ -852,8 +887,8 @@ var CropPart = class {
       record = (await this._hass.callWS({
         type: "home_print/scans/crop",
         entry_id: spec.entryId,
-        scan_record_id: spec.record.id,
-        page: spec.page,
+        scan_record_id: crop.record.id,
+        page: crop.page,
         box: roundBox(crop.box)
       }))?.entry;
     } catch (err) {
@@ -865,8 +900,16 @@ var CropPart = class {
       return;
     }
     if (crop !== this._crop) return;
-    this._closeCrop();
-    spec.onDone?.(record ?? spec.record);
+    const page = crop.page;
+    crop.record = record ?? crop.record;
+    crop.saving = false;
+    crop.boxes.delete(page);
+    spec.onDone?.(crop.record, page);
+    if (this._cropTotal(crop) <= 1) {
+      this._closeCrop();
+      return;
+    }
+    this._showCropPage(crop, t(lang, "crop_done", { n: page }));
   }
   _closeCrop() {
     if (this._crop) this._crop.drag = null;
@@ -1338,14 +1381,16 @@ var HistoryPart = class {
         entryId,
         record,
         page,
-        onDone: (updated) => {
+        onDone: (updated, cropped) => {
           preview.crop = { entryId, record: updated };
-          if (preview.token !== this._previewToken || !box.isConnected) return;
-          delete box.dataset.state;
-          box.classList.remove("loaded");
-          box.replaceChildren();
-          this._loadPage(preview, box);
           this._reloadScans(entryId);
+          if (preview.token !== this._previewToken) return;
+          const target = preview.body.querySelector(`[data-page="${cropped}"]`);
+          if (!target?.isConnected) return;
+          delete target.dataset.state;
+          target.classList.remove("loaded");
+          target.replaceChildren();
+          this._loadPage(preview, target);
         }
       });
     });
@@ -1999,10 +2044,10 @@ var ScanPart = class {
       entryId: result.entryId,
       record: result.record,
       page: result.page,
-      onDone: (updated) => {
+      onDone: (updated, page) => {
         if (this._scanResult !== result) return;
         result.record = { ...result.record, ...updated };
-        this._loadScanImage();
+        if (page === result.page) this._loadScanImage();
         this._reloadScans(result.entryId);
         this._update();
       }
@@ -3067,6 +3112,15 @@ var TEMPLATE = `
             <button type="button" class="crop-handle" data-corner="se" data-aria="crop_corner_se"></button>
           </div>
         </div>
+        <div class="scan-nav" data-role="crop-nav" hidden>
+          <button type="button" class="icon-button" data-role="crop-prev" data-aria="scan_prev">
+            ${svg("chevron_left")}
+          </button>
+          <span data-role="crop-page-label"></span>
+          <button type="button" class="icon-button" data-role="crop-next" data-aria="scan_next">
+            ${svg("chevron_right")}
+          </button>
+        </div>
         <div class="sheet-status" data-role="crop-status" role="status"></div>
         <div class="crop-actions">
           <button type="button" class="file-button" data-role="crop-full" data-t="crop_full"></button>
@@ -3230,6 +3284,8 @@ var HomePrintCard = class extends HTMLElement {
     this._role("crop-cancel").addEventListener("click", () => this._closeCrop());
     this._role("crop-full").addEventListener("click", () => this._onCropFull());
     this._role("crop-save").addEventListener("click", () => this._onCropSave());
+    this._role("crop-prev").addEventListener("click", () => this._onCropPage(-1));
+    this._role("crop-next").addEventListener("click", () => this._onCropPage(1));
     const stage = this._role("crop-stage");
     stage.addEventListener("pointerdown", (ev) => this._onCropPointerDown(ev));
     stage.addEventListener("pointermove", (ev) => this._onCropPointerMove(ev));
