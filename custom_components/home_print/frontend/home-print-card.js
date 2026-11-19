@@ -221,6 +221,8 @@ var STRINGS = {
     scans_empty: "Henüz tarama yok.",
     scan_error_scanner_busy: "Tarayıcı şu an meşgul.",
     scan_error_scanner_unavailable: "Tarayıcıya ulaşılamadı.",
+    update_available: "Home Print {version} sürümüne güncellendi.",
+    update_reload: "Yenile",
     crop: "Kırp",
     crop_title: "Sayfa {n}: kırp",
     crop_save: "Kırp",
@@ -373,6 +375,8 @@ var STRINGS = {
     scans_empty: "No scans yet.",
     scan_error_scanner_busy: "The scanner is busy right now.",
     scan_error_scanner_unavailable: "Couldn't reach the scanner.",
+    update_available: "Home Print was updated to {version}.",
+    update_reload: "Reload",
     crop: "Crop",
     crop_title: "Page {n}: crop",
     crop_save: "Crop",
@@ -474,11 +478,11 @@ function isProblemState(status, lang = "en") {
   return status?.state === "stopped" && knownReasons(lang, status).length > 0;
 }
 function jobLabel(lang, status, { twoSided: twoSided2 = false } = {}) {
-  const state = status?.state;
+  const state2 = status?.state;
   const reasons = knownReasons(lang, status);
   const withReasons = (key) => t(lang, key) + (reasons.length ? t(lang, "job_reasons", { reasons: reasons.join(", ") }) : "");
   const pausing = () => t(lang, twoSided2 ? "job_pausing_duplex" : "job_pausing");
-  switch (state) {
+  switch (state2) {
     case "pending":
     case "processing":
       return t(lang, "job_printing");
@@ -531,9 +535,9 @@ function formatHistoryTime(lang, iso) {
     return new Intl.DateTimeFormat("en", options).format(date);
   }
 }
-function historyStateIcon(state) {
-  if (state === "completed") return "✓";
-  if (["aborted", "canceled", "error"].includes(state)) return "✗";
+function historyStateIcon(state2) {
+  if (state2 === "completed") return "✓";
+  if (["aborted", "canceled", "error"].includes(state2)) return "✗";
   return "…";
 }
 function previewPath(entryId, recordId, page) {
@@ -1095,12 +1099,12 @@ var HistoryPart = class {
         });
       });
     }
-    const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
-    const icon = historyStateIcon(state);
+    const state2 = HISTORY_STATES.includes(record.state) ? record.state : "sent";
+    const icon = historyStateIcon(state2);
     const mark = document.createElement("span");
     mark.className = `history-mark ${icon === "✓" ? "ok" : icon === "✗" ? "bad" : "busy"}`;
     mark.textContent = icon;
-    mark.title = t(lang, `history_state_${state}`);
+    mark.title = t(lang, `history_state_${state2}`);
     mark.setAttribute("role", "img");
     mark.setAttribute("aria-label", mark.title);
     const textBox = document.createElement("span");
@@ -1766,22 +1770,22 @@ var ScanPart = class {
     if (appendPages === null) this._clearScanResult();
     this._scanMessage = { text: t(lang, "scan_scanning"), kind: "info" };
     this._update();
-    let state;
+    let state2;
     try {
-      state = (await this._hass.callWS({ type: "home_print/scan/start", entry_id: entryId, ...request }))?.scan;
+      state2 = (await this._hass.callWS({ type: "home_print/scan/start", entry_id: entryId, ...request }))?.scan;
     } catch (err) {
       if (this._scan !== scan) return;
       this._endScan(scanErrorText(lang, err?.code), "error");
       return;
     }
     if (this._scan !== scan) return;
-    scan.scanId = state?.scan_id ?? null;
+    scan.scanId = state2?.scan_id ?? null;
     if (!scan.scanId) {
       this._endScan(scanErrorText(lang, "scan_failed"), "error");
       return;
     }
     this._scanSeen.add(scan.scanId);
-    this._onScanState(scan, state);
+    this._onScanState(scan, state2);
   }
   // A scan the server is running that this card isn't following yet: after
   // a reload, or one started on another screen. A finished last_scan alone
@@ -1818,9 +1822,9 @@ var ScanPart = class {
       this._endScan(t(lang, "scan_timeout"), "error");
       return;
     }
-    let state;
+    let state2;
     try {
-      state = (await this._hass.callWS({
+      state2 = (await this._hass.callWS({
         type: "home_print/scan/state",
         entry_id: scan.entryId,
         scan_id: scan.scanId
@@ -1835,18 +1839,18 @@ var ScanPart = class {
       return;
     }
     if (this._scan !== scan) return;
-    this._onScanState(scan, state);
+    this._onScanState(scan, state2);
   }
-  _onScanState(scan, state) {
+  _onScanState(scan, state2) {
     const lang = pickLanguage(this._hass);
-    const progress = `${state?.state}:${state?.pages}`;
+    const progress = `${state2?.state}:${state2?.pages}`;
     if (progress !== scan.progressKey) {
       scan.progressKey = progress;
       scan.progressAt = Date.now();
     }
-    switch (state?.state) {
+    switch (state2?.state) {
       case "done": {
-        const record = state.record;
+        const record = state2.record;
         if (record) {
           let page = 1;
           if (scan.appendPages !== null) page = scan.appendPages + 1;
@@ -1861,15 +1865,15 @@ var ScanPart = class {
       }
       case "error":
         this._endScan(
-          scanErrorText(lang, state.error),
-          state.error === "canceled" ? "info" : "error"
+          scanErrorText(lang, state2.error),
+          state2.error === "canceled" ? "info" : "error"
         );
         return;
       case "saving":
         this._scanMessage = { text: t(lang, "scan_saving"), kind: "info" };
         break;
       default: {
-        const pages = Number(state?.pages) || 0;
+        const pages = Number(state2?.pages) || 0;
         const text = pages > 0 ? t(lang, "scan_scanning_page", { n: pages + 1 }) : t(lang, "scan_scanning");
         this._scanMessage = { text, kind: "info" };
       }
@@ -1883,9 +1887,9 @@ var ScanPart = class {
     if (!scan?.scanId || scan.canceling || !this._hass) return;
     scan.canceling = true;
     this._update();
-    let state;
+    let state2;
     try {
-      state = (await this._hass.callWS({
+      state2 = (await this._hass.callWS({
         type: "home_print/scan/cancel",
         entry_id: scan.entryId,
         scan_id: scan.scanId
@@ -1902,7 +1906,7 @@ var ScanPart = class {
     }
     if (this._scan !== scan) return;
     scan.canceling = false;
-    this._onScanState(scan, state);
+    this._onScanState(scan, state2);
   }
   _endScan(text, kind) {
     clearTimeout(this._scanTimer);
@@ -2866,6 +2870,16 @@ var STYLE = `
     background: var(--card-background-color);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   }
+  .update {
+    display: flex;
+    align-items: center;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+  }
+  .update-text { flex: 1 1 160px; min-width: 0; }
 `;
 
 // frontend/src/template.js
@@ -2888,6 +2902,10 @@ var TEMPLATE = `
           </button>
         </div>
         <ul class="printer-list" id="printer-list" data-role="printer-list" role="listbox" hidden></ul>
+      </div>
+      <div class="update" data-role="update" role="status" hidden>
+        <span class="update-text" data-role="update-text"></span>
+        <button type="button" class="file-button" data-role="update-reload" data-t="update_reload"></button>
       </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
       <div class="tabs" role="tablist" data-role="body-tabs" hidden>
@@ -3051,6 +3069,80 @@ var TEMPLATE = `
   </dialog>
 `;
 
+// frontend/src/update.js
+var STORAGE_KEY = "home-print-card:reloaded-for";
+function ownVersion() {
+  try {
+    return new URL(import.meta.url).searchParams.get("v");
+  } catch (_err) {
+    return null;
+  }
+}
+var state = {
+  // The version this page runs: from the card's URL, else the first one the
+  // integration reports (a card added by hand without ?v=).
+  running: ownVersion(),
+  // A newer version the integration reported, or null.
+  pending: null,
+  cards: /* @__PURE__ */ new Set(),
+  reload: () => globalThis.location.reload()
+};
+function reloadedFor() {
+  try {
+    return globalThis.sessionStorage?.getItem(STORAGE_KEY) ?? null;
+  } catch (_err) {
+    return null;
+  }
+}
+function markReloaded(version) {
+  try {
+    globalThis.sessionStorage?.setItem(STORAGE_KEY, version);
+  } catch (_err) {
+  }
+}
+function registerCard(card) {
+  state.cards.add(card);
+}
+function unregisterCard(card) {
+  state.cards.delete(card);
+}
+function noteServerVersion(version) {
+  if (typeof version !== "string" || !version) return;
+  if (state.running === null) {
+    state.running = version;
+    return;
+  }
+  if (version === state.running || version === state.pending) return;
+  state.pending = version;
+  for (const card of state.cards) card._update();
+}
+function pendingVersion() {
+  return state.pending;
+}
+function maybeReload() {
+  const version = state.pending;
+  if (!version || reloadedFor() === version) return false;
+  for (const card of state.cards) if (card._isBusy()) return false;
+  markReloaded(version);
+  state.reload();
+  return true;
+}
+function reloadNow() {
+  if (state.pending) markReloaded(state.pending);
+  state.reload();
+}
+var updateState = {
+  reset({ running = null, reload } = {}) {
+    state.running = running;
+    state.pending = null;
+    if (reload) state.reload = reload;
+    try {
+      globalThis.sessionStorage?.removeItem(STORAGE_KEY);
+    } catch (_err) {
+    }
+  }
+};
+
 // frontend/src/card.js
 var HomePrintCard = class extends HTMLElement {
   constructor() {
@@ -3135,6 +3227,10 @@ var HomePrintCard = class extends HTMLElement {
     stage.addEventListener("pointercancel", (ev) => this._onCropPointerUp(ev));
     stage.addEventListener("keydown", (ev) => this._onCropKey(ev));
     this._role("scan-crop").addEventListener("click", () => this._onScanCrop());
+    this._role("update-reload").addEventListener("click", () => reloadNow());
+    this._onVisible = () => {
+      if (document.visibilityState === "visible" && this._hass) this._loadPrinters();
+    };
     for (const tab of this._bodyTabs()) {
       tab.addEventListener("click", () => this._selectTab(tab.dataset.bodyTab));
     }
@@ -3192,11 +3288,15 @@ var HomePrintCard = class extends HTMLElement {
     return 5;
   }
   connectedCallback() {
+    registerCard(this);
+    document.addEventListener("visibilitychange", this._onVisible);
     if (this._hass) this._startRefresh();
     if (this._job && !this._pollTimer) this._schedulePoll();
     if (this._scan?.scanId && !this._scanTimer) this._scheduleScanPoll();
   }
   disconnectedCallback() {
+    unregisterCard(this);
+    document.removeEventListener("visibilitychange", this._onVisible);
     this._closeHistory();
     this._closeMenu();
     this._closeList();
@@ -3219,6 +3319,7 @@ var HomePrintCard = class extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "home_print/printers" });
       this._printers = Array.isArray(result?.printers) ? result.printers : [];
+      noteServerVersion(result?.version);
       this._loadFailed = false;
     } catch (_err) {
       if (this._printers === null) this._loadFailed = true;
@@ -3328,6 +3429,7 @@ var HomePrintCard = class extends HTMLElement {
     const wanted = this._wantedId();
     const unknown = Boolean(wanted) && this._printers !== null && !printer;
     this._renderNotice(lang, printer, unknown, wanted);
+    this._renderUpdate(lang);
     const multi = printers.length > 1;
     const name = printer ? printer.title || printer.entry_id : "";
     this._role("title").textContent = (multi ? name : this._config.title || name) || this._config.title || "Home Print";
@@ -3350,6 +3452,19 @@ var HomePrintCard = class extends HTMLElement {
     }
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
+  // Something that a reload after an update would interrupt.
+  _isBusy() {
+    return Boolean(this._uploading || this._job || this._scan || this._crop || this._file) || this._anyDialogOpen() || !this._role("pick-menu").hidden;
+  }
+  // A newer Home Print is installed: reload when idle, else offer the button.
+  _renderUpdate(lang) {
+    const version = pendingVersion();
+    const bar = this._role("update");
+    bar.hidden = !version;
+    if (!version) return;
+    this._role("update-text").textContent = t(lang, "update_available", { version });
+    maybeReload();
+  }
   _renderNotice(lang, printer, unknown, wanted) {
     let key = null;
     if (this._loadFailed) key = "load_failed";
@@ -3365,12 +3480,12 @@ var HomePrintCard = class extends HTMLElement {
   _statusText(lang, printer) {
     if (!this._reachable(printer)) return t(lang, "state_unreachable");
     if (printer.kind === "scanner") {
-      const state2 = this._entityState(printer.entities?.scanner_status)?.state;
-      return SCANNER_STATES.includes(state2) ? t(lang, `scanner_state_${state2}`) : t(lang, "state_unknown");
+      const state3 = this._entityState(printer.entities?.scanner_status)?.state;
+      return SCANNER_STATES.includes(state3) ? t(lang, `scanner_state_${state3}`) : t(lang, "state_unknown");
     }
     const entity = this._entityState(printer.entities?.status)?.state;
-    const state = KNOWN_STATES.includes(entity) ? entity : printer.state;
-    let text = KNOWN_STATES.includes(state) ? t(lang, `state_${state}`) : t(lang, "state_unknown");
+    const state2 = KNOWN_STATES.includes(entity) ? entity : printer.state;
+    let text = KNOWN_STATES.includes(state2) ? t(lang, `state_${state2}`) : t(lang, "state_unknown");
     if (this._entityState(printer.entities?.problem)?.state === "on") {
       text += ` · ${t(lang, "problem")}`;
     }
@@ -3548,6 +3663,7 @@ HomePrintCard.helpers = Object.freeze({
   detectPaper,
   moveCropCorner
 });
+HomePrintCard.updateState = updateState;
 if (!customElements.get(CARD_TYPE)) {
   customElements.define(CARD_TYPE, HomePrintCard);
 }

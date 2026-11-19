@@ -14,6 +14,9 @@ from ..const import DOMAIN
 URL_BASE = "/home_print_static"
 CARD_FILE = "home-print-card.js"
 _REGISTERED = f"{DOMAIN}_frontend_registered"
+# The version the card was loaded for; the card reloads the page when the
+# integration it talks to is newer (see home_print/printers).
+DATA_VERSION = f"{DOMAIN}_version"
 
 
 async def async_register_frontend(hass: HomeAssistant) -> None:
@@ -22,6 +25,7 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         return
     hass.data[_REGISTERED] = True
     integration = await async_get_integration(hass, DOMAIN)
+    hass.data[DATA_VERSION] = str(integration.version)
     await hass.http.async_register_static_paths(
         [StaticPathConfig(URL_BASE, str(Path(__file__).parent), cache_headers=False)]
     )

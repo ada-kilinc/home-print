@@ -21,6 +21,7 @@ from .const import (
 )
 from .convert.pipeline import accepted_formats
 from .escl.errors import EsclError
+from .frontend import DATA_VERSION
 from .printing import COLOR_AUTO, max_file_mb
 from .scanner import is_scanner_only
 from .scanning import (
@@ -213,13 +214,18 @@ def _printer(
 def ws_printers(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """List the printers with what the card needs to render."""
+    """List the printers with what the card needs to render.
+
+    ``version`` is the integration's: a card from an older version reloads
+    the page, so an update reaches dashboards that are already open.
+    """
     connection.send_result(
         msg["id"],
         {
+            "version": hass.data.get(DATA_VERSION),
             "printers": [
                 _printer(hass, entry, connection) for entry in _listed_entries(hass)
-            ]
+            ],
         },
     )
 

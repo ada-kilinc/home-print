@@ -472,3 +472,20 @@ async def test_job_gone_keeps_history_state(hass, mock_client, hass_ws_client):
     )
     await _job_error(hass, hass_ws_client, entry.entry_id, job_id=42)
     assert entry.runtime_data.history.entries()[0]["state"] == "sent"
+
+
+async def test_printers_reports_the_integration_version(
+    hass, mock_client, hass_ws_client
+):
+    """The card compares it with its own and reloads after an update."""
+    manifest = json.loads(
+        (
+            Path(__file__).parent.parent / "custom_components/home_print/manifest.json"
+        ).read_text()
+    )
+    _setup_deskjet(mock_client)
+    await setup_entry(hass)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "home_print/printers"})
+    msg = await ws.receive_json()
+    assert msg["result"]["version"] == manifest["version"]

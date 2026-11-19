@@ -25,6 +25,10 @@ export const TEMPLATE = `
         </div>
         <ul class="printer-list" id="printer-list" data-role="printer-list" role="listbox" hidden></ul>
       </div>
+      <div class="update" data-role="update" role="status" hidden>
+        <span class="update-text" data-role="update-text"></span>
+        <button type="button" class="file-button" data-role="update-reload" data-t="update_reload"></button>
+      </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
       <div class="tabs" role="tablist" data-role="body-tabs" hidden>
         <button type="button" role="tab" class="tab" id="body-tab-print" data-role="body-tab-print" data-body-tab="print" data-t="tab_print" aria-controls="print-panel" aria-selected="true"></button>

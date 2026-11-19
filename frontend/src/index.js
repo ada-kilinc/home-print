@@ -1,6 +1,7 @@
 // Registers the card and its editor with Home Assistant.
 
 import { HomePrintCard } from "./card.js";
+import { updateState } from "./update.js";
 import { CARD_TYPE, EDITOR_TYPE } from "./constants.js";
 import { HomePrintCardEditor } from "./editor.js";
 import {
@@ -43,6 +44,9 @@ HomePrintCard.helpers = Object.freeze({
   detectPaper,
   moveCropCorner,
 });
+
+// Tests start the update check over and replace the page reload.
+HomePrintCard.updateState = updateState;
 
 if (!customElements.get(CARD_TYPE)) {
   customElements.define(CARD_TYPE, HomePrintCard);

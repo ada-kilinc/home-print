@@ -16,6 +16,14 @@ import { PrintPart } from "./print.js";
 import { ScanPart } from "./scan.js";
 import { SwitcherPart } from "./switcher.js";
 import { TEMPLATE } from "./template.js";
+import {
+  maybeReload,
+  noteServerVersion,
+  pendingVersion,
+  registerCard,
+  reloadNow,
+  unregisterCard,
+} from "./update.js";
 
 export class HomePrintCard extends HTMLElement {
   constructor() {
@@ -108,6 +116,11 @@ export class HomePrintCard extends HTMLElement {
     stage.addEventListener("pointercancel", (ev) => this._onCropPointerUp(ev));
     stage.addEventListener("keydown", (ev) => this._onCropKey(ev));
     this._role("scan-crop").addEventListener("click", () => this._onScanCrop());
+    this._role("update-reload").addEventListener("click", () => reloadNow());
+    // Back on the tab (or the app in front again): look for news at once.
+    this._onVisible = () => {
+      if (document.visibilityState === "visible" && this._hass) this._loadPrinters();
+    };
     for (const tab of this._bodyTabs()) {
       tab.addEventListener("click", () => this._selectTab(tab.dataset.bodyTab));
     }
@@ -172,12 +185,16 @@ export class HomePrintCard extends HTMLElement {
   }
 
   connectedCallback() {
+    registerCard(this);
+    document.addEventListener("visibilitychange", this._onVisible);
     if (this._hass) this._startRefresh();
     if (this._job && !this._pollTimer) this._schedulePoll();
     if (this._scan?.scanId && !this._scanTimer) this._scheduleScanPoll();
   }
 
   disconnectedCallback() {
+    unregisterCard(this);
+    document.removeEventListener("visibilitychange", this._onVisible);
     this._closeHistory();
     this._closeMenu();
     this._closeList();
@@ -202,6 +219,7 @@ export class HomePrintCard extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "home_print/printers" });
       this._printers = Array.isArray(result?.printers) ? result.printers : [];
+      noteServerVersion(result?.version);
       this._loadFailed = false;
     } catch (_err) {
       // Keep the last good list; only complain when there never was one.
@@ -326,6 +344,7 @@ export class HomePrintCard extends HTMLElement {
     const unknown = Boolean(wanted) && this._printers !== null && !printer;
 
     this._renderNotice(lang, printer, unknown, wanted);
+    this._renderUpdate(lang);
     // With a choice of printers the header names the one shown; the card's
     // own title is for a single printer.
     const multi = printers.length > 1;
@@ -351,6 +370,25 @@ export class HomePrintCard extends HTMLElement {
     }
     // The open history belongs to one printer; another one closes it.
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
+  }
+
+  // Something that a reload after an update would interrupt.
+  _isBusy() {
+    return (
+      Boolean(this._uploading || this._job || this._scan || this._crop || this._file) ||
+      this._anyDialogOpen() ||
+      !this._role("pick-menu").hidden
+    );
+  }
+
+  // A newer Home Print is installed: reload when idle, else offer the button.
+  _renderUpdate(lang) {
+    const version = pendingVersion();
+    const bar = this._role("update");
+    bar.hidden = !version;
+    if (!version) return;
+    this._role("update-text").textContent = t(lang, "update_available", { version });
+    maybeReload();
   }
 
   _renderNotice(lang, printer, unknown, wanted) {

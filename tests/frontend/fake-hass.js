@@ -128,6 +128,8 @@ export function scanState(overrides = {}) {
  * scans/rename). `scanStart` is the scan/start answer (a state, or an object
  * with `error` to reject); `scanStates` is a queue of scan/state answers like
  * `jobs`. `scanDeleteError` and `renameError` make those calls reject.
+ * `version` is the integration version printers reports (a value, or a
+ * function for one that changes); left out by default.
  * `cropError` makes scans/crop reject with that code.
  * `scanCancel` is the scan/cancel answer (a state, or an object with `error`
  * to reject); by default the scan comes back canceled.
@@ -150,6 +152,7 @@ export function makeHass({
   renameError = null,
   scanCancel = null,
   cropError = null,
+  version = undefined,
 } = {}) {
   const jobQueue = [...jobs];
   const scanQueue = [...scanStates];
@@ -164,7 +167,8 @@ export function makeHass({
       hass.calls.push(msg);
       if (msg.type === "home_print/printers") {
         if (printersError) throw printersError;
-        return { printers };
+        const v = typeof version === "function" ? version() : version;
+        return v === undefined ? { printers } : { version: v, printers };
       }
       if (msg.type === "home_print/job") {
         const next = jobQueue.length > 1 ? jobQueue.shift() : jobQueue[0];

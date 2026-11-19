@@ -499,4 +499,14 @@ export const STYLE = `
     background: var(--card-background-color);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   }
+  .update {
+    display: flex;
+    align-items: center;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+  }
+  .update-text { flex: 1 1 160px; min-width: 0; }
 `;
