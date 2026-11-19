@@ -8,10 +8,7 @@ Print and scan with your network printer from a Home Assistant dashboard, wherev
 
 > **Early release.** Tested in code and against a real HP DeskJet 4670, not yet in daily use. Please open an issue when something breaks.
 
-<p>
-  <img src="docs/images/card.png" alt="Print tab: ink levels, Choose file and Copies, Two-sided and Colour, Pages, Print" width="300">
-  <img src="docs/images/scan.png" alt="Scan tab with a finished two-page scan: preview, name, Download, Add page, Delete" width="300">
-</p>
+![The Home Print card: the Print tab, the Scan tab with a finished scan, and cropping a scanned receipt](docs/images/overview.png)
 
 ## Features
 
@@ -49,13 +46,7 @@ show_ink: true        # optional
 - **History:** the clock icon opens your prints and scans. Tap an entry to preview it.
 - **Crop:** tap **Crop** under a scan, or the crop button on a page in the history preview. The frame starts on the paper's edges when it finds them, and you can drag its corners. What's outside the frame is removed from the file, not just hidden.
 
-<p>
-  <img src="docs/images/printers.png" alt="Printer switcher open with three printers and their status" width="200">
-  <img src="docs/images/history.png" alt="History, Prints tab" width="200">
-  <img src="docs/images/scans.png" alt="History, Scans tab" width="200">
-  <img src="docs/images/preview.png" alt="Preview of a printed file" width="200">
-  <img src="docs/images/crop.png" alt="Cropping a scanned receipt: the frame sits on the paper's edges" width="200">
-</p>
+![The printer switcher, the print and scan history, and a page preview](docs/images/dialogs.png)
 
 ## Options
 

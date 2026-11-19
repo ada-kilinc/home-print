@@ -109,6 +109,24 @@ def card_shot(page: Page, name: str) -> None:
     print("wrote", OUT / name)
 
 
+def compose(names: list[str], out: str, gap: int = 40) -> None:
+    """Shots side by side, tops aligned, on a transparent background.
+
+    One image renders the same in every README viewer (GitHub, the HA
+    Marketplace), unlike inline images that each viewer lines up its own way.
+    """
+    images = [Image.open(OUT / name).convert("RGBA") for name in names]
+    width = sum(i.width for i in images) + gap * (len(images) - 1)
+    height = max(i.height for i in images)
+    sheet = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    x = 0
+    for image in images:
+        sheet.paste(image, (x, 0))
+        x += image.width + gap
+    sheet.save(OUT / out, optimize=True)
+    print("wrote", OUT / out)
+
+
 def page_shot(page: Page, name: str) -> None:
     page.screenshot(path=str(OUT / name))
     print("wrote", OUT / name)
@@ -168,6 +186,8 @@ def run(chrome: str | None) -> None:
             page.locator(
                 'home-print-card [data-role="crop-frame"]:not([hidden])'
             ).wait_for()
+            # The dialog is fixed; show the card from its top behind it.
+            page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(300)
             page_shot(page, "crop.png")
             page.unroute("**/api/home_print/**")
@@ -196,6 +216,10 @@ def run(chrome: str | None) -> None:
             page.wait_for_timeout(300)
             page_shot(page, "preview.png")
             browser.close()
+        compose(["card.png", "scan.png", "crop.png"], "overview.png")
+        compose(
+            ["printers.png", "history.png", "scans.png", "preview.png"], "dialogs.png"
+        )
     finally:
         server.shutdown()
 
