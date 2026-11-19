@@ -203,6 +203,10 @@ class HomePrintClient:
 
     async def get_printer(self) -> PrinterInfo:
         """Fetch identity, state, supplies and capabilities."""
+        return parse_printer(await self.get_printer_attributes())
+
+    async def get_printer_attributes(self) -> dict[str, Any]:
+        """The printer's raw IPP attributes (also for diagnostics)."""
         response = await self._execute(
             IppOperation.GET_PRINTER_ATTRIBUTES,
             {
@@ -214,7 +218,7 @@ class HomePrintClient:
         printers = response.get("printers") or []
         if not printers:
             raise HomePrintError("Printer returned no attributes")
-        return parse_printer(printers[0])
+        return printers[0]
 
     async def print_job(
         self,

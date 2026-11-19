@@ -111,6 +111,10 @@ class EsclClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ScannerUnavailable() from err
 
+    async def raw_xml(self, name: str) -> bytes:
+        """A raw answer such as ``ScannerCapabilities`` (for diagnostics)."""
+        return await self._get_xml(name)
+
     async def capabilities(self) -> ScannerCaps:
         return parse_capabilities(await self._get_xml("ScannerCapabilities"))
 
