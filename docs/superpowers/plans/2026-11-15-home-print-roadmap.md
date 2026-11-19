@@ -16,3 +16,10 @@ Spec birbirinden bağımsız test edilebilen birkaç alt sistemi kapsıyor. Bu y
 ## Durum notu (2026-11-16)
 
 Plan 4 (tarama) uygulandı: eSCL istemcisi, arşiv, `home_print.scan`, kartta Tara düğmesi ve geçmişte Taramalar sekmesi, `scripts/remote_check.py --scan-info/--scan`, sürüm 0.3.0. Ertelenenler: yalnızca tarayıcı olan cihazlar (ayrı giriş türü) ve `_uscan._tcp` keşfi. Gerçek yazıcının eSCL yanıtı henüz alınmadı, fixture'lar sentetik.
+
+## Durum notu (2026-11-19)
+
+- Plan 6'nın kod tarafı bitti: CI (ruff, pytest, vitest, hassfest, ignore'suz HACS doğrulaması), tag ile release, sadece İngilizce kısa README, yeni ekran görüntüleri, tanılama dosyası. README artık tr+en değil, sadece İngilizce.
+- eSCL fixture'ları gerçek DeskJet 4670 dökümlerinden geliyor. Çift taraflı besleyici ve siyah-beyaz için tek sentetik dosya kaldı.
+- Kart `frontend/src/` altında modüllere bölündü, esbuild ile tek dosyaya derleniyor (ADR 1).
+- Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5), tarama için kâğıt boyutu ve tarayıcı keşfi (ayrı issue'lar).

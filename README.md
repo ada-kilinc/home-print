@@ -104,6 +104,8 @@ response_variable: scan  # scan.path, scan.copy, scan.name, scan.pages
 
 **The card says "Custom element doesn't exist".** See [Troubleshooting](docs/troubleshooting.md#the-card-doesnt-show-up).
 
+**Something doesn't work with my printer.** Open an issue and attach the diagnostics file: **Settings → Devices & services → Home Print → ⋮ → Download diagnostics**. Serial numbers, addresses and locations are removed from it.
+
 ## Contributing
 
 Issues and pull requests are welcome, from typo fixes to "this didn't work on my printer" reports. Please mention your printer model and Home Assistant version.
@@ -112,8 +114,11 @@ Issues and pull requests are welcome, from typo fixes to "this didn't work on my
 python3 -m venv .venv && .venv/bin/pip install -r requirements_test.txt
 .venv/bin/pytest -q            # Python tests
 npm install && npm test        # card tests
+npm run build                  # rebuild the card from frontend/src/
 python scripts/screenshots.py  # redraw docs/images (needs playwright)
 ```
+
+The card's source is in `frontend/src/`. `npm run build` bundles it into `custom_components/home_print/frontend/home-print-card.js`, which is committed so HACS needs no build. CI fails if the two don't match. See [ADR 1](docs/adr/0001-card-modules.md).
 
 `scripts/remote_check.py` checks a printer over the network without printing (`--print` runs up to two small test jobs, `--scan-info` and `--scan` check the scanner). Its saved `escl_*.xml` files contain serial numbers, so don't post them.
 

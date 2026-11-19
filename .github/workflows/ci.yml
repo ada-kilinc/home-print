@@ -39,6 +39,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm run format:check
+      # The committed bundle must match frontend/src/.
+      - run: npm run build:check
       - run: node --check custom_components/home_print/frontend/home-print-card.js
       - run: npm test
 

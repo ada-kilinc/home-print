@@ -1,49 +1,43 @@
 /* Home Print dashboard card.
  *
- * A single, build-free Web Component. It lists printers through the
- * `home_print/printers` WebSocket command, uploads files to
- * `/api/home_print/upload/<entry_id>` with `hass.fetchWithAuth` and follows the
- * job with `home_print/job`. A clock button opens the print history
- * (`home_print/history`, `home_print/history/delete`) and a page preview
- * served by `/api/home_print/history/<entry_id>/<id>/page/<n>`.
+ * Built from frontend/src/ with `npm run build`: edit those files, not this one.
+ *
+ * It lists printers through the `home_print/printers` WebSocket command,
+ * uploads files to `/api/home_print/upload/<entry_id>` with
+ * `hass.fetchWithAuth` and follows the job with `home_print/job`. A clock
+ * button opens the print history (`home_print/history`,
+ * `home_print/history/delete`) and a page preview served by
+ * `/api/home_print/history/<entry_id>/<id>/page/<n>`.
  *
  * A printer with a scanner splits the card body into Print and Scan tabs; the
- * Scan tab holds a panel that starts `home_print/scan/start`, polls `home_print/scan/state`
- * (stopped with `home_print/scan/cancel`) and shows the result (preview, rename, download, add page, delete). The
- * history popup then has a second tab listing `home_print/scans`.
+ * Scan tab starts `home_print/scan/start`, polls `home_print/scan/state`
+ * (stopped with `home_print/scan/cancel`) and shows the result. The history
+ * dialog then has a second tab listing `home_print/scans`.
  */
 
-const CARD_TYPE = "home-print-card";
-const EDITOR_TYPE = "home-print-card-editor";
-const REFRESH_MS = 60 * 1000;
-const POLL_MS = 3 * 1000;
-const POLL_LIMIT_MS = 10 * 60 * 1000;
-// Past this the job no longer holds the Print button while its status can't
-// be read, so a stalled poll never locks the card.
-const STALL_MS = 30 * 1000;
-// A little over the server's own 300 s print timeout.
-const UPLOAD_TIMEOUT_MS = 330 * 1000;
-const EDITOR_RETRY_MS = 30 * 1000;
-const PAGE_RANGES_RE = /^\s*\d+(\s*-\s*\d*)?(\s*,\s*\d+(\s*-\s*\d*)?)*\s*$/;
-const ACCEPT = "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png";
-// Some Android pickers honour only the first MIME type of ACCEPT, which greys
-// out photos; this second picker asks for images only (iOS hands Photos' HEIC
-// over as JPEG for it).
-const PHOTO_ACCEPT = "image/jpeg,image/png";
-const CAMERA_ACCEPT = "image/*";
-const FILE_INPUTS = ["input-file", "input-photo", "input-camera"];
-const PREVIEW_SIGN_SECONDS = 300;
-// A signature older than this is renewed before its image is requested.
-const PREVIEW_RESIGN_MS = 240 * 1000;
-const PREVIEW_MARGIN = "800px 0px";
-const DOWNLOAD_SIGN_SECONDS = 60;
-const SCAN_POLL_MS = 1500;
-// The card stops following a scan that shows no progress for this long.
-const SCAN_POLL_LIMIT_MS = 10 * 60 * 1000;
-// A destructive button asks once ("Sure?") and forgets after this long.
-const CONFIRM_MS = 4 * 1000;
-const SCAN_SELECTS = ["scan-source", "scan-color", "scan-resolution", "scan-format"];
-const SCAN_ERRORS = [
+// frontend/src/constants.js
+var CARD_TYPE = "home-print-card";
+var EDITOR_TYPE = "home-print-card-editor";
+var REFRESH_MS = 60 * 1e3;
+var POLL_MS = 3 * 1e3;
+var POLL_LIMIT_MS = 10 * 60 * 1e3;
+var STALL_MS = 30 * 1e3;
+var UPLOAD_TIMEOUT_MS = 330 * 1e3;
+var EDITOR_RETRY_MS = 30 * 1e3;
+var PAGE_RANGES_RE = /^\s*\d+(\s*-\s*\d*)?(\s*,\s*\d+(\s*-\s*\d*)?)*\s*$/;
+var ACCEPT = "application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png";
+var PHOTO_ACCEPT = "image/jpeg,image/png";
+var CAMERA_ACCEPT = "image/*";
+var FILE_INPUTS = ["input-file", "input-photo", "input-camera"];
+var PREVIEW_SIGN_SECONDS = 300;
+var PREVIEW_RESIGN_MS = 240 * 1e3;
+var PREVIEW_MARGIN = "800px 0px";
+var DOWNLOAD_SIGN_SECONDS = 60;
+var SCAN_POLL_MS = 1500;
+var SCAN_POLL_LIMIT_MS = 10 * 60 * 1e3;
+var CONFIRM_MS = 4 * 1e3;
+var SCAN_SELECTS = ["scan-source", "scan-color", "scan-resolution", "scan-format"];
+var SCAN_ERRORS = [
   "scanner_busy",
   "scanner_unavailable",
   "adf_empty",
@@ -55,82 +49,47 @@ const SCAN_ERRORS = [
   "no_scanner",
   "unauthorized",
   "scan_failed",
-  "canceled",
+  "canceled"
 ];
-// Poll answers that mean the scan can no longer be followed.
-const FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
-const DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
-const EXT_FORMATS = {
+var FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
+var DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
+var EXT_FORMATS = {
   pdf: "application/pdf",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
-  png: "image/png",
+  png: "image/png"
 };
-const WORD_EXTS = ["doc", "docx", "odt", "rtf"];
-const WORD_TYPES = [
+var WORD_EXTS = ["doc", "docx", "odt", "rtf"];
+var WORD_TYPES = [
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.oasis.opendocument.text",
   "application/rtf",
-  "text/rtf",
+  "text/rtf"
 ];
-const RUNNING_JOB_STATES = ["pending", "held", "processing", "stopped"];
-const FATAL_JOB_ERRORS = ["not_found", "unauthorized"];
-// IPP job-state-reasons worth showing, by prefix; any other reason is hidden.
-const REASONS = [
+var RUNNING_JOB_STATES = ["pending", "held", "processing", "stopped"];
+var FATAL_JOB_ERRORS = ["not_found", "unauthorized"];
+var REASONS = [
   [["media-empty", "media-needed"], "reason_media_empty"],
   [["media-jam"], "reason_media_jam"],
   [["marker-supply-empty", "toner-empty"], "reason_ink_empty"],
-  [["door-open", "cover-open"], "reason_cover_open"],
+  [["door-open", "cover-open"], "reason_cover_open"]
 ];
-// Housekeeping keywords printers send all the time; never worth showing.
-const NOISE_REASONS = [
+var NOISE_REASONS = [
   "none",
   "job-printing",
   "job-incoming",
   "job-queued",
   "processing-to-stop-point",
   "job-data-insufficient",
-  "job-completed-successfully",
+  "job-completed-successfully"
 ];
-const PRINTER_ERROR_LIMIT = 3;
-const KNOWN_STATES = ["idle", "processing", "stopped"];
-const HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
+var PRINTER_ERROR_LIMIT = 3;
+var KNOWN_STATES = ["idle", "processing", "stopped"];
+var HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
 
-// Material Design Icons paths (Apache 2.0), drawn inline so the card needs
-// no HA icon component.
-const ICONS = {
-  history:
-    "M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3",
-  delete:
-    "M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19M8,9H16V19H8V9M15.5,4L14.5,3H9.5L8.5,4H5V6H19V4H15.5Z",
-  close:
-    "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z",
-  paperclip:
-    "M16.5,6V17.5A4,4 0 0,1 12.5,21.5A4,4 0 0,1 8.5,17.5V5A2.5,2.5 0 0,1 11,2.5A2.5,2.5 0 0,1 13.5,5V15.5A1,1 0 0,1 12.5,16.5A1,1 0 0,1 11.5,15.5V6H10V15.5A2.5,2.5 0 0,0 12.5,18A2.5,2.5 0 0,0 15,15.5V5A4,4 0 0,0 11,1A4,4 0 0,0 7,5V17.5A5.5,5.5 0 0,0 12.5,23A5.5,5.5 0 0,0 18,17.5V6H16.5Z",
-  images:
-    "M22,16V4A2,2 0 0,0 20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16M11,12L13.03,14.71L16,11L20,16H8M2,6V20A2,2 0 0,0 4,22H18V20H4V6",
-  camera:
-    "M4,4H7L9,2H15L17,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M12,7A5,5 0 0,0 7,12A5,5 0 0,0 12,17A5,5 0 0,0 17,12A5,5 0 0,0 12,7M12,9A3,3 0 0,1 15,12A3,3 0 0,1 12,15A3,3 0 0,1 9,12A3,3 0 0,1 12,9Z",
-  scanner:
-    "M4.2,10.7L19.8,5L20.5,6.9L6.4,12H19A2,2 0 0,1 21,14V18A2,2 0 0,1 19,20H5A2,2 0 0,1 3,18V12.5C3,11.7 3.5,10.9 4.2,10.7M17,17H19V15H17V17M5,17H15V15H5V17Z",
-  download: "M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z",
-  file_plus:
-    "M13.81 22H6C4.89 22 4 21.11 4 20V4C4 2.9 4.89 2 6 2H14L20 8V13.09C19.67 13.04 19.34 13 19 13S18.33 13.04 18 13.09V9H13V4H6V20H13.09C13.21 20.72 13.46 21.39 13.81 22M23 18H20V15H18V18H15V20H18V23H20V20H23V18Z",
-  chevron_left: "M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z",
-  chevron_right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
-  printer:
-    "M18,3H6V7H18M19,12A1,1 0 0,1 18,11A1,1 0 0,1 19,10A1,1 0 0,1 20,11A1,1 0 0,1 19,12M16,19H8V14H16M19,8H5A3,3 0 0,0 2,11V17H6V21H18V17H22V11A3,3 0 0,0 19,8Z",
-  // mdi:unfold-more-horizontal
-  unfold:
-    "M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z",
-  check: "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z",
-};
-
-const svg = (name) =>
-  `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="${ICONS[name]}"></path></svg>`;
-
-const STRINGS = {
+// frontend/src/i18n.js
+var STRINGS = {
   tr: {
     choose_file: "Dosya seç",
     pick_file: "Dosyadan seç",
@@ -180,15 +139,11 @@ const STRINGS = {
     tab_scan: "Tara",
     switch_printer: "Yazıcı değiştir",
     loading: "Yazıcılar yükleniyor…",
-    load_failed:
-      "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Böyle sürerse entegrasyonun kurulu olup olmadığına bak.",
-    no_printers:
-      "Yazıcı görünmüyor. Home Print hâlâ yükleniyor olabilir, birazdan tekrar bakarım. Hiç eklemediysen önce entegrasyonu ekle.",
-    unknown_printer:
-      "Kartta ayarlı yazıcı ({id}) şu an listede yok. Entegrasyon hâlâ yükleniyor olabilir; silindiyse kart ayarlarından başka bir yazıcı seç.",
+    load_failed: "Yazıcı listesi alınamadı. Home Print hâlâ yükleniyor olabilir, birazdan tekrar denerim. Böyle sürerse entegrasyonun kurulu olup olmadığına bak.",
+    no_printers: "Yazıcı görünmüyor. Home Print hâlâ yükleniyor olabilir, birazdan tekrar bakarım. Hiç eklemediysen önce entegrasyonu ekle.",
+    unknown_printer: "Kartta ayarlı yazıcı ({id}) şu an listede yok. Entegrasyon hâlâ yükleniyor olabilir; silindiyse kart ayarlarından başka bir yazıcı seç.",
     not_allowed: "Bu yazıcıyla yalnızca yöneticiler yazdırabilir.",
-    word_file:
-      "Word dosyalarını şimdilik yazdıramıyorum. Dosyayı önce PDF olarak kaydet (telefonda: Paylaş → PDF olarak yazdır/kaydet).",
+    word_file: "Word dosyalarını şimdilik yazdıramıyorum. Dosyayı önce PDF olarak kaydet (telefonda: Paylaş → PDF olarak yazdır/kaydet).",
     unsupported_type: "Bu dosya türünü yazdıramıyorum. PDF, JPEG ya da PNG seç.",
     too_large: "Dosya çok büyük. En fazla {mb} MB olabilir.",
     bad_pages: "Sayfa aralığını anlayamadım. Örnek: 1-3,5",
@@ -199,8 +154,7 @@ const STRINGS = {
     job_printing: "Yazdırılıyor…",
     job_held: "Yazıcıda bekliyor…",
     job_pausing: "Yazıcı bekliyor…",
-    job_pausing_duplex:
-      "Yazıcı bekliyor… Çift taraflı baskıda arka yüz öncesi mürekkebin kuruması beklenir.",
+    job_pausing_duplex: "Yazıcı bekliyor… Çift taraflı baskıda arka yüz öncesi mürekkebin kuruması beklenir.",
     job_stopped: "Yazıcı durdu, yazıcıya bak.",
     job_completed: "Tamamlandı ✓",
     job_canceled: "İş iptal edildi.",
@@ -211,8 +165,7 @@ const STRINGS = {
     job_status_failed: "Durum alınamadı, yazıcıya bak.",
     job_timeout: "Durum bilinmiyor, yazıcıya bak.",
     job_gone: "İş yazıcının listesinde yok, muhtemelen bitti. Kâğıda bak.",
-    upload_timeout:
-      "Yükleme çok uzun sürdü. İş yine de yazdırılmış olabilir, tekrar denemeden önce yazıcıya bak.",
+    upload_timeout: "Yükleme çok uzun sürdü. İş yine de yazdırılmış olabilir, tekrar denemeden önce yazıcıya bak.",
     reason_media_empty: "Kâğıt bitti",
     reason_media_jam: "Kâğıt sıkıştı",
     reason_ink_empty: "Mürekkep bitti",
@@ -267,7 +220,7 @@ const STRINGS = {
     scan_error_no_scanner: "Bu yazıcıda tarayıcı yok.",
     scan_error_unauthorized: "Bu yazıcıda yalnızca yöneticiler tarayabilir.",
     scan_error_scan_failed: "Tarama yapılamadı. Birazdan tekrar dene.",
-    scan_error_canceled: "Tarama iptal edildi.",
+    scan_error_canceled: "Tarama iptal edildi."
   },
   en: {
     editor_printer: "Printer",
@@ -318,12 +271,9 @@ const STRINGS = {
     tab_scan: "Scan",
     switch_printer: "Switch printer",
     loading: "Loading printers…",
-    load_failed:
-      "Couldn't load the printer list. Home Print may still be loading; I'll try again shortly. If this persists, check that the integration is installed.",
-    no_printers:
-      "No printers listed. Home Print may still be loading; I'll check again shortly. If you haven't added one yet, add the integration first.",
-    unknown_printer:
-      "The printer set for this card ({id}) isn't listed right now. The integration may still be loading; if it was removed, pick another printer in the card settings.",
+    load_failed: "Couldn't load the printer list. Home Print may still be loading; I'll try again shortly. If this persists, check that the integration is installed.",
+    no_printers: "No printers listed. Home Print may still be loading; I'll check again shortly. If you haven't added one yet, add the integration first.",
+    unknown_printer: "The printer set for this card ({id}) isn't listed right now. The integration may still be loading; if it was removed, pick another printer in the card settings.",
     not_allowed: "Only administrators can print on this printer.",
     word_file: "Word files can't be printed yet. Save the file as PDF first.",
     unsupported_type: "This file type can't be printed. Choose a PDF, JPEG or PNG.",
@@ -336,8 +286,7 @@ const STRINGS = {
     job_printing: "Printing…",
     job_held: "Waiting at the printer…",
     job_pausing: "The printer is pausing…",
-    job_pausing_duplex:
-      "The printer is pausing… With two-sided printing it waits for the ink to dry before the back side.",
+    job_pausing_duplex: "The printer is pausing… With two-sided printing it waits for the ink to dry before the back side.",
     job_stopped: "The printer has stopped. Check the printer.",
     job_completed: "Done ✓",
     job_canceled: "The job was canceled.",
@@ -348,8 +297,7 @@ const STRINGS = {
     job_status_failed: "Couldn't get the status, check the printer.",
     job_timeout: "Status unknown, check the printer.",
     job_gone: "The printer no longer lists the job; it probably finished.",
-    upload_timeout:
-      "The upload took too long. The job may still have printed; check the printer before trying again.",
+    upload_timeout: "The upload took too long. The job may still have printed; check the printer before trying again.",
     reason_media_empty: "Out of paper",
     reason_media_jam: "Paper jam",
     reason_ink_empty: "Out of ink",
@@ -404,41 +352,36 @@ const STRINGS = {
     scan_error_no_scanner: "This printer has no scanner.",
     scan_error_unauthorized: "Only administrators can scan on this printer.",
     scan_error_scan_failed: "The scan failed. Try again shortly.",
-    scan_error_canceled: "Scan canceled.",
-  },
+    scan_error_canceled: "Scan canceled."
+  }
 };
-
-// ---------------------------------------------------------------- helpers
-
 function pickLanguage(hass) {
   const language = hass?.locale?.language ?? hass?.language ?? "en";
   return String(language).toLowerCase().startsWith("tr") ? "tr" : "en";
 }
-
 function t(lang, key, vars = {}) {
   const template = STRINGS[lang]?.[key] ?? STRINGS.en[key] ?? key;
-  return template.replace(/\{(\w+)\}/g, (match, name) =>
-    name in vars ? String(vars[name]) : match,
+  return template.replace(
+    /\{(\w+)\}/g,
+    (match, name) => name in vars ? String(vars[name]) : match
   );
 }
 
+// frontend/src/helpers.js
 function fileExt(file) {
   const name = String(file?.name ?? "");
   const dot = name.lastIndexOf(".");
   return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
 }
-
 function fileFormat(file) {
   const type = String(file?.type ?? "").toLowerCase();
   if (DEFAULT_FORMATS.includes(type)) return type;
   return EXT_FORMATS[fileExt(file)] ?? type;
 }
-
 function isWordFile(file) {
   const type = String(file?.type ?? "").toLowerCase();
   return WORD_EXTS.includes(fileExt(file)) || WORD_TYPES.includes(type);
 }
-
 function validateFile(file, printer) {
   if (isWordFile(file)) return { ok: false, key: "word_file" };
   const formats = printer?.capabilities?.formats ?? DEFAULT_FORMATS;
@@ -447,18 +390,16 @@ function validateFile(file, printer) {
   if (mb > 0 && file.size > mb * 1024 * 1024) return { ok: false, key: "too_large" };
   return { ok: true };
 }
-
 function buildForm(file, options = {}) {
   const form = new FormData();
   form.append("file", file, file.name);
   for (const key of ["copies", "sides", "color_mode", "page_ranges"]) {
     const value = options[key];
-    if (value === undefined || value === null || String(value).trim() === "") continue;
+    if (value === void 0 || value === null || String(value).trim() === "") continue;
     form.append(key, String(value).trim());
   }
   return form;
 }
-
 function reasonLabel(lang, reason) {
   const name = String(reason ?? "");
   if (name === "job-canceled-at-device") return t(lang, "reason_canceled_at_device");
@@ -467,42 +408,30 @@ function reasonLabel(lang, reason) {
   }
   return null;
 }
-
-// fetchWithAuth rejects before sending when the token can't be refreshed.
 function isAuthError(err, hass) {
   if (hass?.auth?.expired === true) return true;
   if (err?.status === 401 || err?.code === 401) return true;
   const text = `${err?.message ?? ""} ${err?.code ?? ""}`.toLowerCase();
   return ["auth", "token", "401"].some((word) => text.includes(word));
 }
-
-// Raw IPP keywords the card has no wording for, for the muted detail line.
 function visibleRawReasons(reasons) {
   const raw = Array.isArray(reasons) ? reasons.map((r) => String(r ?? "")) : [];
   return [
-    ...new Set(
-      raw.filter((r) => r && !NOISE_REASONS.includes(r) && reasonLabel("en", r) === null),
-    ),
+    ...new Set(raw.filter((r) => r && !NOISE_REASONS.includes(r) && reasonLabel("en", r) === null))
   ];
 }
-
 function knownReasons(lang, status) {
   const raw = Array.isArray(status?.reasons) ? status.reasons : [];
   return [...new Set(raw.map((reason) => reasonLabel(lang, reason)).filter(Boolean))];
 }
-
-// A stopped job with a known problem is an error; stopped/held without one is
-// usually the printer pausing (e.g. letting ink dry between duplex sides).
 function isProblemState(status, lang = "en") {
   return status?.state === "stopped" && knownReasons(lang, status).length > 0;
 }
-
-function jobLabel(lang, status, { twoSided = false } = {}) {
+function jobLabel(lang, status, { twoSided: twoSided2 = false } = {}) {
   const state = status?.state;
   const reasons = knownReasons(lang, status);
-  const withReasons = (key) =>
-    t(lang, key) + (reasons.length ? t(lang, "job_reasons", { reasons: reasons.join(", ") }) : "");
-  const pausing = () => t(lang, twoSided ? "job_pausing_duplex" : "job_pausing");
+  const withReasons = (key) => t(lang, key) + (reasons.length ? t(lang, "job_reasons", { reasons: reasons.join(", ") }) : "");
+  const pausing = () => t(lang, twoSided2 ? "job_pausing_duplex" : "job_pausing");
   switch (state) {
     case "pending":
     case "processing":
@@ -521,38 +450,24 @@ function jobLabel(lang, status, { twoSided = false } = {}) {
       return t(lang, "job_checking");
   }
 }
-
-// The two-sided value a checked box sends: the printer's own two-sided default
-// (so a short-edge default survives), else long edge, else any two-sided.
 function twoSided(printer) {
   const sides = printer?.capabilities?.sides ?? [];
   const preferred = printer?.defaults?.sides;
-  if (String(preferred ?? "").startsWith("two-sided") && sides.includes(preferred)) return preferred;
+  if (String(preferred ?? "").startsWith("two-sided") && sides.includes(preferred))
+    return preferred;
   if (sides.includes("two-sided-long-edge")) return "two-sided-long-edge";
   return sides.find((s) => s.startsWith("two-sided"));
 }
-
 function formatSize(bytes, lang) {
   const locale = lang === "tr" ? "tr-TR" : "en-US";
   const fmt = (n) => n.toLocaleString(locale, { maximumFractionDigits: 1 });
   if (bytes >= 1024 * 1024) return `${fmt(bytes / (1024 * 1024))} MB`;
   return `${fmt(Math.max(bytes, 1) / 1024)} KB`;
 }
-
-// iOS shows its own three-way sheet (Photo Library / Take Photo / Choose
-// File) for a plain file input, so the card's menu would be a second one.
 function isIOS(nav) {
   if (!nav) return false;
-  return (
-    /iPad|iPhone|iPod/.test(String(nav.userAgent ?? "")) ||
-    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1)
-  );
+  return /iPad|iPhone|iPod/.test(String(nav.userAgent ?? "")) || nav.platform === "MacIntel" && nav.maxTouchPoints > 1;
 }
-
-// The card's own "From files / Photo library / Take photo" menu is for
-// touch-only phones and tablets that aren't iOS (Android's HA app offers no
-// camera option itself). With a mouse or trackpad (desktop, touchscreen
-// laptop) "Choose file" opens the system file dialog like any web app.
 function usesPickMenu(nav, win) {
   if (!nav || isIOS(nav)) return false;
   const mm = win?.matchMedia;
@@ -560,8 +475,6 @@ function usesPickMenu(nav, win) {
   const query = (q) => Boolean(mm.call(win, q)?.matches);
   return query("(pointer: coarse)") && !query("(any-pointer: fine)");
 }
-
-// Local date and time in the user's language.
 function formatHistoryTime(lang, iso) {
   const date = new Date(iso);
   if (!iso || Number.isNaN(date.getTime())) return "";
@@ -572,59 +485,41 @@ function formatHistoryTime(lang, iso) {
     return new Intl.DateTimeFormat("en", options).format(date);
   }
 }
-
 function historyStateIcon(state) {
   if (state === "completed") return "✓";
   if (["aborted", "canceled", "error"].includes(state)) return "✗";
   return "…";
 }
-
 function previewPath(entryId, recordId, page) {
   return `/api/home_print/history/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/page/${page}`;
 }
-
 function scanPagePath(entryId, recordId, page) {
   return `/api/home_print/scans/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/page/${page}`;
 }
-
 function scanFilePath(entryId, recordId) {
   return `/api/home_print/scans/${encodeURIComponent(entryId)}/${encodeURIComponent(recordId)}/file`;
 }
-
-// A scan error code in words; an unknown code gets the general text.
 function scanErrorText(lang, code) {
   const name = code === "printer_unavailable" ? "scanner_unavailable" : String(code ?? "");
   return t(lang, SCAN_ERRORS.includes(name) ? `scan_error_${name}` : "scan_error_scan_failed");
 }
-
-// Label of a scan option value: a known keyword in words, else as sent.
-// Every colour mode the scanner reports is offered, colour first. Greyscale
-// is shown as Black and white, as people call it; 1-bit black and white
-// gets "(sharp)" only when greyscale is offered too, so the two differ.
-const SCAN_COLOR_ORDER = ["color", "gray", "bw"];
-
+var SCAN_COLOR_ORDER = ["color", "gray", "bw"];
 function scanColorChoices(modes) {
   const known = SCAN_COLOR_ORDER.filter((mode) => modes.includes(mode));
   return [...known, ...modes.filter((mode) => !SCAN_COLOR_ORDER.includes(mode))];
 }
-
 function scanColorLabel(lang, mode, modes) {
   if (mode === "bw" && modes.includes("gray")) return t(lang, "scan_color_bw_sharp");
   return scanOptionLabel(lang, "color", mode);
 }
-
 function scanOptionLabel(lang, kind, value) {
   if (kind === "resolution") return t(lang, "scan_dpi", { n: value });
   const key = `scan_${kind}_${value}`;
   return key in STRINGS.en ? t(lang, key) : String(value);
 }
-
-// The printer picked in this browser, kept per card entry_id so two cards
-// pinned to different printers don't share one choice.
 function storageKey(entryId) {
   return `home-print-card:printer:${entryId ?? ""}`;
 }
-
 function readStored(key) {
   try {
     const value = globalThis.localStorage?.getItem(key);
@@ -633,15 +528,32 @@ function readStored(key) {
     return null;
   }
 }
-
 function writeStored(key, value) {
   try {
     globalThis.localStorage?.setItem(key, value);
   } catch (_err) {
-    // Private mode or storage off: the choice lasts until the page reloads.
   }
 }
 
+// frontend/src/icons.js
+var ICONS = {
+  history: "M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3",
+  delete: "M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19M8,9H16V19H8V9M15.5,4L14.5,3H9.5L8.5,4H5V6H19V4H15.5Z",
+  close: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z",
+  paperclip: "M16.5,6V17.5A4,4 0 0,1 12.5,21.5A4,4 0 0,1 8.5,17.5V5A2.5,2.5 0 0,1 11,2.5A2.5,2.5 0 0,1 13.5,5V15.5A1,1 0 0,1 12.5,16.5A1,1 0 0,1 11.5,15.5V6H10V15.5A2.5,2.5 0 0,0 12.5,18A2.5,2.5 0 0,0 15,15.5V5A4,4 0 0,0 11,1A4,4 0 0,0 7,5V17.5A5.5,5.5 0 0,0 12.5,23A5.5,5.5 0 0,0 18,17.5V6H16.5Z",
+  images: "M22,16V4A2,2 0 0,0 20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16M11,12L13.03,14.71L16,11L20,16H8M2,6V20A2,2 0 0,0 4,22H18V20H4V6",
+  camera: "M4,4H7L9,2H15L17,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M12,7A5,5 0 0,0 7,12A5,5 0 0,0 12,17A5,5 0 0,0 17,12A5,5 0 0,0 12,7M12,9A3,3 0 0,1 15,12A3,3 0 0,1 12,15A3,3 0 0,1 9,12A3,3 0 0,1 12,9Z",
+  scanner: "M4.2,10.7L19.8,5L20.5,6.9L6.4,12H19A2,2 0 0,1 21,14V18A2,2 0 0,1 19,20H5A2,2 0 0,1 3,18V12.5C3,11.7 3.5,10.9 4.2,10.7M17,17H19V15H17V17M5,17H15V15H5V17Z",
+  download: "M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z",
+  file_plus: "M13.81 22H6C4.89 22 4 21.11 4 20V4C4 2.9 4.89 2 6 2H14L20 8V13.09C19.67 13.04 19.34 13 19 13S18.33 13.04 18 13.09V9H13V4H6V20H13.09C13.21 20.72 13.46 21.39 13.81 22M23 18H20V15H18V18H15V20H18V23H20V20H23V18Z",
+  chevron_left: "M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z",
+  chevron_right: "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
+  printer: "M18,3H6V7H18M19,12A1,1 0 0,1 18,11A1,1 0 0,1 19,10A1,1 0 0,1 20,11A1,1 0 0,1 19,12M16,19H8V14H16M19,8H5A3,3 0 0,0 2,11V17H6V21H18V17H22V11A3,3 0 0,0 19,8Z",
+  // mdi:unfold-more-horizontal
+  unfold: "M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z",
+  check: "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"
+};
+var svg = (name) => `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="${ICONS[name]}"></path></svg>`;
 function svgIcon(name) {
   const ns = "http://www.w3.org/2000/svg";
   const icon = document.createElementNS(ns, "svg");
@@ -655,7 +567,6 @@ function svgIcon(name) {
   icon.append(path);
   return icon;
 }
-
 function markerBackground(color) {
   const parts = String(color ?? "").match(/#[0-9a-fA-F]{6}/g) ?? [];
   if (parts.length === 0) return "var(--primary-color)";
@@ -663,9 +574,1400 @@ function markerBackground(color) {
   return `linear-gradient(90deg, ${parts.join(", ")})`;
 }
 
-// ---------------------------------------------------------------- view
+// frontend/src/history.js
+var HistoryPart = class {
+  _wireDialog(dialog, close) {
+    dialog.addEventListener("click", (ev) => {
+      if (ev.target === dialog) close();
+    });
+    dialog.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    });
+    dialog.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      close();
+    });
+  }
+  _anyDialogOpen() {
+    return this._role("history-dialog").open || this._role("preview-dialog").open;
+  }
+  _showDialog(dialog) {
+    if (dialog.open) return;
+    if (this._savedOverflow === null) {
+      const root = document.documentElement;
+      this._savedOverflow = root.style.overflow;
+      root.style.overflow = "hidden";
+    }
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
+  _hideDialog(dialog) {
+    if (dialog.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+    if (this._savedOverflow !== null && !this._anyDialogOpen()) {
+      document.documentElement.style.overflow = this._savedOverflow;
+      this._savedOverflow = null;
+    }
+  }
+  _openHistory() {
+    const printer = this._printer();
+    if (!printer) return;
+    this._historyEntryId = printer.entry_id;
+    this._historyTab = "prints";
+    const tabbed = Boolean(printer.scanner);
+    this._role("history-tabs").hidden = !tabbed;
+    const panel = this._role("history-panel");
+    if (tabbed) panel.setAttribute("role", "tabpanel");
+    else panel.removeAttribute("role");
+    this._historyEntries = [];
+    this._deletedIds = /* @__PURE__ */ new Set();
+    this._renderHistory({ key: "history_loading" });
+    this._showDialog(this._role("history-dialog"));
+    this._loadHistory();
+  }
+  _closeHistory() {
+    this._closePreview();
+    this._historyEntryId = null;
+    this._historyToken += 1;
+    this._hideDialog(this._role("history-dialog"));
+  }
+  _switchHistoryTab(tab) {
+    if (!this._historyEntryId || tab === this._historyTab) return;
+    this._closePreview();
+    this._historyTab = tab;
+    this._historyEntries = [];
+    this._deletedIds = /* @__PURE__ */ new Set();
+    this._renderHistory({ key: "history_loading" });
+    this._loadHistory();
+  }
+  _onTabKey(ev) {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key];
+    if (!step) return;
+    ev.preventDefault();
+    const tabs = [...this._role("history-tabs").querySelectorAll('[role="tab"]')];
+    const index = tabs.findIndex((tab) => tab.dataset.tab === this._historyTab);
+    const next = tabs[(index + step + tabs.length) % tabs.length];
+    this._switchHistoryTab(next.dataset.tab);
+    next.focus();
+  }
+  async _loadHistory() {
+    const entryId = this._historyEntryId;
+    if (!entryId || !this._hass) return;
+    const token = ++this._historyToken;
+    const type = this._historyTab === "scans" ? "home_print/scans" : "home_print/history";
+    let result;
+    try {
+      result = await this._hass.callWS({ type, entry_id: entryId });
+    } catch (_err) {
+      if (token !== this._historyToken) return;
+      this._renderHistory({ key: "history_failed", error: true });
+      return;
+    }
+    if (token !== this._historyToken) return;
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    this._historyEntries = entries.filter((e) => !this._deletedIds.has(e.id));
+    this._renderHistory();
+  }
+  async _deleteHistory(record, button) {
+    const entryId = this._historyEntryId;
+    if (!entryId) return;
+    const scans = this._historyTab === "scans";
+    button.disabled = true;
+    try {
+      await this._hass.callWS(
+        scans ? { type: "home_print/scans/delete", entry_id: entryId, scan_record_id: record.id } : { type: "home_print/history/delete", entry_id: entryId, history_id: record.id }
+      );
+    } catch (err) {
+      button.disabled = false;
+      if (this._historyEntryId !== entryId || this._historyTab !== (scans ? "scans" : "prints")) {
+        return;
+      }
+      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
+      this._renderHistory({ key, error: true });
+      return;
+    }
+    if (scans && this._scanResult?.record.id === record.id) {
+      this._clearScanResult();
+      this._update();
+    }
+    if (this._historyEntryId !== entryId) return;
+    if (this._historyTab !== (scans ? "scans" : "prints")) return;
+    this._deletedIds.add(record.id);
+    const index = this._historyEntries.findIndex((e) => e.id === record.id);
+    this._historyEntries = this._historyEntries.filter((e) => e.id !== record.id);
+    this._renderHistory();
+    const rows = this._role("history-list").querySelectorAll(
+      '[data-role="history-delete"], [data-role="scan-row-delete"]'
+    );
+    (rows[Math.max(index, 0)] ?? this._role("history-close")).focus();
+  }
+  _renderHistory(status = null) {
+    const lang = pickLanguage(this._hass);
+    const entries = this._historyEntries;
+    const scans = this._historyTab === "scans";
+    for (const tab of this.shadowRoot.querySelectorAll('[role="tab"]')) {
+      const selected = tab.dataset.tab === this._historyTab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected) this._role("history-panel").setAttribute("aria-labelledby", tab.id);
+    }
+    const empty = scans ? "scans_empty" : "history_empty";
+    const shown = status ?? (entries.length === 0 ? { key: empty } : null);
+    const statusEl = this._role("history-status");
+    statusEl.textContent = shown ? t(lang, shown.key) : "";
+    statusEl.hidden = !shown;
+    statusEl.classList.toggle("error", Boolean(shown?.error));
+    const canDelete = this._printer()?.can_print !== false;
+    this._role("history-list").replaceChildren(
+      ...entries.map(
+        (record) => scans ? this._scanRow(lang, record, canDelete) : this._historyRow(lang, record, canDelete)
+      )
+    );
+  }
+  _historyRow(lang, record, canDelete) {
+    const row = document.createElement("li");
+    row.className = "history-item";
+    row.dataset.role = "history-item";
+    const hadFile = Boolean(record.mime);
+    const open = document.createElement(hadFile ? "button" : "div");
+    open.className = hadFile ? "history-open" : "history-open static";
+    open.dataset.role = "history-open";
+    if (hadFile) {
+      open.type = "button";
+      open.addEventListener("click", () => {
+        const entryId = this._historyEntryId;
+        this._openPreview({
+          title: record.file_name,
+          gone: record.file === false,
+          isImage: String(record.mime ?? "").startsWith("image/"),
+          pages: record.pages,
+          pagePath: (page) => previewPath(entryId, record.id, page)
+        });
+      });
+    }
+    const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
+    const icon = historyStateIcon(state);
+    const mark = document.createElement("span");
+    mark.className = `history-mark ${icon === "✓" ? "ok" : icon === "✗" ? "bad" : "busy"}`;
+    mark.textContent = icon;
+    mark.title = t(lang, `history_state_${state}`);
+    mark.setAttribute("role", "img");
+    mark.setAttribute("aria-label", mark.title);
+    const textBox = document.createElement("span");
+    textBox.className = "history-text";
+    const name = document.createElement("span");
+    name.className = "history-name";
+    name.dataset.role = "history-name";
+    name.textContent = String(record.file_name ?? "");
+    name.title = name.textContent;
+    const meta = this._recordMeta(lang, record);
+    if (hadFile && record.file === false) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = t(lang, "file_gone_tag");
+      meta.append(tag);
+    }
+    textBox.append(name, meta);
+    open.append(mark, textBox);
+    row.append(open);
+    if (canDelete) {
+      const trash = document.createElement("button");
+      trash.type = "button";
+      trash.className = "icon-button";
+      trash.dataset.role = "history-delete";
+      trash.setAttribute("aria-label", t(lang, "delete"));
+      trash.title = t(lang, "delete");
+      trash.append(svgIcon("delete"));
+      trash.addEventListener("click", () => this._deleteHistory(record, trash));
+      row.append(trash);
+    }
+    return row;
+  }
+  _recordMeta(lang, record) {
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    const pages = Number(record.pages);
+    const parts = [
+      formatHistoryTime(this._timeLanguage(), record.time),
+      record.user ? String(record.user) : "",
+      pages > 0 ? t(lang, pages === 1 ? "history_pages_one" : "history_pages", { n: pages }) : ""
+    ].filter(Boolean);
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      meta.append(span);
+    }
+    return meta;
+  }
+  // One row of the Scans tab: tap to preview, download, delete (asks once).
+  _scanRow(lang, record, canDelete) {
+    const entryId = this._historyEntryId;
+    const row = document.createElement("li");
+    row.className = "history-item";
+    row.dataset.role = "scan-item";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-open";
+    open.dataset.role = "scan-open";
+    open.addEventListener(
+      "click",
+      () => this._openPreview({
+        title: record.name,
+        gone: false,
+        isImage: String(record.mime ?? "").startsWith("image/"),
+        pages: record.pages,
+        pagePath: (page) => scanPagePath(entryId, record.id, page)
+      })
+    );
+    const mark = document.createElement("span");
+    mark.className = "history-mark";
+    mark.append(svgIcon("scanner"));
+    const textBox = document.createElement("span");
+    textBox.className = "history-text";
+    const name = document.createElement("span");
+    name.className = "history-name";
+    name.dataset.role = "history-name";
+    name.textContent = String(record.name ?? "");
+    name.title = name.textContent;
+    textBox.append(name, this._recordMeta(lang, record));
+    open.append(mark, textBox);
+    row.append(open);
+    const download = this._iconButton(lang, "download", "scan_download", "scan-row-download");
+    download.addEventListener("click", async () => {
+      if (!await this._downloadScan(entryId, record) && this._historyEntryId === entryId) {
+        this._renderHistory({ key: "download_failed", error: true });
+      }
+    });
+    row.append(download);
+    if (canDelete) {
+      const trash = this._iconButton(lang, "delete", "delete", "scan-row-delete");
+      trash.addEventListener(
+        "click",
+        () => this._confirmTap(trash, () => this._deleteHistory(record, trash))
+      );
+      row.append(trash);
+    }
+    return row;
+  }
+  _iconButton(lang, icon, label, roleName) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-button";
+    button.dataset.role = roleName;
+    button.setAttribute("aria-label", t(lang, label));
+    button.title = t(lang, label);
+    button.append(svgIcon(icon));
+    return button;
+  }
+  _timeLanguage() {
+    return String(this._hass?.locale?.language ?? this._hass?.language ?? "en");
+  }
+  // Pages are signed just before they load: a signed path lives 300 s, and a
+  // request with an expired one is a 401 that HA counts as a failed login.
+  //
+  // `spec`: {title, gone, isImage, pages, pagePath(page) -> unsigned path},
+  // so print history and scans share the same viewer.
+  _openPreview(spec) {
+    if (!this._historyEntryId) return;
+    this._stopPreview();
+    const lang = pickLanguage(this._hass);
+    this._role("preview-title").textContent = String(spec.title ?? "");
+    const body = this._role("preview-body");
+    body.replaceChildren();
+    body.scrollTop = 0;
+    this._showDialog(this._role("preview-dialog"));
+    if (spec.gone) {
+      this._previewNote(body, t(lang, "file_gone"));
+      return;
+    }
+    const known = Number(spec.pages) > 0 ? Number(spec.pages) : null;
+    const preview = {
+      token: this._previewToken,
+      body,
+      lang,
+      pagePath: spec.pagePath,
+      // null: unknown, pages are added one by one until one is missing.
+      count: spec.isImage ? 1 : known,
+      observer: null
+    };
+    this._preview = preview;
+    const Observer = globalThis.IntersectionObserver;
+    if (typeof Observer === "function") {
+      preview.observer = new Observer(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            preview.observer?.unobserve(entry.target);
+            this._loadPage(preview, entry.target);
+          }
+        },
+        { root: body, rootMargin: PREVIEW_MARGIN }
+      );
+    }
+    const first = preview.count ?? 1;
+    for (let page = 1; page <= first; page += 1) this._addPlaceholder(preview, page);
+    if (!preview.observer) this._loadPage(preview, body.querySelector("[data-page]"));
+  }
+  _addPlaceholder(preview, page) {
+    const box = document.createElement("div");
+    box.className = "page";
+    box.dataset.page = String(page);
+    preview.body.append(box);
+    preview.observer?.observe(box);
+    return box;
+  }
+  _signPage(preview, page) {
+    return this._signPath(preview.pagePath(page));
+  }
+  async _signPath(path, expires = PREVIEW_SIGN_SECONDS) {
+    const result = await this._hass.callWS({ type: "auth/sign_path", path, expires });
+    return String(result?.path ?? "");
+  }
+  async _loadPage(preview, box) {
+    if (!box || box.dataset.state) return;
+    box.dataset.state = "loading";
+    const live = () => preview.token === this._previewToken && box.isConnected;
+    const page = Number(box.dataset.page);
+    let path;
+    try {
+      let signedAt;
+      do {
+        signedAt = Date.now();
+        path = await this._signPage(preview, page);
+        if (!live()) return;
+      } while (Date.now() - signedAt > PREVIEW_RESIGN_MS);
+    } catch (_err) {
+      if (!live()) return;
+      this._stopPreview();
+      this._previewNote(preview.body, t(preview.lang, "preview_failed"));
+      return;
+    }
+    const img = document.createElement("img");
+    img.alt = t(preview.lang, "preview_page", { n: page });
+    img.addEventListener("load", () => {
+      if (!live()) return;
+      box.classList.add("loaded");
+      const next = page + 1;
+      const more = preview.count === null || next <= preview.count;
+      if (!more) return;
+      let nextBox = preview.body.querySelector(`[data-page="${next}"]`);
+      if (!nextBox) nextBox = this._addPlaceholder(preview, next);
+      if (!preview.observer) this._loadPage(preview, nextBox);
+    });
+    img.addEventListener("error", () => {
+      if (!live()) return;
+      if (preview.count === null && page > 1) box.remove();
+      else box.replaceChildren(this._previewNote(null, t(preview.lang, "preview_failed")));
+    });
+    img.src = path;
+    box.append(img);
+  }
+  _previewNote(body, text) {
+    const note = document.createElement("div");
+    note.className = "sheet-status";
+    note.textContent = text;
+    if (body) body.replaceChildren(note);
+    return note;
+  }
+  _stopPreview() {
+    this._previewToken += 1;
+    this._preview?.observer?.disconnect();
+    this._preview = null;
+  }
+  _closePreview() {
+    this._stopPreview();
+    this._hideDialog(this._role("preview-dialog"));
+    this._role("preview-body").replaceChildren();
+  }
+};
 
-const STYLE = `
+// frontend/src/print.js
+var PrintPart = class {
+  _fileCheck(printer) {
+    return this._file ? validateFile(this._file, printer) : null;
+  }
+  // A running job holds the Print button, unless its status has been out of
+  // reach for longer than STALL_MS.
+  _jobHolds(printer) {
+    const job = this._job;
+    if (!job || job.entryId !== printer?.entry_id) return false;
+    return job.troubleSince === null || Date.now() - job.troubleSince <= STALL_MS;
+  }
+  _canSubmit(printer) {
+    return !this._uploading && !this._jobHolds(printer) && Boolean(printer) && this._reachable(printer) && printer.can_print !== false && this._fileCheck(printer)?.ok === true;
+  }
+  _onFile(ev) {
+    this._file = ev.target.files?.[0] ?? null;
+    for (const name of FILE_INPUTS) {
+      const input = this._role(name);
+      if (input !== ev.target) input.value = "";
+    }
+    if (!this._uploading && !this._job) this._message = null;
+    this._update();
+  }
+  _onPickButton() {
+    if (!usesPickMenu(globalThis.navigator, globalThis)) {
+      if (!this._role("pick-menu").hidden) this._closeMenu();
+      this._openInput("input-file");
+      return;
+    }
+    if (this._role("pick-menu").hidden) this._openMenu();
+    else this._closeMenu();
+  }
+  _onPickOption(option) {
+    this._closeMenu();
+    this._openInput(`input-${option}`);
+  }
+  _openInput(name) {
+    const input = this._role(name);
+    if (!input) return;
+    input.value = "";
+    input.click();
+  }
+  _openMenu() {
+    this._role("pick-menu").hidden = false;
+    this._role("pick").setAttribute("aria-expanded", "true");
+    document.addEventListener("click", this._onDocumentClick, true);
+    this._menuItems()[0]?.focus();
+  }
+  _menuItems() {
+    return [...this.shadowRoot.querySelectorAll("[data-option]")];
+  }
+  _onMenuKey(ev) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      this._closeMenu(true);
+      return;
+    }
+    const step = { ArrowDown: 1, ArrowUp: -1 }[ev.key];
+    if (!step) return;
+    ev.preventDefault();
+    const items = this._menuItems();
+    const index = items.indexOf(this.shadowRoot.activeElement);
+    items[(index + step + items.length) % items.length].focus();
+  }
+  _closeMenu(focusButton = false) {
+    const menu = this._role("pick-menu");
+    document.removeEventListener("click", this._onDocumentClick, true);
+    if (menu.hidden) return;
+    menu.hidden = true;
+    this._role("pick").setAttribute("aria-expanded", "false");
+    if (focusButton) this._role("pick").focus();
+  }
+  // Tab (or any focus move) to something outside the menu closes it. A null
+  // relatedTarget is left to the outside-click handler: Safari doesn't focus
+  // tapped buttons, so closing here would swallow the tap on an option.
+  _onMenuFocusOut(ev) {
+    const next = ev.relatedTarget;
+    if (!next || this._role("pick-menu").hidden) return;
+    if (this._role("pick-menu").contains(next) || next === this._role("pick")) return;
+    this._closeMenu();
+  }
+  _closeMenuOutside(ev) {
+    const path = ev.composedPath();
+    if (path.includes(this._role("pick-menu")) || path.includes(this._role("pick"))) return;
+    this._closeMenu();
+  }
+  async _onPrint() {
+    const printer = this._printer();
+    if (!this._canSubmit(printer)) return;
+    const lang = pickLanguage(this._hass);
+    const pages = this._optionShown("pages") ? this._role("pages").value.trim() : "";
+    if (pages && !PAGE_RANGES_RE.test(pages)) {
+      this._setMessage(t(lang, "bad_pages"), "error");
+      return;
+    }
+    clearTimeout(this._pollTimer);
+    this._pollTimer = null;
+    this._job = null;
+    this._uploading = true;
+    const entryId = printer.entry_id;
+    this._uploadEntryId = entryId;
+    this._setMessage(t(lang, "uploading"));
+    const form = buildForm(this._file, { ...this._options(printer), page_ranges: pages });
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+    let response;
+    let body = null;
+    try {
+      response = await this._hass.fetchWithAuth(
+        `/api/home_print/upload/${encodeURIComponent(entryId)}`,
+        { method: "POST", body: form, signal: controller.signal }
+      );
+      if (response.status !== 401) {
+        try {
+          body = await response.json();
+        } catch (_err) {
+          body = null;
+        }
+      }
+    } catch (err) {
+      let key = "network_error";
+      if (controller.signal.aborted) key = "upload_timeout";
+      else if (isAuthError(err, this._hass)) key = "session_expired";
+      this._finish(t(lang, key), "error");
+      return;
+    } finally {
+      clearTimeout(abortTimer);
+    }
+    if (controller.signal.aborted) {
+      this._finish(t(lang, "upload_timeout"), "error");
+      return;
+    }
+    if (response.status === 401) {
+      this._finish(t(lang, "session_expired"), "error");
+      return;
+    }
+    if (!response.ok || body?.job_id === void 0 || body?.job_id === null) {
+      const text = typeof body?.message === "string" && body.message ? body.message : t(lang, "upload_failed", { status: response.status });
+      this._finish(text, "error");
+      return;
+    }
+    this._uploading = false;
+    this._uploadEntryId = null;
+    this._file = null;
+    for (const name of FILE_INPUTS) this._role(name).value = "";
+    this._job = {
+      entryId,
+      jobId: body.job_id,
+      started: Date.now(),
+      printerErrors: 0,
+      troubleSince: null,
+      twoSided: String(form.get("sides") ?? printer.defaults?.sides ?? "").startsWith("two-sided")
+    };
+    this._setMessage(jobLabel(lang, { state: "pending" }));
+    this._schedulePoll();
+    if (this._historyEntryId === entryId) this._loadHistory();
+  }
+  _options(printer) {
+    const caps = printer.capabilities ?? {};
+    const options = {};
+    if (this._optionShown("copies")) {
+      const max = Math.max(1, Number(caps.copies_max) || 1);
+      const copies = parseInt(this._role("copies").value, 10);
+      options.copies = Math.min(max, Math.max(1, Number.isNaN(copies) ? 1 : copies));
+    }
+    if (this._optionShown("duplex")) {
+      options.sides = this._role("duplex").checked ? twoSided(printer) : "one-sided";
+    }
+    if (this._optionShown("color")) {
+      options.color_mode = this._role("color").checked ? "color" : "monochrome";
+    }
+    return options;
+  }
+  _schedulePoll() {
+    clearTimeout(this._pollTimer);
+    this._pollTimer = setTimeout(() => {
+      this._pollTimer = null;
+      this._poll();
+    }, POLL_MS);
+  }
+  async _poll() {
+    const job = this._job;
+    if (!job || !this._hass) return;
+    const lang = pickLanguage(this._hass);
+    if (Date.now() - job.started >= POLL_LIMIT_MS) {
+      this._finish(t(lang, "job_timeout"), "warning");
+      return;
+    }
+    let status;
+    try {
+      status = (await this._hass.callWS({
+        type: "home_print/job",
+        entry_id: job.entryId,
+        job_id: job.jobId
+      }))?.job;
+    } catch (err) {
+      if (this._job !== job) return;
+      if (FATAL_JOB_ERRORS.includes(err?.code)) {
+        this._finish(t(lang, "job_lost"), "error");
+        return;
+      }
+      if (err?.code === "job_gone") {
+        this._finish(t(lang, "job_gone"));
+        return;
+      }
+      if (err?.code === "printer_error") {
+        job.printerErrors += 1;
+        if (job.printerErrors >= PRINTER_ERROR_LIMIT) {
+          this._finish(t(lang, "job_status_failed"), "error");
+          return;
+        }
+      } else {
+        job.printerErrors = 0;
+        job.troubleSince ??= Date.now();
+      }
+      this._setMessage(t(lang, "job_checking"));
+      if (this.isConnected) this._schedulePoll();
+      return;
+    }
+    if (this._job !== job) return;
+    job.printerErrors = 0;
+    job.troubleSince = null;
+    const label = jobLabel(lang, status, { twoSided: job.twoSided });
+    if (RUNNING_JOB_STATES.includes(status?.state)) {
+      this._setMessage(
+        label,
+        isProblemState(status, lang) ? "error" : "info",
+        visibleRawReasons(status.reasons).join(", ")
+      );
+      if (this.isConnected) this._schedulePoll();
+      return;
+    }
+    if (status?.state === "completed") this._finish(label, "success");
+    else if (status?.state === "canceled" || status?.state === "aborted") {
+      this._finish(label, "error", visibleRawReasons(status.reasons).join(", "));
+    } else {
+      this._setMessage(t(lang, "job_checking"));
+      if (this.isConnected) this._schedulePoll();
+      return;
+    }
+    if (this._historyEntryId === job.entryId) this._loadHistory();
+  }
+  _finish(text, kind, detail = "") {
+    const entryId = this._messageEntryId();
+    clearTimeout(this._pollTimer);
+    this._pollTimer = null;
+    this._job = null;
+    this._uploading = false;
+    this._uploadEntryId = null;
+    this._setMessage(text, kind, detail, entryId);
+  }
+  // The printer a print message is about: the job's or upload's printer,
+  // else the one shown. Only that printer shows it.
+  _messageEntryId() {
+    return this._job?.entryId ?? this._uploadEntryId ?? this._printer()?.entry_id ?? null;
+  }
+  _setMessage(text, kind = "info", detail = "", entryId = this._messageEntryId()) {
+    this._message = { text, kind, detail, entryId };
+    this._update();
+  }
+  _applyPrinter(printer) {
+    const id = printer?.entry_id ?? null;
+    if (id === this._appliedId) return;
+    this._appliedId = id;
+    if (!printer) return;
+    const caps = printer.capabilities ?? {};
+    const defaults = printer.defaults ?? {};
+    this._role("copies").value = "1";
+    this._role("duplex").checked = String(defaults.sides ?? "").startsWith("two-sided");
+    this._role("color").checked = defaults.color_mode === "color";
+    this._role("pages").value = "";
+  }
+  _renderOptions(printer) {
+    const caps = printer?.capabilities ?? null;
+    const copiesMax = Number(caps?.copies_max) || 0;
+    this._row("copies").hidden = copiesMax <= 1;
+    this._role("copies").max = String(Math.max(1, copiesMax));
+    this._row("duplex").hidden = !(caps?.sides ?? []).some((s) => s.startsWith("two-sided"));
+    const modes = caps?.color_modes ?? [];
+    this._row("color").hidden = !(modes.includes("color") && modes.includes("monochrome"));
+    this._role("options").hidden = this._row("duplex").hidden && this._row("color").hidden;
+    const format = this._file ? fileFormat(this._file) : "application/pdf";
+    const pdfOk = (caps?.formats ?? []).includes("application/pdf");
+    this._row("pages").hidden = !caps || (format === "application/pdf" ? !pdfOk : !caps.page_ranges_passthrough);
+  }
+  _renderFile(lang, printer) {
+    this._role("file-name").textContent = this._file ? this._file.name : "";
+    this._role("file-size").textContent = this._file ? formatSize(this._file.size, lang) : "";
+    this._role("file-info").hidden = !this._file;
+    const message = this._role("message");
+    const check = this._fileCheck(printer);
+    let shown = this._message;
+    if (shown?.entryId && shown.entryId !== printer?.entry_id) shown = null;
+    if (!shown && check && !check.ok) {
+      shown = { text: t(lang, check.key, { mb: printer?.max_file_mb }), kind: "error" };
+    }
+    message.textContent = shown?.text ?? "";
+    message.className = `message ${shown?.kind ?? ""}`.trim();
+    const detail = this._role("detail");
+    detail.textContent = shown?.detail ?? "";
+    detail.hidden = !shown?.detail;
+  }
+  _renderInk(lang, printer) {
+    const ink = this._role("ink");
+    const markers = [];
+    if (this._config.show_ink && printer) {
+      for (const entityId of printer.entities?.markers ?? []) {
+        const entity = this._entityState(entityId);
+        const level = Number.parseFloat(entity?.state);
+        if (!entity || Number.isNaN(level)) continue;
+        markers.push({
+          entityId,
+          level: Math.min(100, Math.max(0, level)),
+          attrs: entity.attributes ?? {}
+        });
+      }
+    }
+    ink.hidden = markers.length === 0;
+    ink.replaceChildren(
+      ...markers.map(({ entityId, level, attrs }) => {
+        const colors = String(attrs.color ?? "").match(/#[0-9a-fA-F]{6}/g) ?? [];
+        let label = attrs.friendly_name ?? entityId;
+        if (colors.length > 1) label = t(lang, "ink_color");
+        else if (colors[0]?.toLowerCase() === "#000000") label = t(lang, "ink_black");
+        const row = document.createElement("div");
+        row.className = "marker";
+        row.dataset.role = "marker";
+        const name = document.createElement("span");
+        name.textContent = label;
+        const bar = document.createElement("span");
+        bar.className = "bar";
+        const fill = document.createElement("span");
+        fill.className = "bar-fill";
+        fill.style.display = "block";
+        fill.style.width = `${level}%`;
+        fill.style.background = markerBackground(attrs.color);
+        bar.append(fill);
+        const pct = document.createElement("span");
+        pct.className = "pct";
+        pct.textContent = t(lang, "percent", { value: Math.round(level) });
+        row.append(name, bar, pct);
+        return row;
+      })
+    );
+  }
+};
+
+// frontend/src/scan.js
+var ScanPart = class {
+  _scanBusy() {
+    return this._scan !== null;
+  }
+  _bodyTabs() {
+    return [...this._role("body-tabs").querySelectorAll('[role="tab"]')];
+  }
+  _selectTab(tab) {
+    if (tab === "scan" && this._role("body-tab-scan").disabled) return;
+    if (tab === this._tab) return;
+    this._tab = tab;
+    this._update();
+  }
+  _onBodyTabKey(ev) {
+    const tabs = this._bodyTabs().filter((tab) => !tab.disabled);
+    const index = tabs.findIndex((tab) => tab.dataset.bodyTab === this._tab);
+    const moves = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 };
+    if (!(ev.key in moves) || tabs.length === 0) return;
+    ev.preventDefault();
+    const next = tabs[(moves[ev.key] + tabs.length) % tabs.length];
+    this._selectTab(next.dataset.bodyTab);
+    next.focus();
+  }
+  _onScanStart() {
+    const printer = this._printer();
+    if (!printer?.scanner || this._scanBusy() || printer.can_print === false) return;
+    this._startScan(printer.entry_id, {
+      source: this._role("scan-source").value,
+      color_mode: this._role("scan-color").value,
+      resolution: Number(this._role("scan-resolution").value),
+      format: this._role("scan-format").value
+    });
+  }
+  // Another page from the glass, added to the PDF shown, with its settings.
+  _onScanAdd() {
+    const result = this._scanResult;
+    if (!result || this._scanBusy()) return;
+    const record = result.record;
+    this._startScan(
+      result.entryId,
+      {
+        source: record.source,
+        color_mode: record.color_mode,
+        resolution: Number(record.resolution),
+        format: "pdf",
+        append_to: record.id
+      },
+      Number(record.pages) || 0
+    );
+  }
+  async _startScan(entryId, request, appendPages = null) {
+    const lang = pickLanguage(this._hass);
+    const now = Date.now();
+    const scan = { entryId, scanId: null, started: now, progressAt: now, appendPages };
+    this._scan = scan;
+    this._disarmAll();
+    if (appendPages === null) this._clearScanResult();
+    this._scanMessage = { text: t(lang, "scan_scanning"), kind: "info" };
+    this._update();
+    let state;
+    try {
+      state = (await this._hass.callWS({ type: "home_print/scan/start", entry_id: entryId, ...request }))?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      this._endScan(scanErrorText(lang, err?.code), "error");
+      return;
+    }
+    if (this._scan !== scan) return;
+    scan.scanId = state?.scan_id ?? null;
+    if (!scan.scanId) {
+      this._endScan(scanErrorText(lang, "scan_failed"), "error");
+      return;
+    }
+    this._scanSeen.add(scan.scanId);
+    this._onScanState(scan, state);
+  }
+  // A scan the server is running that this card isn't following yet: after
+  // a reload, or one started on another screen. A finished last_scan alone
+  // is not shown, so a card opened later doesn't pop open on old news.
+  _resumeScan(printer) {
+    const id = printer.scanner?.active_scan_id;
+    if (!id || this._scan || this._scanSeen.has(id) || printer.can_print === false) return;
+    this._scanSeen.add(id);
+    this._scan = {
+      entryId: printer.entry_id,
+      scanId: id,
+      started: Date.now(),
+      progressAt: Date.now(),
+      appendPages: null,
+      resumed: true
+    };
+    this._clearScanResult();
+    this._tab = "scan";
+    this._scanMessage = { text: t(pickLanguage(this._hass), "scan_scanning"), kind: "info" };
+    if (this.isConnected) this._scheduleScanPoll();
+  }
+  _scheduleScanPoll() {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = setTimeout(() => {
+      this._scanTimer = null;
+      this._pollScan();
+    }, SCAN_POLL_MS);
+  }
+  async _pollScan() {
+    const scan = this._scan;
+    if (!scan?.scanId || !this._hass) return;
+    const lang = pickLanguage(this._hass);
+    if (Date.now() - scan.progressAt >= SCAN_POLL_LIMIT_MS) {
+      this._endScan(t(lang, "scan_timeout"), "error");
+      return;
+    }
+    let state;
+    try {
+      state = (await this._hass.callWS({
+        type: "home_print/scan/state",
+        entry_id: scan.entryId,
+        scan_id: scan.scanId
+      }))?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
+        this._endScan(t(lang, "scan_lost"), "error");
+        return;
+      }
+      if (this.isConnected) this._scheduleScanPoll();
+      return;
+    }
+    if (this._scan !== scan) return;
+    this._onScanState(scan, state);
+  }
+  _onScanState(scan, state) {
+    const lang = pickLanguage(this._hass);
+    const progress = `${state?.state}:${state?.pages}`;
+    if (progress !== scan.progressKey) {
+      scan.progressKey = progress;
+      scan.progressAt = Date.now();
+    }
+    switch (state?.state) {
+      case "done": {
+        const record = state.record;
+        if (record) {
+          let page = 1;
+          if (scan.appendPages !== null) page = scan.appendPages + 1;
+          else if (scan.resumed) page = Number(record.pages) || 1;
+          this._showScanResult(scan.entryId, record, page);
+          this._endScan(t(lang, "scan_done"), "success");
+        } else {
+          this._endScan(t(lang, "scan_saved"), "info");
+        }
+        this._reloadScans(scan.entryId);
+        return;
+      }
+      case "error":
+        this._endScan(
+          scanErrorText(lang, state.error),
+          state.error === "canceled" ? "info" : "error"
+        );
+        return;
+      case "saving":
+        this._scanMessage = { text: t(lang, "scan_saving"), kind: "info" };
+        break;
+      default: {
+        const pages = Number(state?.pages) || 0;
+        const text = pages > 0 ? t(lang, "scan_scanning_page", { n: pages + 1 }) : t(lang, "scan_scanning");
+        this._scanMessage = { text, kind: "info" };
+      }
+    }
+    this._update();
+    if (this.isConnected) this._scheduleScanPoll();
+  }
+  // Stop the running scan; the server closes the scanner's job.
+  async _onScanCancel() {
+    const scan = this._scan;
+    if (!scan?.scanId || scan.canceling || !this._hass) return;
+    scan.canceling = true;
+    this._update();
+    let state;
+    try {
+      state = (await this._hass.callWS({
+        type: "home_print/scan/cancel",
+        entry_id: scan.entryId,
+        scan_id: scan.scanId
+      }))?.scan;
+    } catch (err) {
+      if (this._scan !== scan) return;
+      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
+        this._endScan(t(pickLanguage(this._hass), "scan_lost"), "error");
+        return;
+      }
+      scan.canceling = false;
+      this._update();
+      return;
+    }
+    if (this._scan !== scan) return;
+    scan.canceling = false;
+    this._onScanState(scan, state);
+  }
+  _endScan(text, kind) {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = null;
+    this._scan = null;
+    this._scanMessage = { text, kind };
+    this._update();
+  }
+  // Forget everything about scanning on this card (the printer changed).
+  // A scan still running is left to the server; switching back resumes it.
+  _resetScan() {
+    clearTimeout(this._scanTimer);
+    this._scanTimer = null;
+    if (this._scan?.scanId) this._scanSeen.delete(this._scan.scanId);
+    this._scan = null;
+    this._scanMessage = null;
+    this._tab = "print";
+    this._clearScanResult();
+  }
+  _reloadScans(entryId) {
+    if (this._historyEntryId === entryId && this._historyTab === "scans") this._loadHistory();
+  }
+  _showScanResult(entryId, record, page = 1) {
+    const total = Math.max(1, Number(record.pages) || 1);
+    this._scanResult = {
+      entryId,
+      record,
+      page: Math.min(Math.max(1, page), total),
+      pendingName: null,
+      renameSeq: 0,
+      deleting: false
+    };
+    this._role("scan-name").value = String(record.name ?? "");
+    this._loadScanImage();
+  }
+  _clearScanResult() {
+    this._disarmAll();
+    this._scanResult = null;
+    this._scanImgToken += 1;
+    this._role("scan-page").replaceChildren();
+  }
+  _onScanPage(step) {
+    const result = this._scanResult;
+    if (!result) return;
+    const total = Math.max(1, Number(result.record.pages) || 1);
+    const page = Math.min(Math.max(1, result.page + step), total);
+    if (page === result.page) return;
+    result.page = page;
+    this._update();
+    this._loadScanImage();
+  }
+  // The page shown is signed just before it loads, like the preview's pages.
+  async _loadScanImage() {
+    const result = this._scanResult;
+    if (!result) return;
+    const token = ++this._scanImgToken;
+    const lang = pickLanguage(this._hass);
+    const box = this._role("scan-page");
+    const failed = () => {
+      if (token !== this._scanImgToken) return;
+      box.replaceChildren(this._previewNote(null, t(lang, "preview_failed")));
+    };
+    let path;
+    try {
+      path = await this._signPath(scanPagePath(result.entryId, result.record.id, result.page));
+    } catch (_err) {
+      failed();
+      return;
+    }
+    if (token !== this._scanImgToken) return;
+    const img = document.createElement("img");
+    img.dataset.role = "scan-img";
+    img.alt = t(lang, "preview_page", { n: result.page });
+    img.addEventListener("error", failed);
+    img.src = path;
+    box.replaceChildren(img);
+  }
+  _onScanNameKey(ev) {
+    const result = this._scanResult;
+    if (!result) return;
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      this._renameScan();
+    } else if (ev.key === "Escape") {
+      ev.stopPropagation();
+      this._role("scan-name").value = String(result.record.name ?? "");
+    }
+  }
+  async _renameScan() {
+    const result = this._scanResult;
+    if (!result || this._printer()?.can_print === false) return;
+    const lang = pickLanguage(this._hass);
+    const input = this._role("scan-name");
+    const name = input.value.trim();
+    if (!name) {
+      input.value = String(result.record.name ?? "");
+      return;
+    }
+    if (name === (result.pendingName ?? result.record.name)) return;
+    result.pendingName = name;
+    const seq = ++result.renameSeq;
+    let entry;
+    try {
+      entry = (await this._hass.callWS({
+        type: "home_print/scans/rename",
+        entry_id: result.entryId,
+        scan_record_id: result.record.id,
+        name
+      }))?.entry;
+    } catch (err) {
+      if (this._scanResult !== result) return;
+      if (seq !== result.renameSeq) return;
+      result.pendingName = null;
+      input.value = String(result.record.name ?? "");
+      const key = err?.code === "unauthorized" ? "edit_not_allowed" : "rename_failed";
+      this._scanMessage = { text: t(lang, key), kind: "error" };
+      this._update();
+      return;
+    }
+    if (this._scanResult !== result || seq !== result.renameSeq) return;
+    result.pendingName = null;
+    if (!entry) {
+      this._clearScanResult();
+      this._scanMessage = { text: t(lang, "scan_error_not_found"), kind: "error" };
+    } else {
+      result.record = entry;
+      if (input.value.trim() === name) input.value = String(entry.name ?? "");
+    }
+    this._update();
+    this._reloadScans(result.entryId);
+  }
+  async _onScanDownload() {
+    const result = this._scanResult;
+    if (!result) return;
+    if (await this._downloadScan(result.entryId, result.record)) return;
+    if (this._scanResult !== result) return;
+    this._scanMessage = { text: t(pickLanguage(this._hass), "download_failed"), kind: "error" };
+    this._update();
+  }
+  // The file route needs auth, so a short-lived signed link is clicked; the
+  // server's Content-Disposition names the file.
+  async _downloadScan(entryId, record) {
+    let path;
+    try {
+      path = await this._signPath(scanFilePath(entryId, record.id), DOWNLOAD_SIGN_SECONDS);
+    } catch (_err) {
+      return false;
+    }
+    if (!path) return false;
+    const link = document.createElement("a");
+    link.href = path;
+    link.setAttribute("download", "");
+    link.hidden = true;
+    this.shadowRoot.append(link);
+    link.click();
+    link.remove();
+    return true;
+  }
+  async _deleteScanResult() {
+    const result = this._scanResult;
+    if (!result || result.deleting || this._scanBusy()) return;
+    const lang = pickLanguage(this._hass);
+    result.deleting = true;
+    this._update();
+    try {
+      await this._hass.callWS({
+        type: "home_print/scans/delete",
+        entry_id: result.entryId,
+        scan_record_id: result.record.id
+      });
+    } catch (err) {
+      if (this._scanResult !== result) return;
+      result.deleting = false;
+      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
+      this._scanMessage = { text: t(lang, key), kind: "error" };
+      this._update();
+      return;
+    }
+    if (this._scanResult === result) {
+      this._clearScanResult();
+      this._scanMessage = { text: t(lang, "scan_deleted"), kind: "info" };
+    }
+    this._update();
+    this._reloadScans(result.entryId);
+  }
+  // Options come from the chosen source's capabilities; a value no longer
+  // offered falls back to the scanner's default, else the first one.
+  _fillScanSelects(lang, scanner, reset) {
+    const defaults = scanner.defaults ?? {};
+    const pick = (values, current, fallback) => {
+      const strings = values.map(String);
+      if (!reset && strings.includes(String(current))) return current;
+      return strings.includes(String(fallback)) ? fallback : values[0];
+    };
+    const sources = Object.keys(scanner.sources ?? {});
+    const source = pick(sources, this._role("scan-source").value, defaults.source);
+    const caps = scanner.sources?.[source] ?? {};
+    const colors = scanColorChoices(caps.color_modes ?? []);
+    const resolutions = caps.resolutions ?? [];
+    const formats = scanner.formats ?? ["pdf"];
+    const field = (name) => this.shadowRoot.querySelector(`[data-scan="${name}"]`);
+    this._setOptions(
+      this._role("scan-source"),
+      sources,
+      (v) => scanOptionLabel(lang, "source", v),
+      source
+    );
+    field("source").hidden = sources.length < 2;
+    this._setOptions(
+      this._role("scan-color"),
+      colors,
+      (v) => scanColorLabel(lang, v, colors),
+      pick(colors, this._role("scan-color").value, defaults.color_mode)
+    );
+    this._setOptions(
+      this._role("scan-resolution"),
+      resolutions,
+      (v) => scanOptionLabel(lang, "resolution", v),
+      pick(resolutions, this._role("scan-resolution").value, defaults.resolution)
+    );
+    this._setOptions(
+      this._role("scan-format"),
+      formats,
+      (v) => scanOptionLabel(lang, "format", v),
+      pick(formats, this._role("scan-format").value, defaults.format)
+    );
+  }
+  _renderScan(lang, printer) {
+    const scanner = printer?.scanner ?? null;
+    const id = scanner ? printer.entry_id : null;
+    if (id !== this._scanAppliedId) {
+      this._resetScan();
+      this._scanAppliedId = id;
+      if (scanner) this._fillScanSelects(lang, scanner, true);
+    } else if (scanner) {
+      this._fillScanSelects(lang, scanner, false);
+    }
+    const editable = printer?.can_print !== false;
+    if (scanner) this._resumeScan(printer);
+    if (!scanner || !editable) this._tab = "print";
+    const open = this._tab === "scan";
+    this._role("body-tabs").hidden = !scanner;
+    const scanTab = this._role("body-tab-scan");
+    scanTab.disabled = !editable;
+    for (const tab of this._bodyTabs()) {
+      const selected = tab.dataset.bodyTab === this._tab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    const printPanel = this._role("print-panel");
+    const scanPanel = this._role("scan-panel");
+    printPanel.hidden = open;
+    scanPanel.hidden = !open;
+    for (const [panel, tab] of [
+      [printPanel, "body-tab-print"],
+      [scanPanel, "body-tab-scan"]
+    ]) {
+      if (scanner) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", tab);
+      } else {
+        panel.removeAttribute("role");
+        panel.removeAttribute("aria-labelledby");
+      }
+    }
+    if (!scanner) return;
+    const busy = this._scanBusy();
+    const offline = scanner.available === false;
+    this._role("scan-start").disabled = busy || !editable || offline;
+    const cancel = this._role("scan-cancel");
+    cancel.hidden = !busy || !editable;
+    cancel.disabled = !this._scan?.scanId || Boolean(this._scan?.canceling);
+    for (const name of SCAN_SELECTS) this._role(name).disabled = busy;
+    const message = this._role("scan-message");
+    let shown = this._scanMessage;
+    if (!shown && offline) {
+      shown = { text: scanErrorText(lang, "scanner_unavailable"), kind: "error" };
+    }
+    message.textContent = shown?.text ?? "";
+    message.className = `message ${shown?.kind ?? ""}`.trim();
+    const result = this._scanResult;
+    this._role("scan-result").hidden = !result;
+    if (!result) return;
+    const record = result.record;
+    const total = Math.max(1, Number(record.pages) || 1);
+    this._role("scan-nav").hidden = total <= 1;
+    this._role("scan-page-label").textContent = t(lang, "scan_page_of", { n: result.page, total });
+    this._role("scan-prev").disabled = result.page <= 1;
+    this._role("scan-next").disabled = result.page >= total;
+    this._role("scan-name").disabled = busy || !editable;
+    const add = this._role("scan-add");
+    add.hidden = !editable || record.mime !== "application/pdf" || record.source !== "platen";
+    add.disabled = busy;
+    const remove = this._role("scan-delete");
+    remove.hidden = !editable;
+    remove.disabled = busy || result.deleting;
+  }
+};
+
+// frontend/src/switcher.js
+var SwitcherPart = class {
+  _selectPrinter(entryId) {
+    if (!entryId) return;
+    const changed = entryId !== this._printer()?.entry_id;
+    this._pickedId = entryId;
+    writeStored(this._storageKey, entryId);
+    this._update();
+    if (changed) this._loadPrinters();
+  }
+  _listItems() {
+    return [...this._role("printer-list").querySelectorAll('[role="option"]')];
+  }
+  _onSwitcher() {
+    if (this._role("printer-list").hidden) this._openList();
+    else this._closeList(true);
+  }
+  _onSwitcherKey(ev) {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault();
+    this._openList();
+  }
+  _openList() {
+    const list = this._role("printer-list");
+    if (this._role("switcher").hidden || !list.hidden) return;
+    list.hidden = false;
+    this._role("switcher").setAttribute("aria-expanded", "true");
+    document.addEventListener("click", this._onDocumentClickList, true);
+    const items = this._listItems();
+    (items.find((el) => el.getAttribute("aria-selected") === "true") ?? items[0])?.focus();
+  }
+  _closeList(focusButton = false) {
+    const list = this._role("printer-list");
+    document.removeEventListener("click", this._onDocumentClickList, true);
+    if (list.hidden) return;
+    list.hidden = true;
+    this._role("switcher").setAttribute("aria-expanded", "false");
+    if (focusButton) this._role("switcher").focus();
+  }
+  _onListKey(ev) {
+    const items = this._listItems();
+    const index = items.indexOf(this.shadowRoot.activeElement);
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this._closeList(true);
+      return;
+    }
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (index >= 0) this._chooseFromList(items[index].dataset.entryId);
+      return;
+    }
+    const moves = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: items.length - 1 };
+    if (!(ev.key in moves) || items.length === 0) return;
+    ev.preventDefault();
+    items[(moves[ev.key] + items.length) % items.length].focus();
+  }
+  _onListClick(ev) {
+    const item = ev.target.closest?.('[role="option"]');
+    if (item) this._chooseFromList(item.dataset.entryId);
+  }
+  _chooseFromList(entryId) {
+    this._closeList(true);
+    this._selectPrinter(entryId);
+  }
+  // As with the file menu, a null relatedTarget is left to the outside-click
+  // handler so a tap on an option in Safari isn't swallowed.
+  _onListFocusOut(ev) {
+    const next = ev.relatedTarget;
+    if (!next || this._role("printer-list").hidden) return;
+    if (this._role("printer-list").contains(next) || next === this._role("switcher")) return;
+    this._closeList();
+  }
+  _closeListOutside(ev) {
+    const path = ev.composedPath();
+    if (path.includes(this._role("printer-list")) || path.includes(this._role("switcher"))) return;
+    this._closeList();
+  }
+  _renderSwitcher(lang, printers, printer, unknown) {
+    const multi = printers.length > 1 || unknown && printers.length > 0;
+    const who = this._role("who");
+    const button = this._role("switcher");
+    const home = multi ? button : who;
+    if (this._role("title").parentNode !== home) {
+      home.prepend(this._role("who-icon"), this._role("title"));
+    }
+    who.hidden = multi;
+    button.hidden = !multi;
+    if (!multi) {
+      this._closeList();
+      this._listKey = "";
+      this._role("printer-list").replaceChildren();
+      return;
+    }
+    const label = t(lang, "switch_printer");
+    button.setAttribute("aria-label", `${label}: ${this._role("title").textContent}`);
+    button.title = label;
+    this._role("printer-list").setAttribute("aria-label", t(lang, "picker"));
+    const current = printer?.entry_id ?? null;
+    const rows = printers.map((p) => [
+      p.entry_id,
+      p.title || p.entry_id,
+      this._statusText(lang, p),
+      p.entry_id === current
+    ]);
+    const key = JSON.stringify(rows);
+    if (key === this._listKey) return;
+    this._listKey = key;
+    const list = this._role("printer-list");
+    const focused = this.shadowRoot.activeElement?.dataset?.entryId;
+    const items = rows.map(([id, name, status, selected], i) => {
+      const li = document.createElement("li");
+      li.className = "printer-option";
+      li.setAttribute("role", "option");
+      li.id = `printer-option-${i}`;
+      li.dataset.entryId = id;
+      li.tabIndex = -1;
+      li.setAttribute("aria-selected", String(selected));
+      const check = document.createElement("span");
+      check.className = "check";
+      check.append(svgIcon("check"));
+      const nameEl = document.createElement("span");
+      nameEl.className = "name";
+      nameEl.textContent = name;
+      const statusEl = document.createElement("span");
+      statusEl.className = "status";
+      statusEl.textContent = status;
+      li.append(check, nameEl, statusEl);
+      return li;
+    });
+    list.replaceChildren(...items);
+    if (focused) items.find((el) => el.dataset.entryId === focused)?.focus();
+  }
+};
+
+// frontend/src/styles.js
+var STYLE = `
   :host { display: block; }
   ha-card { display: block; overflow: hidden; }
   .card {
@@ -1088,7 +2390,8 @@ const STYLE = `
   .history-mark svg { color: var(--secondary-text-color); vertical-align: middle; }
 `;
 
-const TEMPLATE = `
+// frontend/src/template.js
+var TEMPLATE = `
   <style>${STYLE}</style>
   <ha-card>
     <div class="card">
@@ -1241,9 +2544,8 @@ const TEMPLATE = `
   </dialog>
 `;
 
-// ---------------------------------------------------------------- card
-
-class HomePrintCard extends HTMLElement {
+// frontend/src/card.js
+var HomePrintCard = class extends HTMLElement {
   constructor() {
     super();
     this._config = { show_ink: true };
@@ -1262,19 +2564,14 @@ class HomePrintCard extends HTMLElement {
     this._job = null;
     this._refreshTimer = null;
     this._pollTimer = null;
-    // The printer whose history is open; null while the popup is closed.
     this._historyEntryId = null;
     this._historyEntries = [];
     this._historyToken = 0;
     this._previewToken = 0;
     this._preview = null;
-    this._deletedIds = new Set();
-    // "prints" or "scans": the history tab shown.
+    this._deletedIds = /* @__PURE__ */ new Set();
     this._historyTab = "prints";
     this._savedOverflow = null;
-    // Scanning. _scan is the scan being followed ({entryId, scanId, started,
-    // appendPages}); _scanResult the finished document shown in the panel.
-    // "print" or "scan": the card body's tab.
     this._tab = "print";
     this._scan = null;
     this._scanTimer = null;
@@ -1282,25 +2579,22 @@ class HomePrintCard extends HTMLElement {
     this._scanMessage = null;
     this._scanAppliedId = null;
     this._scanImgToken = 0;
-    // Scan ids already followed, so a printers list that still names a
-    // finished scan never resumes it.
-    this._scanSeen = new Set();
-    // Buttons waiting for their second tap: button -> {timer, children, label}.
-    this._armed = new Map();
+    this._scanSeen = /* @__PURE__ */ new Set();
+    this._armed = /* @__PURE__ */ new Map();
     this._onDocumentClick = (ev) => this._closeMenuOutside(ev);
     this._onDocumentClickList = (ev) => this._closeListOutside(ev);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = TEMPLATE;
-    for (const name of FILE_INPUTS) {
-      this._role(name).addEventListener("change", (ev) => this._onFile(ev));
+    for (const name2 of FILE_INPUTS) {
+      this._role(name2).addEventListener("change", (ev) => this._onFile(ev));
     }
     this._role("pick").addEventListener("click", () => this._onPickButton());
     for (const option of this.shadowRoot.querySelectorAll("[data-option]")) {
       option.addEventListener("click", () => this._onPickOption(option.dataset.option));
     }
     this._role("pick-menu").addEventListener("keydown", (ev) => this._onMenuKey(ev));
-    for (const name of ["pick", "pick-menu"]) {
-      this._role(name).addEventListener("focusout", (ev) => this._onMenuFocusOut(ev));
+    for (const name2 of ["pick", "pick-menu"]) {
+      this._role(name2).addEventListener("focusout", (ev) => this._onMenuFocusOut(ev));
     }
     this._role("print").addEventListener("click", () => this._onPrint());
     this._role("switcher").addEventListener("click", () => this._onSwitcher());
@@ -1308,8 +2602,8 @@ class HomePrintCard extends HTMLElement {
     const list = this._role("printer-list");
     list.addEventListener("keydown", (ev) => this._onListKey(ev));
     list.addEventListener("click", (ev) => this._onListClick(ev));
-    for (const name of ["switcher", "printer-list"]) {
-      this._role(name).addEventListener("focusout", (ev) => this._onListFocusOut(ev));
+    for (const name2 of ["switcher", "printer-list"]) {
+      this._role(name2).addEventListener("focusout", (ev) => this._onListFocusOut(ev));
     }
     this._role("history-button").addEventListener("click", () => this._openHistory());
     this._role("history-close").addEventListener("click", () => this._closeHistory());
@@ -1326,8 +2620,9 @@ class HomePrintCard extends HTMLElement {
     this._role("scan-add").addEventListener("click", () => this._onScanAdd());
     this._role("scan-download").addEventListener("click", () => this._onScanDownload());
     const scanDelete = this._role("scan-delete");
-    scanDelete.addEventListener("click", () =>
-      this._confirmTap(scanDelete, () => this._deleteScanResult()),
+    scanDelete.addEventListener(
+      "click",
+      () => this._confirmTap(scanDelete, () => this._deleteScanResult())
     );
     this._role("scan-prev").addEventListener("click", () => this._onScanPage(-1));
     this._role("scan-next").addEventListener("click", () => this._onScanPage(1));
@@ -1339,21 +2634,18 @@ class HomePrintCard extends HTMLElement {
     }
     this._role("history-tabs").addEventListener("keydown", (ev) => this._onTabKey(ev));
   }
-
   static getConfigElement() {
     return document.createElement(EDITOR_TYPE);
   }
-
   static getStubConfig() {
     return {};
   }
-
   setConfig(config) {
     if (!config || typeof config !== "object") throw new Error("Invalid configuration");
     const next = {
-      entry_id: typeof config.entry_id === "string" && config.entry_id ? config.entry_id : undefined,
-      title: typeof config.title === "string" && config.title ? config.title : undefined,
-      show_ink: config.show_ink !== false,
+      entry_id: typeof config.entry_id === "string" && config.entry_id ? config.entry_id : void 0,
+      title: typeof config.title === "string" && config.title ? config.title : void 0,
+      show_ink: config.show_ink !== false
     };
     const key = storageKey(next.entry_id);
     if (key !== this._storageKey) {
@@ -1363,27 +2655,22 @@ class HomePrintCard extends HTMLElement {
     this._config = next;
     this._update();
   }
-
   set hass(hass) {
     this._hass = hass;
     if (this.isConnected) this._startRefresh();
     this._update();
   }
-
   get hass() {
     return this._hass;
   }
-
   getCardSize() {
     return 5;
   }
-
   connectedCallback() {
     if (this._hass) this._startRefresh();
     if (this._job && !this._pollTimer) this._schedulePoll();
     if (this._scan?.scanId && !this._scanTimer) this._scheduleScanPoll();
   }
-
   disconnectedCallback() {
     this._closeHistory();
     this._closeMenu();
@@ -1396,15 +2683,11 @@ class HomePrintCard extends HTMLElement {
     this._pollTimer = null;
     this._scanTimer = null;
   }
-
-  // ------------------------------------------------------------ data
-
   _startRefresh() {
     if (this._refreshTimer) return;
     this._refreshTimer = setInterval(() => this._loadPrinters(), REFRESH_MS);
     this._loadPrinters();
   }
-
   async _loadPrinters() {
     if (this._loading || !this._hass) return;
     this._loading = true;
@@ -1413,14 +2696,12 @@ class HomePrintCard extends HTMLElement {
       this._printers = Array.isArray(result?.printers) ? result.printers : [];
       this._loadFailed = false;
     } catch (_err) {
-      // Keep the last good list; only complain when there never was one.
       if (this._printers === null) this._loadFailed = true;
     } finally {
       this._loading = false;
     }
     this._update();
   }
-
   // The printer picked in this browser while it is still listed, then the
   // card's entry_id, then (null) the first printer.
   _wantedId() {
@@ -1430,1312 +2711,20 @@ class HomePrintCard extends HTMLElement {
     }
     return this._config.entry_id ?? null;
   }
-
   _printer() {
     const printers = this._printers ?? [];
     const wanted = this._wantedId();
     if (wanted) return printers.find((p) => p.entry_id === wanted) ?? null;
     return printers[0] ?? null;
   }
-
   _reachable(printer) {
     if (!printer || !printer.available) return false;
     const status = this._entityState(printer.entities?.status);
     return status?.state !== "unavailable";
   }
-
   _entityState(entityId) {
-    return entityId ? this._hass?.states?.[entityId] : undefined;
+    return entityId ? this._hass?.states?.[entityId] : void 0;
   }
-
-  _fileCheck(printer) {
-    return this._file ? validateFile(this._file, printer) : null;
-  }
-
-  // A running job holds the Print button, unless its status has been out of
-  // reach for longer than STALL_MS.
-  _jobHolds(printer) {
-    const job = this._job;
-    if (!job || job.entryId !== printer?.entry_id) return false;
-    return job.troubleSince === null || Date.now() - job.troubleSince <= STALL_MS;
-  }
-
-  _canSubmit(printer) {
-    return (
-      !this._uploading &&
-      !this._jobHolds(printer) &&
-      Boolean(printer) &&
-      this._reachable(printer) &&
-      printer.can_print !== false &&
-      this._fileCheck(printer)?.ok === true
-    );
-  }
-
-  // ------------------------------------------------------------ events
-
-  _onFile(ev) {
-    this._file = ev.target.files?.[0] ?? null;
-    // Only the input just used holds a file, so any picker fires "change"
-    // again for the same file later.
-    for (const name of FILE_INPUTS) {
-      const input = this._role(name);
-      if (input !== ev.target) input.value = "";
-    }
-    if (!this._uploading && !this._job) this._message = null;
-    this._update();
-  }
-
-  _selectPrinter(entryId) {
-    if (!entryId) return;
-    const changed = entryId !== this._printer()?.entry_id;
-    this._pickedId = entryId;
-    writeStored(this._storageKey, entryId);
-    this._update();
-    // A fresh list, so a scan running on that printer is picked up at once.
-    if (changed) this._loadPrinters();
-  }
-
-  // ------------------------------------------------------------ printer switcher
-
-  _listItems() {
-    return [...this._role("printer-list").querySelectorAll('[role="option"]')];
-  }
-
-  _onSwitcher() {
-    if (this._role("printer-list").hidden) this._openList();
-    else this._closeList(true);
-  }
-
-  _onSwitcherKey(ev) {
-    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
-    ev.preventDefault();
-    this._openList();
-  }
-
-  _openList() {
-    const list = this._role("printer-list");
-    if (this._role("switcher").hidden || !list.hidden) return;
-    list.hidden = false;
-    this._role("switcher").setAttribute("aria-expanded", "true");
-    document.addEventListener("click", this._onDocumentClickList, true);
-    const items = this._listItems();
-    (items.find((el) => el.getAttribute("aria-selected") === "true") ?? items[0])?.focus();
-  }
-
-  _closeList(focusButton = false) {
-    const list = this._role("printer-list");
-    document.removeEventListener("click", this._onDocumentClickList, true);
-    if (list.hidden) return;
-    list.hidden = true;
-    this._role("switcher").setAttribute("aria-expanded", "false");
-    if (focusButton) this._role("switcher").focus();
-  }
-
-  _onListKey(ev) {
-    const items = this._listItems();
-    const index = items.indexOf(this.shadowRoot.activeElement);
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this._closeList(true);
-      return;
-    }
-    if (ev.key === "Enter" || ev.key === " ") {
-      ev.preventDefault();
-      if (index >= 0) this._chooseFromList(items[index].dataset.entryId);
-      return;
-    }
-    const moves = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: items.length - 1 };
-    if (!(ev.key in moves) || items.length === 0) return;
-    ev.preventDefault();
-    items[(moves[ev.key] + items.length) % items.length].focus();
-  }
-
-  _onListClick(ev) {
-    const item = ev.target.closest?.('[role="option"]');
-    if (item) this._chooseFromList(item.dataset.entryId);
-  }
-
-  _chooseFromList(entryId) {
-    this._closeList(true);
-    this._selectPrinter(entryId);
-  }
-
-  // As with the file menu, a null relatedTarget is left to the outside-click
-  // handler so a tap on an option in Safari isn't swallowed.
-  _onListFocusOut(ev) {
-    const next = ev.relatedTarget;
-    if (!next || this._role("printer-list").hidden) return;
-    if (this._role("printer-list").contains(next) || next === this._role("switcher")) return;
-    this._closeList();
-  }
-
-  _closeListOutside(ev) {
-    const path = ev.composedPath();
-    if (path.includes(this._role("printer-list")) || path.includes(this._role("switcher"))) return;
-    this._closeList();
-  }
-
-  // ------------------------------------------------------------ file picker
-
-  _onPickButton() {
-    // iOS offers Photo Library / Take Photo / Choose File itself; desktops
-    // just get the file dialog. Decided per click: a mouse may be plugged in.
-    if (!usesPickMenu(globalThis.navigator, globalThis)) {
-      if (!this._role("pick-menu").hidden) this._closeMenu();
-      this._openInput("input-file");
-      return;
-    }
-    if (this._role("pick-menu").hidden) this._openMenu();
-    else this._closeMenu();
-  }
-
-  _onPickOption(option) {
-    this._closeMenu();
-    this._openInput(`input-${option}`);
-  }
-
-  _openInput(name) {
-    const input = this._role(name);
-    if (!input) return;
-    // Cleared first, so picking the file already chosen still fires "change".
-    input.value = "";
-    input.click();
-  }
-
-  _openMenu() {
-    this._role("pick-menu").hidden = false;
-    this._role("pick").setAttribute("aria-expanded", "true");
-    document.addEventListener("click", this._onDocumentClick, true);
-    this._menuItems()[0]?.focus();
-  }
-
-  _menuItems() {
-    return [...this.shadowRoot.querySelectorAll("[data-option]")];
-  }
-
-  _onMenuKey(ev) {
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      this._closeMenu(true);
-      return;
-    }
-    const step = { ArrowDown: 1, ArrowUp: -1 }[ev.key];
-    if (!step) return;
-    ev.preventDefault();
-    const items = this._menuItems();
-    const index = items.indexOf(this.shadowRoot.activeElement);
-    items[(index + step + items.length) % items.length].focus();
-  }
-
-  _closeMenu(focusButton = false) {
-    const menu = this._role("pick-menu");
-    document.removeEventListener("click", this._onDocumentClick, true);
-    if (menu.hidden) return;
-    menu.hidden = true;
-    this._role("pick").setAttribute("aria-expanded", "false");
-    if (focusButton) this._role("pick").focus();
-  }
-
-  // Tab (or any focus move) to something outside the menu closes it. A null
-  // relatedTarget is left to the outside-click handler: Safari doesn't focus
-  // tapped buttons, so closing here would swallow the tap on an option.
-  _onMenuFocusOut(ev) {
-    const next = ev.relatedTarget;
-    if (!next || this._role("pick-menu").hidden) return;
-    if (this._role("pick-menu").contains(next) || next === this._role("pick")) return;
-    this._closeMenu();
-  }
-
-  _closeMenuOutside(ev) {
-    const path = ev.composedPath();
-    if (path.includes(this._role("pick-menu")) || path.includes(this._role("pick"))) return;
-    this._closeMenu();
-  }
-
-  // ------------------------------------------------------------ dialogs
-
-  _wireDialog(dialog, close) {
-    // A tap on the dialog itself (not its sheet) is a tap on the backdrop.
-    dialog.addEventListener("click", (ev) => {
-      if (ev.target === dialog) close();
-    });
-    dialog.addEventListener("keydown", (ev) => {
-      if (ev.key !== "Escape") return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      close();
-    });
-    // The browser's own Escape handling; keep our state in step with it.
-    dialog.addEventListener("cancel", (ev) => {
-      ev.preventDefault();
-      close();
-    });
-  }
-
-  _anyDialogOpen() {
-    return this._role("history-dialog").open || this._role("preview-dialog").open;
-  }
-
-  _showDialog(dialog) {
-    if (dialog.open) return;
-    // The page behind stays put while a dialog is open.
-    if (this._savedOverflow === null) {
-      const root = document.documentElement;
-      this._savedOverflow = root.style.overflow;
-      root.style.overflow = "hidden";
-    }
-    if (typeof dialog.showModal === "function") dialog.showModal();
-    else dialog.setAttribute("open", "");
-  }
-
-  _hideDialog(dialog) {
-    if (dialog.open) {
-      if (typeof dialog.close === "function") dialog.close();
-      else dialog.removeAttribute("open");
-    }
-    if (this._savedOverflow !== null && !this._anyDialogOpen()) {
-      document.documentElement.style.overflow = this._savedOverflow;
-      this._savedOverflow = null;
-    }
-  }
-
-  _openHistory() {
-    const printer = this._printer();
-    if (!printer) return;
-    this._historyEntryId = printer.entry_id;
-    this._historyTab = "prints";
-    // Without a scanner there are no tabs, so the list is no tab panel.
-    const tabbed = Boolean(printer.scanner);
-    this._role("history-tabs").hidden = !tabbed;
-    const panel = this._role("history-panel");
-    if (tabbed) panel.setAttribute("role", "tabpanel");
-    else panel.removeAttribute("role");
-    this._historyEntries = [];
-    this._deletedIds = new Set();
-    this._renderHistory({ key: "history_loading" });
-    this._showDialog(this._role("history-dialog"));
-    this._loadHistory();
-  }
-
-  _closeHistory() {
-    this._closePreview();
-    this._historyEntryId = null;
-    this._historyToken += 1;
-    this._hideDialog(this._role("history-dialog"));
-  }
-
-  _switchHistoryTab(tab) {
-    if (!this._historyEntryId || tab === this._historyTab) return;
-    this._closePreview();
-    this._historyTab = tab;
-    this._historyEntries = [];
-    this._deletedIds = new Set();
-    this._renderHistory({ key: "history_loading" });
-    this._loadHistory();
-  }
-
-  _onTabKey(ev) {
-    const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key];
-    if (!step) return;
-    ev.preventDefault();
-    const tabs = [...this._role("history-tabs").querySelectorAll('[role="tab"]')];
-    const index = tabs.findIndex((tab) => tab.dataset.tab === this._historyTab);
-    const next = tabs[(index + step + tabs.length) % tabs.length];
-    this._switchHistoryTab(next.dataset.tab);
-    next.focus();
-  }
-
-  async _loadHistory() {
-    const entryId = this._historyEntryId;
-    if (!entryId || !this._hass) return;
-    const token = ++this._historyToken;
-    const type = this._historyTab === "scans" ? "home_print/scans" : "home_print/history";
-    let result;
-    try {
-      result = await this._hass.callWS({ type, entry_id: entryId });
-    } catch (_err) {
-      if (token !== this._historyToken) return;
-      // Keep rows already shown; a reload that fails only says so.
-      this._renderHistory({ key: "history_failed", error: true });
-      return;
-    }
-    if (token !== this._historyToken) return;
-    const entries = Array.isArray(result?.entries) ? result.entries : [];
-    // A reload sent before a delete finished may still list the record.
-    this._historyEntries = entries.filter((e) => !this._deletedIds.has(e.id));
-    this._renderHistory();
-  }
-
-  async _deleteHistory(record, button) {
-    const entryId = this._historyEntryId;
-    if (!entryId) return;
-    const scans = this._historyTab === "scans";
-    button.disabled = true;
-    try {
-      await this._hass.callWS(
-        scans
-          ? { type: "home_print/scans/delete", entry_id: entryId, scan_record_id: record.id }
-          : { type: "home_print/history/delete", entry_id: entryId, history_id: record.id },
-      );
-    } catch (err) {
-      button.disabled = false;
-      if (this._historyEntryId !== entryId || this._historyTab !== (scans ? "scans" : "prints")) {
-        return;
-      }
-      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
-      this._renderHistory({ key, error: true });
-      return;
-    }
-    if (scans && this._scanResult?.record.id === record.id) {
-      this._clearScanResult();
-      this._update();
-    }
-    if (this._historyEntryId !== entryId) return;
-    // The tab changed meanwhile: its rows are another list.
-    if (this._historyTab !== (scans ? "scans" : "prints")) return;
-    // {"deleted": false} means it was already gone; either way the row goes.
-    this._deletedIds.add(record.id);
-    const index = this._historyEntries.findIndex((e) => e.id === record.id);
-    this._historyEntries = this._historyEntries.filter((e) => e.id !== record.id);
-    this._renderHistory();
-    // Focus moves on to the row that took its place, else to the close button.
-    const rows = this._role("history-list").querySelectorAll(
-      '[data-role="history-delete"], [data-role="scan-row-delete"]',
-    );
-    (rows[Math.max(index, 0)] ?? this._role("history-close")).focus();
-  }
-
-  _renderHistory(status = null) {
-    const lang = pickLanguage(this._hass);
-    const entries = this._historyEntries;
-    const scans = this._historyTab === "scans";
-    for (const tab of this.shadowRoot.querySelectorAll('[role="tab"]')) {
-      const selected = tab.dataset.tab === this._historyTab;
-      tab.setAttribute("aria-selected", String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-      if (selected) this._role("history-panel").setAttribute("aria-labelledby", tab.id);
-    }
-    const empty = scans ? "scans_empty" : "history_empty";
-    const shown = status ?? (entries.length === 0 ? { key: empty } : null);
-    const statusEl = this._role("history-status");
-    statusEl.textContent = shown ? t(lang, shown.key) : "";
-    statusEl.hidden = !shown;
-    statusEl.classList.toggle("error", Boolean(shown?.error));
-    const canDelete = this._printer()?.can_print !== false;
-    this._role("history-list").replaceChildren(
-      ...entries.map((record) =>
-        scans ? this._scanRow(lang, record, canDelete) : this._historyRow(lang, record, canDelete),
-      ),
-    );
-  }
-
-  _historyRow(lang, record, canDelete) {
-    const row = document.createElement("li");
-    row.className = "history-item";
-    row.dataset.role = "history-item";
-
-    // A record without a MIME type never had a file (a failed job, or files
-    // not kept at all): nothing to preview, so the row is not a button.
-    const hadFile = Boolean(record.mime);
-    const open = document.createElement(hadFile ? "button" : "div");
-    open.className = hadFile ? "history-open" : "history-open static";
-    open.dataset.role = "history-open";
-    if (hadFile) {
-      open.type = "button";
-      open.addEventListener("click", () => {
-        const entryId = this._historyEntryId;
-        this._openPreview({
-          title: record.file_name,
-          gone: record.file === false,
-          isImage: String(record.mime ?? "").startsWith("image/"),
-          pages: record.pages,
-          pagePath: (page) => previewPath(entryId, record.id, page),
-        });
-      });
-    }
-
-    const state = HISTORY_STATES.includes(record.state) ? record.state : "sent";
-    const icon = historyStateIcon(state);
-    const mark = document.createElement("span");
-    mark.className = `history-mark ${icon === "✓" ? "ok" : icon === "✗" ? "bad" : "busy"}`;
-    mark.textContent = icon;
-    mark.title = t(lang, `history_state_${state}`);
-    mark.setAttribute("role", "img");
-    mark.setAttribute("aria-label", mark.title);
-
-    const textBox = document.createElement("span");
-    textBox.className = "history-text";
-    const name = document.createElement("span");
-    name.className = "history-name";
-    name.dataset.role = "history-name";
-    name.textContent = String(record.file_name ?? "");
-    name.title = name.textContent;
-    const meta = this._recordMeta(lang, record);
-    if (hadFile && record.file === false) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = t(lang, "file_gone_tag");
-      meta.append(tag);
-    }
-    textBox.append(name, meta);
-    open.append(mark, textBox);
-    row.append(open);
-
-    if (canDelete) {
-      const trash = document.createElement("button");
-      trash.type = "button";
-      trash.className = "icon-button";
-      trash.dataset.role = "history-delete";
-      trash.setAttribute("aria-label", t(lang, "delete"));
-      trash.title = t(lang, "delete");
-      trash.append(svgIcon("delete"));
-      trash.addEventListener("click", () => this._deleteHistory(record, trash));
-      row.append(trash);
-    }
-    return row;
-  }
-
-  _recordMeta(lang, record) {
-    const meta = document.createElement("span");
-    meta.className = "history-meta";
-    const pages = Number(record.pages);
-    const parts = [
-      formatHistoryTime(this._timeLanguage(), record.time),
-      record.user ? String(record.user) : "",
-      pages > 0 ? t(lang, pages === 1 ? "history_pages_one" : "history_pages", { n: pages }) : "",
-    ].filter(Boolean);
-    for (const part of parts) {
-      const span = document.createElement("span");
-      span.textContent = part;
-      meta.append(span);
-    }
-    return meta;
-  }
-
-  // One row of the Scans tab: tap to preview, download, delete (asks once).
-  _scanRow(lang, record, canDelete) {
-    const entryId = this._historyEntryId;
-    const row = document.createElement("li");
-    row.className = "history-item";
-    row.dataset.role = "scan-item";
-
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "history-open";
-    open.dataset.role = "scan-open";
-    open.addEventListener("click", () =>
-      this._openPreview({
-        title: record.name,
-        gone: false,
-        isImage: String(record.mime ?? "").startsWith("image/"),
-        pages: record.pages,
-        pagePath: (page) => scanPagePath(entryId, record.id, page),
-      }),
-    );
-    const mark = document.createElement("span");
-    mark.className = "history-mark";
-    mark.append(svgIcon("scanner"));
-    const textBox = document.createElement("span");
-    textBox.className = "history-text";
-    const name = document.createElement("span");
-    name.className = "history-name";
-    name.dataset.role = "history-name";
-    name.textContent = String(record.name ?? "");
-    name.title = name.textContent;
-    textBox.append(name, this._recordMeta(lang, record));
-    open.append(mark, textBox);
-    row.append(open);
-
-    const download = this._iconButton(lang, "download", "scan_download", "scan-row-download");
-    download.addEventListener("click", async () => {
-      if (!(await this._downloadScan(entryId, record)) && this._historyEntryId === entryId) {
-        this._renderHistory({ key: "download_failed", error: true });
-      }
-    });
-    row.append(download);
-    if (canDelete) {
-      const trash = this._iconButton(lang, "delete", "delete", "scan-row-delete");
-      trash.addEventListener("click", () =>
-        this._confirmTap(trash, () => this._deleteHistory(record, trash)),
-      );
-      row.append(trash);
-    }
-    return row;
-  }
-
-  _iconButton(lang, icon, label, roleName) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "icon-button";
-    button.dataset.role = roleName;
-    button.setAttribute("aria-label", t(lang, label));
-    button.title = t(lang, label);
-    button.append(svgIcon(icon));
-    return button;
-  }
-
-  _timeLanguage() {
-    return String(this._hass?.locale?.language ?? this._hass?.language ?? "en");
-  }
-
-  // Pages are signed just before they load: a signed path lives 300 s, and a
-  // request with an expired one is a 401 that HA counts as a failed login.
-  //
-  // `spec`: {title, gone, isImage, pages, pagePath(page) -> unsigned path},
-  // so print history and scans share the same viewer.
-  _openPreview(spec) {
-    if (!this._historyEntryId) return;
-    this._stopPreview();
-    const lang = pickLanguage(this._hass);
-    this._role("preview-title").textContent = String(spec.title ?? "");
-    const body = this._role("preview-body");
-    body.replaceChildren();
-    body.scrollTop = 0;
-    this._showDialog(this._role("preview-dialog"));
-    if (spec.gone) {
-      this._previewNote(body, t(lang, "file_gone"));
-      return;
-    }
-    const known = Number(spec.pages) > 0 ? Number(spec.pages) : null;
-    const preview = {
-      token: this._previewToken,
-      body,
-      lang,
-      pagePath: spec.pagePath,
-      // null: unknown, pages are added one by one until one is missing.
-      count: spec.isImage ? 1 : known,
-      observer: null,
-    };
-    this._preview = preview;
-    const Observer = globalThis.IntersectionObserver;
-    if (typeof Observer === "function") {
-      preview.observer = new Observer(
-        (entries) => {
-          for (const entry of entries) {
-            if (!entry.isIntersecting) continue;
-            preview.observer?.unobserve(entry.target);
-            this._loadPage(preview, entry.target);
-          }
-        },
-        { root: body, rootMargin: PREVIEW_MARGIN },
-      );
-    }
-    const first = preview.count ?? 1;
-    for (let page = 1; page <= first; page += 1) this._addPlaceholder(preview, page);
-    // Without an observer, pages load in turn, each after the one before.
-    if (!preview.observer) this._loadPage(preview, body.querySelector("[data-page]"));
-  }
-
-  _addPlaceholder(preview, page) {
-    const box = document.createElement("div");
-    box.className = "page";
-    box.dataset.page = String(page);
-    preview.body.append(box);
-    preview.observer?.observe(box);
-    return box;
-  }
-
-  _signPage(preview, page) {
-    return this._signPath(preview.pagePath(page));
-  }
-
-  async _signPath(path, expires = PREVIEW_SIGN_SECONDS) {
-    const result = await this._hass.callWS({ type: "auth/sign_path", path, expires });
-    return String(result?.path ?? "");
-  }
-
-  async _loadPage(preview, box) {
-    if (!box || box.dataset.state) return;
-    box.dataset.state = "loading";
-    const live = () => preview.token === this._previewToken && box.isConnected;
-    const page = Number(box.dataset.page);
-    let path;
-    try {
-      // A signature that got old while waiting is never used.
-      let signedAt;
-      do {
-        signedAt = Date.now();
-        path = await this._signPage(preview, page);
-        if (!live()) return;
-      } while (Date.now() - signedAt > PREVIEW_RESIGN_MS);
-    } catch (_err) {
-      if (!live()) return;
-      this._stopPreview();
-      this._previewNote(preview.body, t(preview.lang, "preview_failed"));
-      return;
-    }
-    const img = document.createElement("img");
-    img.alt = t(preview.lang, "preview_page", { n: page });
-    img.addEventListener("load", () => {
-      if (!live()) return;
-      box.classList.add("loaded");
-      const next = page + 1;
-      const more = preview.count === null || next <= preview.count;
-      if (!more) return;
-      let nextBox = preview.body.querySelector(`[data-page="${next}"]`);
-      if (!nextBox) nextBox = this._addPlaceholder(preview, next);
-      if (!preview.observer) this._loadPage(preview, nextBox);
-    });
-    img.addEventListener("error", () => {
-      if (!live()) return;
-      // The path was signed a moment ago, so a later page of an unknown count
-      // that fails is past the end of the document.
-      if (preview.count === null && page > 1) box.remove();
-      else box.replaceChildren(this._previewNote(null, t(preview.lang, "preview_failed")));
-    });
-    img.src = path;
-    box.append(img);
-  }
-
-  _previewNote(body, text) {
-    const note = document.createElement("div");
-    note.className = "sheet-status";
-    note.textContent = text;
-    if (body) body.replaceChildren(note);
-    return note;
-  }
-
-  _stopPreview() {
-    this._previewToken += 1;
-    this._preview?.observer?.disconnect();
-    this._preview = null;
-  }
-
-  _closePreview() {
-    this._stopPreview();
-    this._hideDialog(this._role("preview-dialog"));
-    this._role("preview-body").replaceChildren();
-  }
-
-  async _onPrint() {
-    const printer = this._printer();
-    if (!this._canSubmit(printer)) return;
-    const lang = pickLanguage(this._hass);
-    const pages = this._optionShown("pages") ? this._role("pages").value.trim() : "";
-    if (pages && !PAGE_RANGES_RE.test(pages)) {
-      this._setMessage(t(lang, "bad_pages"), "error");
-      return;
-    }
-
-    // A new upload replaces any job still being followed.
-    clearTimeout(this._pollTimer);
-    this._pollTimer = null;
-    this._job = null;
-    this._uploading = true;
-    const entryId = printer.entry_id;
-    this._uploadEntryId = entryId;
-    this._setMessage(t(lang, "uploading"));
-    const form = buildForm(this._file, { ...this._options(printer), page_ranges: pages });
-
-    const controller = new AbortController();
-    const abortTimer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-    let response;
-    let body = null;
-    try {
-      response = await this._hass.fetchWithAuth(
-        `/api/home_print/upload/${encodeURIComponent(entryId)}`,
-        { method: "POST", body: form, signal: controller.signal },
-      );
-      if (response.status !== 401) {
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-      }
-    } catch (err) {
-      let key = "network_error";
-      if (controller.signal.aborted) key = "upload_timeout";
-      else if (isAuthError(err, this._hass)) key = "session_expired";
-      this._finish(t(lang, key), "error");
-      return;
-    } finally {
-      clearTimeout(abortTimer);
-    }
-    if (controller.signal.aborted) {
-      this._finish(t(lang, "upload_timeout"), "error");
-      return;
-    }
-    if (response.status === 401) {
-      this._finish(t(lang, "session_expired"), "error");
-      return;
-    }
-    if (!response.ok || body?.job_id === undefined || body?.job_id === null) {
-      const text =
-        typeof body?.message === "string" && body.message
-          ? body.message
-          : t(lang, "upload_failed", { status: response.status });
-      this._finish(text, "error");
-      return;
-    }
-
-    // The upload is confirmed: follow the job, which holds the button, and
-    // clear the picked file so choosing the same one again fires "change".
-    this._uploading = false;
-    this._uploadEntryId = null;
-    this._file = null;
-    for (const name of FILE_INPUTS) this._role(name).value = "";
-    this._job = {
-      entryId,
-      jobId: body.job_id,
-      started: Date.now(),
-      printerErrors: 0,
-      troubleSince: null,
-      twoSided: String(form.get("sides") ?? printer.defaults?.sides ?? "").startsWith("two-sided"),
-    };
-    this._setMessage(jobLabel(lang, { state: "pending" }));
-    this._schedulePoll();
-    // The new record is at the top of the history now.
-    if (this._historyEntryId === entryId) this._loadHistory();
-  }
-
-  _options(printer) {
-    const caps = printer.capabilities ?? {};
-    const options = {};
-    if (this._optionShown("copies")) {
-      const max = Math.max(1, Number(caps.copies_max) || 1);
-      const copies = parseInt(this._role("copies").value, 10);
-      options.copies = Math.min(max, Math.max(1, Number.isNaN(copies) ? 1 : copies));
-    }
-    if (this._optionShown("duplex")) {
-      options.sides = this._role("duplex").checked ? twoSided(printer) : "one-sided";
-    }
-    if (this._optionShown("color")) {
-      options.color_mode = this._role("color").checked ? "color" : "monochrome";
-    }
-    return options;
-  }
-
-  // ------------------------------------------------------------ job polling
-
-  _schedulePoll() {
-    clearTimeout(this._pollTimer);
-    this._pollTimer = setTimeout(() => {
-      this._pollTimer = null;
-      this._poll();
-    }, POLL_MS);
-  }
-
-  async _poll() {
-    const job = this._job;
-    if (!job || !this._hass) return;
-    const lang = pickLanguage(this._hass);
-    if (Date.now() - job.started >= POLL_LIMIT_MS) {
-      this._finish(t(lang, "job_timeout"), "warning");
-      return;
-    }
-    let status;
-    try {
-      status = (
-        await this._hass.callWS({
-          type: "home_print/job",
-          entry_id: job.entryId,
-          job_id: job.jobId,
-        })
-      )?.job;
-    } catch (err) {
-      if (this._job !== job) return;
-      if (FATAL_JOB_ERRORS.includes(err?.code)) {
-        this._finish(t(lang, "job_lost"), "error");
-        return;
-      }
-      if (err?.code === "job_gone") {
-        this._finish(t(lang, "job_gone"));
-        return;
-      }
-      if (err?.code === "printer_error") {
-        job.printerErrors += 1;
-        if (job.printerErrors >= PRINTER_ERROR_LIMIT) {
-          this._finish(t(lang, "job_status_failed"), "error");
-          return;
-        }
-      } else {
-        job.printerErrors = 0;
-        job.troubleSince ??= Date.now();
-      }
-      // printer_unavailable, a dropped connection, an occasional printer_error.
-      this._setMessage(t(lang, "job_checking"));
-      if (this.isConnected) this._schedulePoll();
-      return;
-    }
-    if (this._job !== job) return;
-    job.printerErrors = 0;
-    job.troubleSince = null;
-    const label = jobLabel(lang, status, { twoSided: job.twoSided });
-    if (RUNNING_JOB_STATES.includes(status?.state)) {
-      this._setMessage(
-        label,
-        isProblemState(status, lang) ? "error" : "info",
-        visibleRawReasons(status.reasons).join(", "),
-      );
-      if (this.isConnected) this._schedulePoll();
-      return;
-    }
-    if (status?.state === "completed") this._finish(label, "success");
-    else if (status?.state === "canceled" || status?.state === "aborted") {
-      this._finish(label, "error", visibleRawReasons(status.reasons).join(", "));
-    }
-    else {
-      this._setMessage(t(lang, "job_checking"));
-      if (this.isConnected) this._schedulePoll();
-      return;
-    }
-    // The server has recorded the final state; show it in an open history.
-    if (this._historyEntryId === job.entryId) this._loadHistory();
-  }
-
-  _finish(text, kind, detail = "") {
-    const entryId = this._messageEntryId();
-    clearTimeout(this._pollTimer);
-    this._pollTimer = null;
-    this._job = null;
-    this._uploading = false;
-    this._uploadEntryId = null;
-    this._setMessage(text, kind, detail, entryId);
-  }
-
-  // The printer a print message is about: the job's or upload's printer,
-  // else the one shown. Only that printer shows it.
-  _messageEntryId() {
-    return this._job?.entryId ?? this._uploadEntryId ?? this._printer()?.entry_id ?? null;
-  }
-
-  _setMessage(text, kind = "info", detail = "", entryId = this._messageEntryId()) {
-    this._message = { text, kind, detail, entryId };
-    this._update();
-  }
-
-  // ------------------------------------------------------------ scanning
-
-  _scanBusy() {
-    return this._scan !== null;
-  }
-
-  _bodyTabs() {
-    return [...this._role("body-tabs").querySelectorAll('[role="tab"]')];
-  }
-
-  _selectTab(tab) {
-    if (tab === "scan" && this._role("body-tab-scan").disabled) return;
-    if (tab === this._tab) return;
-    this._tab = tab;
-    this._update();
-  }
-
-  _onBodyTabKey(ev) {
-    const tabs = this._bodyTabs().filter((tab) => !tab.disabled);
-    const index = tabs.findIndex((tab) => tab.dataset.bodyTab === this._tab);
-    const moves = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 };
-    if (!(ev.key in moves) || tabs.length === 0) return;
-    ev.preventDefault();
-    const next = tabs[(moves[ev.key] + tabs.length) % tabs.length];
-    this._selectTab(next.dataset.bodyTab);
-    next.focus();
-  }
-
-  _onScanStart() {
-    const printer = this._printer();
-    if (!printer?.scanner || this._scanBusy() || printer.can_print === false) return;
-    this._startScan(printer.entry_id, {
-      source: this._role("scan-source").value,
-      color_mode: this._role("scan-color").value,
-      resolution: Number(this._role("scan-resolution").value),
-      format: this._role("scan-format").value,
-    });
-  }
-
-  // Another page from the glass, added to the PDF shown, with its settings.
-  _onScanAdd() {
-    const result = this._scanResult;
-    if (!result || this._scanBusy()) return;
-    const record = result.record;
-    this._startScan(
-      result.entryId,
-      {
-        source: record.source,
-        color_mode: record.color_mode,
-        resolution: Number(record.resolution),
-        format: "pdf",
-        append_to: record.id,
-      },
-      Number(record.pages) || 0,
-    );
-  }
-
-  async _startScan(entryId, request, appendPages = null) {
-    const lang = pickLanguage(this._hass);
-    const now = Date.now();
-    const scan = { entryId, scanId: null, started: now, progressAt: now, appendPages };
-    this._scan = scan;
-    this._disarmAll();
-    // A new document replaces the result shown; an added page keeps it.
-    if (appendPages === null) this._clearScanResult();
-    this._scanMessage = { text: t(lang, "scan_scanning"), kind: "info" };
-    this._update();
-    let state;
-    try {
-      state = (
-        await this._hass.callWS({ type: "home_print/scan/start", entry_id: entryId, ...request })
-      )?.scan;
-    } catch (err) {
-      if (this._scan !== scan) return;
-      this._endScan(scanErrorText(lang, err?.code), "error");
-      return;
-    }
-    if (this._scan !== scan) return;
-    scan.scanId = state?.scan_id ?? null;
-    if (!scan.scanId) {
-      // Nothing to follow; never leave the button held.
-      this._endScan(scanErrorText(lang, "scan_failed"), "error");
-      return;
-    }
-    this._scanSeen.add(scan.scanId);
-    this._onScanState(scan, state);
-  }
-
-  // A scan the server is running that this card isn't following yet: after
-  // a reload, or one started on another screen. A finished last_scan alone
-  // is not shown, so a card opened later doesn't pop open on old news.
-  _resumeScan(printer) {
-    const id = printer.scanner?.active_scan_id;
-    if (!id || this._scan || this._scanSeen.has(id) || printer.can_print === false) return;
-    this._scanSeen.add(id);
-    // Whether it adds pages to an earlier PDF is unknown here, so its result
-    // opens on the last page: the newest one either way.
-    this._scan = {
-      entryId: printer.entry_id,
-      scanId: id,
-      started: Date.now(),
-      progressAt: Date.now(),
-      appendPages: null,
-      resumed: true,
-    };
-    this._clearScanResult();
-    this._tab = "scan";
-    this._scanMessage = { text: t(pickLanguage(this._hass), "scan_scanning"), kind: "info" };
-    if (this.isConnected) this._scheduleScanPoll();
-  }
-
-  _scheduleScanPoll() {
-    clearTimeout(this._scanTimer);
-    this._scanTimer = setTimeout(() => {
-      this._scanTimer = null;
-      this._pollScan();
-    }, SCAN_POLL_MS);
-  }
-
-  async _pollScan() {
-    const scan = this._scan;
-    if (!scan?.scanId || !this._hass) return;
-    const lang = pickLanguage(this._hass);
-    // Limit the time without progress, not the whole scan: a long ADF batch
-    // keeps changing its page count.
-    if (Date.now() - scan.progressAt >= SCAN_POLL_LIMIT_MS) {
-      this._endScan(t(lang, "scan_timeout"), "error");
-      return;
-    }
-    let state;
-    try {
-      state = (
-        await this._hass.callWS({
-          type: "home_print/scan/state",
-          entry_id: scan.entryId,
-          scan_id: scan.scanId,
-        })
-      )?.scan;
-    } catch (err) {
-      if (this._scan !== scan) return;
-      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
-        this._endScan(t(lang, "scan_lost"), "error");
-        return;
-      }
-      // A dropped connection: keep asking until the time limit.
-      if (this.isConnected) this._scheduleScanPoll();
-      return;
-    }
-    if (this._scan !== scan) return;
-    this._onScanState(scan, state);
-  }
-
-  _onScanState(scan, state) {
-    const lang = pickLanguage(this._hass);
-    const progress = `${state?.state}:${state?.pages}`;
-    if (progress !== scan.progressKey) {
-      scan.progressKey = progress;
-      scan.progressAt = Date.now();
-    }
-    switch (state?.state) {
-      case "done": {
-        const record = state.record;
-        if (record) {
-          // After an added page, show the first new one.
-          let page = 1;
-          if (scan.appendPages !== null) page = scan.appendPages + 1;
-          else if (scan.resumed) page = Number(record.pages) || 1;
-          this._showScanResult(scan.entryId, record, page);
-          this._endScan(t(lang, "scan_done"), "success");
-        } else {
-          this._endScan(t(lang, "scan_saved"), "info");
-        }
-        this._reloadScans(scan.entryId);
-        return;
-      }
-      case "error":
-        this._endScan(
-          scanErrorText(lang, state.error),
-          state.error === "canceled" ? "info" : "error",
-        );
-        return;
-      case "saving":
-        this._scanMessage = { text: t(lang, "scan_saving"), kind: "info" };
-        break;
-      default: {
-        const pages = Number(state?.pages) || 0;
-        const text =
-          pages > 0 ? t(lang, "scan_scanning_page", { n: pages + 1 }) : t(lang, "scan_scanning");
-        this._scanMessage = { text, kind: "info" };
-      }
-    }
-    this._update();
-    if (this.isConnected) this._scheduleScanPoll();
-  }
-
-  // Stop the running scan; the server closes the scanner's job.
-  async _onScanCancel() {
-    const scan = this._scan;
-    if (!scan?.scanId || scan.canceling || !this._hass) return;
-    scan.canceling = true;
-    this._update();
-    let state;
-    try {
-      state = (
-        await this._hass.callWS({
-          type: "home_print/scan/cancel",
-          entry_id: scan.entryId,
-          scan_id: scan.scanId,
-        })
-      )?.scan;
-    } catch (err) {
-      if (this._scan !== scan) return;
-      if (FATAL_SCAN_ERRORS.includes(err?.code)) {
-        this._endScan(t(pickLanguage(this._hass), "scan_lost"), "error");
-        return;
-      }
-      // Polling carries on and reports how the scan ends.
-      scan.canceling = false;
-      this._update();
-      return;
-    }
-    if (this._scan !== scan) return;
-    scan.canceling = false;
-    this._onScanState(scan, state);
-  }
-
-  _endScan(text, kind) {
-    clearTimeout(this._scanTimer);
-    this._scanTimer = null;
-    this._scan = null;
-    this._scanMessage = { text, kind };
-    this._update();
-  }
-
-  // Forget everything about scanning on this card (the printer changed).
-  // A scan still running is left to the server; switching back resumes it.
-  _resetScan() {
-    clearTimeout(this._scanTimer);
-    this._scanTimer = null;
-    if (this._scan?.scanId) this._scanSeen.delete(this._scan.scanId);
-    this._scan = null;
-    this._scanMessage = null;
-    this._tab = "print";
-    this._clearScanResult();
-  }
-
-  _reloadScans(entryId) {
-    if (this._historyEntryId === entryId && this._historyTab === "scans") this._loadHistory();
-  }
-
-  _showScanResult(entryId, record, page = 1) {
-    const total = Math.max(1, Number(record.pages) || 1);
-    this._scanResult = {
-      entryId,
-      record,
-      page: Math.min(Math.max(1, page), total),
-      pendingName: null,
-      renameSeq: 0,
-      deleting: false,
-    };
-    this._role("scan-name").value = String(record.name ?? "");
-    this._loadScanImage();
-  }
-
-  _clearScanResult() {
-    this._disarmAll();
-    this._scanResult = null;
-    this._scanImgToken += 1;
-    this._role("scan-page").replaceChildren();
-  }
-
-  _onScanPage(step) {
-    const result = this._scanResult;
-    if (!result) return;
-    const total = Math.max(1, Number(result.record.pages) || 1);
-    const page = Math.min(Math.max(1, result.page + step), total);
-    if (page === result.page) return;
-    result.page = page;
-    this._update();
-    this._loadScanImage();
-  }
-
-  // The page shown is signed just before it loads, like the preview's pages.
-  async _loadScanImage() {
-    const result = this._scanResult;
-    if (!result) return;
-    const token = ++this._scanImgToken;
-    const lang = pickLanguage(this._hass);
-    const box = this._role("scan-page");
-    const failed = () => {
-      if (token !== this._scanImgToken) return;
-      box.replaceChildren(this._previewNote(null, t(lang, "preview_failed")));
-    };
-    let path;
-    try {
-      path = await this._signPath(scanPagePath(result.entryId, result.record.id, result.page));
-    } catch (_err) {
-      failed();
-      return;
-    }
-    if (token !== this._scanImgToken) return;
-    // A fresh image per page, so a late error of the previous one is ignored.
-    const img = document.createElement("img");
-    img.dataset.role = "scan-img";
-    img.alt = t(lang, "preview_page", { n: result.page });
-    img.addEventListener("error", failed);
-    img.src = path;
-    box.replaceChildren(img);
-  }
-
-  _onScanNameKey(ev) {
-    const result = this._scanResult;
-    if (!result) return;
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      this._renameScan();
-    } else if (ev.key === "Escape") {
-      ev.stopPropagation();
-      this._role("scan-name").value = String(result.record.name ?? "");
-    }
-  }
-
-  async _renameScan() {
-    const result = this._scanResult;
-    if (!result || this._printer()?.can_print === false) return;
-    const lang = pickLanguage(this._hass);
-    const input = this._role("scan-name");
-    const name = input.value.trim();
-    if (!name) {
-      input.value = String(result.record.name ?? "");
-      return;
-    }
-    // Enter and the blur after it would otherwise send the same name twice.
-    if (name === (result.pendingName ?? result.record.name)) return;
-    result.pendingName = name;
-    // Only the newest request settles the field; an older reply is stale.
-    const seq = ++result.renameSeq;
-    let entry;
-    try {
-      entry = (
-        await this._hass.callWS({
-          type: "home_print/scans/rename",
-          entry_id: result.entryId,
-          scan_record_id: result.record.id,
-          name,
-        })
-      )?.entry;
-    } catch (err) {
-      if (this._scanResult !== result) return;
-      if (seq !== result.renameSeq) return;
-      result.pendingName = null;
-      input.value = String(result.record.name ?? "");
-      const key = err?.code === "unauthorized" ? "edit_not_allowed" : "rename_failed";
-      this._scanMessage = { text: t(lang, key), kind: "error" };
-      this._update();
-      return;
-    }
-    if (this._scanResult !== result || seq !== result.renameSeq) return;
-    result.pendingName = null;
-    if (!entry) {
-      // Deleted elsewhere meanwhile.
-      this._clearScanResult();
-      this._scanMessage = { text: t(lang, "scan_error_not_found"), kind: "error" };
-    } else {
-      result.record = entry;
-      // The server may have tidied the name or added " (2)"; show its name
-      // unless the field was edited again while the rename was on its way.
-      if (input.value.trim() === name) input.value = String(entry.name ?? "");
-    }
-    this._update();
-    this._reloadScans(result.entryId);
-  }
-
-  async _onScanDownload() {
-    const result = this._scanResult;
-    if (!result) return;
-    if (await this._downloadScan(result.entryId, result.record)) return;
-    if (this._scanResult !== result) return;
-    this._scanMessage = { text: t(pickLanguage(this._hass), "download_failed"), kind: "error" };
-    this._update();
-  }
-
-  // The file route needs auth, so a short-lived signed link is clicked; the
-  // server's Content-Disposition names the file.
-  async _downloadScan(entryId, record) {
-    let path;
-    try {
-      path = await this._signPath(scanFilePath(entryId, record.id), DOWNLOAD_SIGN_SECONDS);
-    } catch (_err) {
-      return false;
-    }
-    if (!path) return false;
-    const link = document.createElement("a");
-    link.href = path;
-    link.setAttribute("download", "");
-    link.hidden = true;
-    this.shadowRoot.append(link);
-    link.click();
-    link.remove();
-    return true;
-  }
-
-  async _deleteScanResult() {
-    const result = this._scanResult;
-    if (!result || result.deleting || this._scanBusy()) return;
-    const lang = pickLanguage(this._hass);
-    result.deleting = true;
-    this._update();
-    try {
-      await this._hass.callWS({
-        type: "home_print/scans/delete",
-        entry_id: result.entryId,
-        scan_record_id: result.record.id,
-      });
-    } catch (err) {
-      if (this._scanResult !== result) return;
-      result.deleting = false;
-      const key = err?.code === "unauthorized" ? "delete_not_allowed" : "delete_failed";
-      this._scanMessage = { text: t(lang, key), kind: "error" };
-      this._update();
-      return;
-    }
-    if (this._scanResult === result) {
-      this._clearScanResult();
-      this._scanMessage = { text: t(lang, "scan_deleted"), kind: "info" };
-    }
-    this._update();
-    this._reloadScans(result.entryId);
-  }
-
   // First tap arms the button ("Sure?"), the second within CONFIRM_MS runs
   // `action`; otherwise it goes back to how it was.
   _confirmTap(button, action) {
@@ -2750,13 +2739,12 @@ class HomePrintCard extends HTMLElement {
     this._armed.set(button, {
       children: [...button.childNodes],
       label: button.getAttribute("aria-label"),
-      timer: setTimeout(() => this._disarm(button), CONFIRM_MS),
+      timer: setTimeout(() => this._disarm(button), CONFIRM_MS)
     });
     button.classList.add("armed");
     button.setAttribute("aria-label", label.textContent);
     button.replaceChildren(label);
   }
-
   _disarm(button) {
     const armed = this._armed.get(button);
     if (!armed) return;
@@ -2767,11 +2755,9 @@ class HomePrintCard extends HTMLElement {
     else button.setAttribute("aria-label", armed.label);
     button.replaceChildren(...armed.children);
   }
-
   _disarmAll() {
     for (const button of [...this._armed.keys()]) this._disarm(button);
   }
-
   // Fill a select only when its options change, so an open dropdown survives
   // the frequent hass updates.
   _setOptions(select, values, label, wanted) {
@@ -2784,142 +2770,22 @@ class HomePrintCard extends HTMLElement {
           option.value = value;
           option.textContent = text;
           return option;
-        }),
+        })
       );
       select.dataset.key = key;
     }
     const strings = items.map(([value]) => value);
-    select.value = strings.includes(String(wanted)) ? String(wanted) : (strings[0] ?? "");
+    select.value = strings.includes(String(wanted)) ? String(wanted) : strings[0] ?? "";
   }
-
-  // Options come from the chosen source's capabilities; a value no longer
-  // offered falls back to the scanner's default, else the first one.
-  _fillScanSelects(lang, scanner, reset) {
-    const defaults = scanner.defaults ?? {};
-    const pick = (values, current, fallback) => {
-      const strings = values.map(String);
-      if (!reset && strings.includes(String(current))) return current;
-      return strings.includes(String(fallback)) ? fallback : values[0];
-    };
-    const sources = Object.keys(scanner.sources ?? {});
-    const source = pick(sources, this._role("scan-source").value, defaults.source);
-    const caps = scanner.sources?.[source] ?? {};
-    const colors = scanColorChoices(caps.color_modes ?? []);
-    const resolutions = caps.resolutions ?? [];
-    const formats = scanner.formats ?? ["pdf"];
-    const field = (name) => this.shadowRoot.querySelector(`[data-scan="${name}"]`);
-    this._setOptions(
-      this._role("scan-source"),
-      sources,
-      (v) => scanOptionLabel(lang, "source", v),
-      source,
-    );
-    field("source").hidden = sources.length < 2;
-    this._setOptions(
-      this._role("scan-color"),
-      colors,
-      (v) => scanColorLabel(lang, v, colors),
-      pick(colors, this._role("scan-color").value, defaults.color_mode),
-    );
-    this._setOptions(
-      this._role("scan-resolution"),
-      resolutions,
-      (v) => scanOptionLabel(lang, "resolution", v),
-      pick(resolutions, this._role("scan-resolution").value, defaults.resolution),
-    );
-    this._setOptions(
-      this._role("scan-format"),
-      formats,
-      (v) => scanOptionLabel(lang, "format", v),
-      pick(formats, this._role("scan-format").value, defaults.format),
-    );
-  }
-
-  _renderScan(lang, printer) {
-    const scanner = printer?.scanner ?? null;
-    const id = scanner ? printer.entry_id : null;
-    if (id !== this._scanAppliedId) {
-      this._resetScan();
-      this._scanAppliedId = id;
-      if (scanner) this._fillScanSelects(lang, scanner, true);
-    } else if (scanner) {
-      this._fillScanSelects(lang, scanner, false);
-    }
-    const editable = printer?.can_print !== false;
-    if (scanner) this._resumeScan(printer);
-    // No scanner: no tabs, only the print content.
-    if (!scanner || !editable) this._tab = "print";
-    const open = this._tab === "scan";
-    this._role("body-tabs").hidden = !scanner;
-    const scanTab = this._role("body-tab-scan");
-    scanTab.disabled = !editable;
-    for (const tab of this._bodyTabs()) {
-      const selected = tab.dataset.bodyTab === this._tab;
-      tab.setAttribute("aria-selected", String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-    }
-    const printPanel = this._role("print-panel");
-    const scanPanel = this._role("scan-panel");
-    printPanel.hidden = open;
-    scanPanel.hidden = !open;
-    for (const [panel, tab] of [[printPanel, "body-tab-print"], [scanPanel, "body-tab-scan"]]) {
-      if (scanner) {
-        panel.setAttribute("role", "tabpanel");
-        panel.setAttribute("aria-labelledby", tab);
-      } else {
-        panel.removeAttribute("role");
-        panel.removeAttribute("aria-labelledby");
-      }
-    }
-    if (!scanner) return;
-
-    const busy = this._scanBusy();
-    const offline = scanner.available === false;
-    this._role("scan-start").disabled = busy || !editable || offline;
-    const cancel = this._role("scan-cancel");
-    cancel.hidden = !busy || !editable;
-    cancel.disabled = !this._scan?.scanId || Boolean(this._scan?.canceling);
-    for (const name of SCAN_SELECTS) this._role(name).disabled = busy;
-    const message = this._role("scan-message");
-    let shown = this._scanMessage;
-    if (!shown && offline) {
-      shown = { text: scanErrorText(lang, "scanner_unavailable"), kind: "error" };
-    }
-    message.textContent = shown?.text ?? "";
-    message.className = `message ${shown?.kind ?? ""}`.trim();
-
-    const result = this._scanResult;
-    this._role("scan-result").hidden = !result;
-    if (!result) return;
-    const record = result.record;
-    const total = Math.max(1, Number(record.pages) || 1);
-    this._role("scan-nav").hidden = total <= 1;
-    this._role("scan-page-label").textContent = t(lang, "scan_page_of", { n: result.page, total });
-    this._role("scan-prev").disabled = result.page <= 1;
-    this._role("scan-next").disabled = result.page >= total;
-    this._role("scan-name").disabled = busy || !editable;
-    const add = this._role("scan-add");
-    add.hidden = !editable || record.mime !== "application/pdf" || record.source !== "platen";
-    add.disabled = busy;
-    const remove = this._role("scan-delete");
-    remove.hidden = !editable;
-    remove.disabled = busy || result.deleting;
-  }
-
-  // ------------------------------------------------------------ rendering
-
   _role(name) {
     return this.shadowRoot.querySelector(`[data-role="${name}"]`);
   }
-
   _row(name) {
     return this.shadowRoot.querySelector(`[data-opt="${name}"]`);
   }
-
   _optionShown(name) {
     return !this._row(name).hidden;
   }
-
   _update() {
     const lang = pickLanguage(this._hass);
     const root = this.shadowRoot;
@@ -2931,19 +2797,14 @@ class HomePrintCard extends HTMLElement {
       el.title = t(lang, el.dataset.aria);
     }
     this._role("pages").placeholder = t(lang, "pages_placeholder");
-
     const printers = this._printers ?? [];
     const printer = this._printer();
     const wanted = this._wantedId();
     const unknown = Boolean(wanted) && this._printers !== null && !printer;
-
     this._renderNotice(lang, printer, unknown, wanted);
-    // With a choice of printers the header names the one shown; the card's
-    // own title is for a single printer.
     const multi = printers.length > 1;
     const name = printer ? printer.title || printer.entry_id : "";
-    this._role("title").textContent =
-      (multi ? name : this._config.title || name) || this._config.title || "Home Print";
+    this._role("title").textContent = (multi ? name : this._config.title || name) || this._config.title || "Home Print";
     this._role("state").textContent = printer ? this._statusText(lang, printer) : "";
     this._renderSwitcher(lang, printers, printer, unknown);
     this._applyPrinter(printer);
@@ -2961,10 +2822,8 @@ class HomePrintCard extends HTMLElement {
       pick.setAttribute("aria-haspopup", "menu");
       pick.setAttribute("aria-expanded", String(!this._role("pick-menu").hidden));
     }
-    // The open history belongs to one printer; another one closes it.
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
-
   _renderNotice(lang, printer, unknown, wanted) {
     let key = null;
     if (this._loadFailed) key = "load_failed";
@@ -2977,7 +2836,6 @@ class HomePrintCard extends HTMLElement {
     notice.textContent = key ? t(lang, key, { id: wanted }) : "";
     notice.classList.toggle("info", key === "loading");
   }
-
   _statusText(lang, printer) {
     if (!this._reachable(printer)) return t(lang, "state_unreachable");
     const entity = this._entityState(printer.entities?.status)?.state;
@@ -2988,184 +2846,20 @@ class HomePrintCard extends HTMLElement {
     }
     return text;
   }
-
-  _renderSwitcher(lang, printers, printer, unknown) {
-    const multi = printers.length > 1 || (unknown && printers.length > 0);
-    const who = this._role("who");
-    const button = this._role("switcher");
-    // With a choice the icon and name sit in the button, before the chevron;
-    // a single printer gets them in a plain span, with nothing to press.
-    const home = multi ? button : who;
-    if (this._role("title").parentNode !== home) {
-      home.prepend(this._role("who-icon"), this._role("title"));
-    }
-    who.hidden = multi;
-    button.hidden = !multi;
-    if (!multi) {
-      this._closeList();
-      this._listKey = "";
-      this._role("printer-list").replaceChildren();
-      return;
-    }
-    const label = t(lang, "switch_printer");
-    button.setAttribute("aria-label", `${label}: ${this._role("title").textContent}`);
-    button.title = label;
-    this._role("printer-list").setAttribute("aria-label", t(lang, "picker"));
-    const current = printer?.entry_id ?? null;
-    const rows = printers.map((p) => [
-      p.entry_id,
-      p.title || p.entry_id,
-      this._statusText(lang, p),
-      p.entry_id === current,
-    ]);
-    const key = JSON.stringify(rows);
-    if (key === this._listKey) return;
-    this._listKey = key;
-    const list = this._role("printer-list");
-    const focused = this.shadowRoot.activeElement?.dataset?.entryId;
-    const items = rows.map(([id, name, status, selected], i) => {
-      const li = document.createElement("li");
-      li.className = "printer-option";
-      li.setAttribute("role", "option");
-      li.id = `printer-option-${i}`;
-      li.dataset.entryId = id;
-      li.tabIndex = -1;
-      li.setAttribute("aria-selected", String(selected));
-      const check = document.createElement("span");
-      check.className = "check";
-      check.append(svgIcon("check"));
-      const nameEl = document.createElement("span");
-      nameEl.className = "name";
-      nameEl.textContent = name;
-      const statusEl = document.createElement("span");
-      statusEl.className = "status";
-      statusEl.textContent = status;
-      li.append(check, nameEl, statusEl);
-      return li;
-    });
-    list.replaceChildren(...items);
-    if (focused) items.find((el) => el.dataset.entryId === focused)?.focus();
-  }
-
-  _applyPrinter(printer) {
-    // Reset the form to the printer's defaults when the printer changes.
-    const id = printer?.entry_id ?? null;
-    if (id === this._appliedId) return;
-    this._appliedId = id;
-    if (!printer) return;
-    const caps = printer.capabilities ?? {};
-    const defaults = printer.defaults ?? {};
-    this._role("copies").value = "1";
-    this._role("duplex").checked = String(defaults.sides ?? "").startsWith("two-sided");
-    this._role("color").checked = defaults.color_mode === "color";
-    this._role("pages").value = "";
-  }
-
-  _renderOptions(printer) {
-    const caps = printer?.capabilities ?? null;
-    const copiesMax = Number(caps?.copies_max) || 0;
-    this._row("copies").hidden = copiesMax <= 1;
-    this._role("copies").max = String(Math.max(1, copiesMax));
-    this._row("duplex").hidden = !(caps?.sides ?? []).some((s) => s.startsWith("two-sided"));
-    // Only a real choice is shown: without both modes the printer's own
-    // default applies and no color_mode is sent.
-    const modes = caps?.color_modes ?? [];
-    this._row("color").hidden = !(modes.includes("color") && modes.includes("monochrome"));
-    this._role("options").hidden = this._row("duplex").hidden && this._row("color").hidden;
-    const format = this._file ? fileFormat(this._file) : "application/pdf";
-    const pdfOk = (caps?.formats ?? []).includes("application/pdf");
-    // PDFs always take a page range (conversion selects the pages); images
-    // only when the printer accepts page-ranges for passthrough.
-    this._row("pages").hidden =
-      !caps || (format === "application/pdf" ? !pdfOk : !caps.page_ranges_passthrough);
-  }
-
-  _renderFile(lang, printer) {
-    this._role("file-name").textContent = this._file ? this._file.name : "";
-    this._role("file-size").textContent = this._file ? formatSize(this._file.size, lang) : "";
-    this._role("file-info").hidden = !this._file;
-    const message = this._role("message");
-    const check = this._fileCheck(printer);
-    let shown = this._message;
-    if (shown?.entryId && shown.entryId !== printer?.entry_id) shown = null;
-    if (!shown && check && !check.ok) {
-      shown = { text: t(lang, check.key, { mb: printer?.max_file_mb }), kind: "error" };
-    }
-    message.textContent = shown?.text ?? "";
-    message.className = `message ${shown?.kind ?? ""}`.trim();
-    const detail = this._role("detail");
-    detail.textContent = shown?.detail ?? "";
-    detail.hidden = !shown?.detail;
-  }
-
-  _renderInk(lang, printer) {
-    const ink = this._role("ink");
-    const markers = [];
-    if (this._config.show_ink && printer) {
-      for (const entityId of printer.entities?.markers ?? []) {
-        const entity = this._entityState(entityId);
-        const level = Number.parseFloat(entity?.state);
-        if (!entity || Number.isNaN(level)) continue;
-        markers.push({ entityId, level: Math.min(100, Math.max(0, level)), attrs: entity.attributes ?? {} });
-      }
-    }
-    ink.hidden = markers.length === 0;
-    ink.replaceChildren(
-      ...markers.map(({ entityId, level, attrs }) => {
-        const colors = String(attrs.color ?? "").match(/#[0-9a-fA-F]{6}/g) ?? [];
-        let label = attrs.friendly_name ?? entityId;
-        if (colors.length > 1) label = t(lang, "ink_color");
-        else if (colors[0]?.toLowerCase() === "#000000") label = t(lang, "ink_black");
-
-        const row = document.createElement("div");
-        row.className = "marker";
-        row.dataset.role = "marker";
-        const name = document.createElement("span");
-        name.textContent = label;
-        const bar = document.createElement("span");
-        bar.className = "bar";
-        const fill = document.createElement("span");
-        fill.className = "bar-fill";
-        fill.style.display = "block";
-        fill.style.width = `${level}%`;
-        fill.style.background = markerBackground(attrs.color);
-        bar.append(fill);
-        const pct = document.createElement("span");
-        pct.className = "pct";
-        pct.textContent = t(lang, "percent", { value: Math.round(level) });
-        row.append(name, bar, pct);
-        return row;
-      }),
+};
+for (const Part of [PrintPart, HistoryPart, ScanPart, SwitcherPart]) {
+  for (const key of Object.getOwnPropertyNames(Part.prototype)) {
+    if (key === "constructor") continue;
+    Object.defineProperty(
+      HomePrintCard.prototype,
+      key,
+      Object.getOwnPropertyDescriptor(Part.prototype, key)
     );
   }
 }
 
-HomePrintCard.helpers = Object.freeze({
-  pickLanguage,
-  t,
-  isWordFile,
-  validateFile,
-  buildForm,
-  jobLabel,
-  reasonLabel,
-  visibleRawReasons,
-  isProblemState,
-  isIOS,
-  usesPickMenu,
-  formatHistoryTime,
-  historyStateIcon,
-  scanErrorText,
-  scanPagePath,
-  scanFilePath,
-});
-
-if (!customElements.get(CARD_TYPE)) {
-  customElements.define(CARD_TYPE, HomePrintCard);
-}
-
-// ---------------------------------------------------------------- editor
-
-const EDITOR_STYLE = `
+// frontend/src/editor.js
+var EDITOR_STYLE = `
   :host { display: block; }
   .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
   label { color: var(--secondary-text-color); font-size: 0.9em; }
@@ -3183,8 +2877,7 @@ const EDITOR_STYLE = `
   .check label { color: var(--primary-text-color); font-size: 1em; flex: 1; }
   input[type="checkbox"] { width: 24px; height: 24px; accent-color: var(--primary-color); }
 `;
-
-const EDITOR_TEMPLATE = `
+var EDITOR_TEMPLATE = `
   <style>${EDITOR_STYLE}</style>
   <div class="field">
     <label for="printer" data-role="printer-label"></label>
@@ -3199,8 +2892,7 @@ const EDITOR_TEMPLATE = `
     <input id="show_ink" type="checkbox" data-role="show_ink" />
   </div>
 `;
-
-class HomePrintCardEditor extends HTMLElement {
+var HomePrintCardEditor = class extends HTMLElement {
   constructor() {
     super();
     this._config = {};
@@ -3217,24 +2909,19 @@ class HomePrintCardEditor extends HTMLElement {
     }
     this._role("show_ink").addEventListener("change", () => this._onShowInk());
   }
-
   _role(name) {
     return this.shadowRoot.querySelector(`[data-role="${name}"]`);
   }
-
   setConfig(config) {
-    this._config = { ...(config ?? {}) };
+    this._config = { ...config ?? {} };
     this._render();
   }
-
   set hass(hass) {
     this._hass = hass;
     this._render();
-    // Load once; after a failure, try again on a later hass at most every 30 s.
     const due = this._failedAt === null || Date.now() - this._failedAt >= EDITOR_RETRY_MS;
     if (this._printers === null && !this._loading && due && hass?.callWS) this._loadPrinters();
   }
-
   async _loadPrinters() {
     this._loading = true;
     try {
@@ -3248,13 +2935,11 @@ class HomePrintCardEditor extends HTMLElement {
     }
     this._render();
   }
-
   _render() {
     const lang = pickLanguage(this._hass);
     this._role("printer-label").textContent = t(lang, "editor_printer");
     this._role("title-label").textContent = t(lang, "editor_title");
     this._role("show-ink-label").textContent = t(lang, "editor_show_ink");
-
     const select = this._role("printer");
     const wanted = this._config.entry_id ?? "";
     const printers = this._printers ?? [];
@@ -3265,8 +2950,6 @@ class HomePrintCardEditor extends HTMLElement {
     if (wanted && !printers.some((p) => p.entry_id === wanted)) {
       options.push({ value: wanted, label: t(lang, "editor_not_found", { id: wanted }) });
     }
-    // Rebuild only when the list changes, so an open dropdown survives the
-    // frequent hass updates.
     const key = JSON.stringify(options.map(({ value, label }) => [value, label]));
     if (key !== this._optionsKey) {
       select.replaceChildren(
@@ -3275,25 +2958,22 @@ class HomePrintCardEditor extends HTMLElement {
           option.value = value;
           option.textContent = label;
           return option;
-        }),
+        })
       );
       this._optionsKey = key;
     }
     if (select.value !== wanted) select.value = wanted;
-
     const title = this._role("title");
     const wantedTitle = typeof this._config.title === "string" ? this._config.title : "";
     if (title.value !== wantedTitle) title.value = wantedTitle;
     this._role("show_ink").checked = this._config.show_ink !== false;
   }
-
   _emit(config) {
     this._config = config;
     this.dispatchEvent(
-      new CustomEvent("config-changed", { bubbles: true, composed: true, detail: { config } }),
+      new CustomEvent("config-changed", { bubbles: true, composed: true, detail: { config } })
     );
   }
-
   _onPrinter() {
     const config = { ...this._config };
     const value = this._role("printer").value;
@@ -3301,7 +2981,6 @@ class HomePrintCardEditor extends HTMLElement {
     else delete config.entry_id;
     this._emit(config);
   }
-
   _onTitle() {
     const value = this._role("title").value;
     if (value === (this._config.title ?? "")) return;
@@ -3310,25 +2989,44 @@ class HomePrintCardEditor extends HTMLElement {
     else delete config.title;
     this._emit(config);
   }
-
   _onShowInk() {
     const config = { ...this._config };
     if (this._role("show_ink").checked) delete config.show_ink;
     else config.show_ink = false;
     this._emit(config);
   }
-}
+};
 
+// frontend/src/index.js
+HomePrintCard.helpers = Object.freeze({
+  pickLanguage,
+  t,
+  isWordFile,
+  validateFile,
+  buildForm,
+  jobLabel,
+  reasonLabel,
+  visibleRawReasons,
+  isProblemState,
+  isIOS,
+  usesPickMenu,
+  formatHistoryTime,
+  historyStateIcon,
+  scanErrorText,
+  scanPagePath,
+  scanFilePath
+});
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, HomePrintCard);
+}
 if (!customElements.get(EDITOR_TYPE)) {
   customElements.define(EDITOR_TYPE, HomePrintCardEditor);
 }
-
 window.customCards = window.customCards || [];
 if (!window.customCards.some((card) => card.type === CARD_TYPE)) {
   window.customCards.push({
     type: CARD_TYPE,
     name: "Home Print",
-    description:
-      "Yazıcıya dosya gönder ve durumu izle. / Send files to a printer and monitor its status.",
+    description: "Yazıcıya dosya gönder ve durumu izle. / Send files to a printer and monitor its status."
   });
 }
