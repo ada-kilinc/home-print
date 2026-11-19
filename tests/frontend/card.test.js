@@ -1938,6 +1938,11 @@ describe("scan", () => {
     expect(options(card, "scan-source")).toEqual(["platen", "adf"]);
     expect(role(card, "scan-source").value).toBe("platen");
     expect(options(card, "scan-color")).toEqual(["color", "gray", "bw"]);
+    expect([...role(card, "scan-color").options].map((o) => o.textContent)).toEqual([
+      "Renkli",
+      "Siyah-beyaz",
+      "Siyah-beyaz (keskin)",
+    ]);
     expect(role(card, "scan-color").value).toBe("color");
     expect(options(card, "scan-resolution")).toEqual(["75", "150", "300", "600"]);
     expect(role(card, "scan-resolution").value).toBe("300");
@@ -2875,5 +2880,49 @@ describe("Print and Scan tabs (issue #8)", () => {
     await clickPrint(card);
     expect(role(card, "print-panel").contains(role(card, "message"))).toBe(true);
     expect(text(card, "message")).not.toBe("");
+  });
+});
+
+describe("scan colour choices", () => {
+  const withModes = (modes, defaultMode = "color") =>
+    deskjetPrinter({
+      scanner: scannerBlock({
+        sources: { platen: { color_modes: modes, resolutions: [300] } },
+        defaults: { source: "platen", color_mode: defaultMode, resolution: 300, format: "pdf" },
+      }),
+    });
+  const labels = (card) => [...role(card, "scan-color").options].map((o) => o.textContent);
+  const values = (card) => [...role(card, "scan-color").options].map((o) => o.value);
+  const open = async (card) => {
+    role(card, "body-tab-scan").click();
+    await flush();
+  };
+
+  it("offers what the scanner reports, colour first, greyscale as Black and white", async () => {
+    // The real DeskJet 4670 reports greyscale before colour.
+    const card = await mount(makeHass({ printers: [withModes(["gray", "color"])] }));
+    await open(card);
+    expect(values(card)).toEqual(["color", "gray"]);
+    expect(labels(card)).toEqual(["Renkli", "Siyah-beyaz"]);
+    expect(role(card, "scan-color").value).toBe("color");
+  });
+
+  it("1-bit alone is plain Black and white", async () => {
+    const card = await mount(makeHass({ printers: [withModes(["color", "bw"])], language: "en" }));
+    await open(card);
+    expect(values(card)).toEqual(["color", "bw"]);
+    expect(labels(card)).toEqual(["Colour", "Black and white"]);
+  });
+
+  it("with both, 1-bit is marked sharp", async () => {
+    const card = await mount(makeHass({ printers: [withModes(["bw", "gray", "color"])], language: "en" }));
+    await open(card);
+    expect(labels(card)).toEqual(["Colour", "Black and white", "Black and white (sharp)"]);
+  });
+
+  it("a scanner without colour offers only its black and white mode", async () => {
+    const card = await mount(makeHass({ printers: [withModes(["gray"], "gray")] }));
+    await open(card);
+    expect(labels(card)).toEqual(["Siyah-beyaz"]);
   });
 });

@@ -227,8 +227,9 @@ const STRINGS = {
     scan_source_adf: "Besleyici",
     scan_source_adf_duplex: "Besleyici (çift taraf)",
     scan_color_color: "Renkli",
-    scan_color_gray: "Gri",
+    scan_color_gray: "Siyah-beyaz",
     scan_color_bw: "Siyah-beyaz",
+    scan_color_bw_sharp: "Siyah-beyaz (keskin)",
     scan_format_pdf: "PDF",
     scan_format_jpeg: "JPEG",
     scan_dpi: "{n} dpi",
@@ -363,8 +364,9 @@ const STRINGS = {
     scan_source_adf: "Document feeder",
     scan_source_adf_duplex: "Document feeder (two-sided)",
     scan_color_color: "Colour",
-    scan_color_gray: "Grey",
+    scan_color_gray: "Black and white",
     scan_color_bw: "Black and white",
+    scan_color_bw_sharp: "Black and white (sharp)",
     scan_format_pdf: "PDF",
     scan_format_jpeg: "JPEG",
     scan_dpi: "{n} dpi",
@@ -596,6 +598,21 @@ function scanErrorText(lang, code) {
 }
 
 // Label of a scan option value: a known keyword in words, else as sent.
+// Every colour mode the scanner reports is offered, colour first. Greyscale
+// is shown as Black and white, as people call it; 1-bit black and white
+// gets "(sharp)" only when greyscale is offered too, so the two differ.
+const SCAN_COLOR_ORDER = ["color", "gray", "bw"];
+
+function scanColorChoices(modes) {
+  const known = SCAN_COLOR_ORDER.filter((mode) => modes.includes(mode));
+  return [...known, ...modes.filter((mode) => !SCAN_COLOR_ORDER.includes(mode))];
+}
+
+function scanColorLabel(lang, mode, modes) {
+  if (mode === "bw" && modes.includes("gray")) return t(lang, "scan_color_bw_sharp");
+  return scanOptionLabel(lang, "color", mode);
+}
+
 function scanOptionLabel(lang, kind, value) {
   if (kind === "resolution") return t(lang, "scan_dpi", { n: value });
   const key = `scan_${kind}_${value}`;
@@ -2787,7 +2804,7 @@ class HomePrintCard extends HTMLElement {
     const sources = Object.keys(scanner.sources ?? {});
     const source = pick(sources, this._role("scan-source").value, defaults.source);
     const caps = scanner.sources?.[source] ?? {};
-    const colors = caps.color_modes ?? [];
+    const colors = scanColorChoices(caps.color_modes ?? []);
     const resolutions = caps.resolutions ?? [];
     const formats = scanner.formats ?? ["pdf"];
     const field = (name) => this.shadowRoot.querySelector(`[data-scan="${name}"]`);
@@ -2801,7 +2818,7 @@ class HomePrintCard extends HTMLElement {
     this._setOptions(
       this._role("scan-color"),
       colors,
-      (v) => scanOptionLabel(lang, "color", v),
+      (v) => scanColorLabel(lang, v, colors),
       pick(colors, this._role("scan-color").value, defaults.color_mode),
     );
     this._setOptions(
