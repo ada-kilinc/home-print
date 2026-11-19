@@ -4,79 +4,75 @@
 [![Release](https://img.shields.io/github/v/release/ada-kilinc/home-print)](https://github.com/ada-kilinc/home-print/releases)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 
-Print to your network printer from the Home Assistant dashboard, from anywhere you can reach your Home Assistant.
+Print and scan with your network printer from a Home Assistant dashboard, wherever you can open Home Assistant.
 
-> **Status: early.** The integration and card are tested in code and against a real HP DeskJet 4670's responses, but not yet used day to day. Expect rough edges and please open an issue when something breaks.
-
-[Türkçe açıklama aşağıda](#türkçe)
+> **Early release.** Tested in code and against a real HP DeskJet 4670, not yet in daily use. Please open an issue when something breaks.
 
 <p>
-  <img src="docs/images/card.png" alt="The Home Print card: printer status, ink levels, file picker, print options, Print and Scan buttons" width="360">
-  <img src="docs/images/scan.png" alt="The scan panel with a finished two-page scan: preview, rename, download, add page" width="360">
+  <img src="docs/images/card.png" alt="Print tab: ink levels, Choose file and Copies, Two-sided and Colour, Pages, Print" width="300">
+  <img src="docs/images/scan.png" alt="Scan tab with a finished two-page scan: preview, name, Download, Add page, Delete" width="300">
 </p>
 
-## What it does
+## Features
 
-- **Finds your printer** on the network (IPP / AirPrint), or you add it by IP.
-- **Sensors** for printer status, ink/toner levels and problems (paper out, jam, cover open), plus the last job.
-- **Prints PDF, JPEG and PNG.** If the printer doesn't take a format directly, Home Print converts it to PWG Raster, Apple Raster (URF) or JPEG first. Duplex, copies, colour/mono and page ranges are supported where the printer supports them. Large phone photos are shrunk automatically (JPEG up to 175 MP, PNG up to 50 MP).
-- **Dashboard card** to pick a file or photo on your phone, choose options and follow the job until it's done.
-- **`home_print.print_file` action** for automations.
-- **Scans** with the printer's scanner (eSCL / AirScan): a **Scan** tab on the card, an archive in the Media panel and a `home_print.scan` action. See [Scanning](#scanning).
+- Finds IPP / AirPrint printers on the network, or add one by IP.
+- Sensors for status, ink or toner levels, problems and the last job.
+- Prints PDF, JPEG and PNG, converting when the printer can't take a format. Supports two-sided, copies, colour and page ranges. Shrinks large phone photos.
+- Scans over eSCL / AirScan to PDF or JPEG, saved in the **Media** panel.
+- A dashboard card with Print and Scan tabs, history and previews.
+- `home_print.print_file` and `home_print.scan` actions for automations.
 
-Not yet: Word/ODF files (save as PDF first), very old or USB-only printers (a helper add-on with CUPS is planned).
+Not supported yet: Word/ODF files (save as PDF), USB-only printers, SANE scanners and OCR.
 
 ## Install
 
-[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ada-kilinc&repository=home-print&category=integration)
-[![Open your Home Assistant instance and start setting up Home Print.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=home_print)
+[![Open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ada-kilinc&repository=home-print&category=integration)
+[![Add the Home Print integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=home_print)
 
-1. In HACS, open the three-dot menu → **Custom repositories**, add `https://github.com/ada-kilinc/home-print` as an **Integration**, then download **Home Print** and restart Home Assistant.
-2. **Settings → Devices & services**: your printer should show up as discovered. If not, **Add integration → Home Print** and enter the printer's IP address.
-3. On a dashboard: **Edit → Add card → Home Print**. The card loads by itself; no resource setup needed.
+1. In HACS, add `https://github.com/ada-kilinc/home-print` as a custom repository (type **Integration**), download **Home Print** and restart Home Assistant.
+2. Go to **Settings → Devices & services**. Your printer should appear as discovered. If it doesn't, add **Home Print** and enter the printer's IP address.
+3. On a dashboard: **Edit → Add card → Home Print**. No resource setup is needed.
 
-Home Print works on every installation type (OS, Supervised, Container, Core). Nothing is exposed to the internet: printing goes through Home Assistant's own login, so remote use works with whatever remote access you already have (Tailscale, Nabu Casa, ...).
+Works on all installation types. Nothing is exposed to the internet: the card goes through Home Assistant's own login.
 
 ## Card
 
 ```yaml
 type: custom:home-print-card
-# all optional:
-entry_id: <printer>   # the visual editor fills this in; default is the first printer
-title: Printer        # used with a single printer; with several, the header names the one shown
-show_ink: true
+entry_id: <printer>   # optional; the visual editor fills it in
+title: Printer        # optional; only used with a single printer
+show_ink: true        # optional
 ```
 
+- **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (files, photos, camera) on Android.
+- **Several printers:** tap the printer's name in the header to switch. Each browser remembers its choice. A running print or scan keeps going while another printer is shown.
+- **History:** the clock icon opens your prints and scans. Tap an entry to preview it.
+
 <p>
-  <img src="docs/images/history.png" alt="History dialog, Prints tab" width="270">
-  <img src="docs/images/scans.png" alt="History dialog, Scans tab" width="270">
-  <img src="docs/images/preview.png" alt="Preview of a printed file" width="270">
+  <img src="docs/images/printers.png" alt="Printer switcher open with three printers and their status" width="200">
+  <img src="docs/images/history.png" alt="History, Prints tab" width="200">
+  <img src="docs/images/scans.png" alt="History, Scans tab" width="200">
+  <img src="docs/images/preview.png" alt="Preview of a printed file" width="200">
 </p>
-
-The clock icon in the card's header opens the print history, where you can delete an entry or tap it to scroll through a preview of the kept file; **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (from files, photo library, take photo) on Android phones and tablets.
-
-With more than one printer, tap the printer's name in the header to switch: the list shows each printer's status, and the card's ink, options, history and scanner follow your choice. The choice is remembered in that browser; without one the card uses `entry_id`, then the first printer. A print or scan already running carries on, and you see its progress again when you switch back.
 
 ## Options
 
-Per printer (**Configure**): default duplex and colour mode, maximum file size (default 25 MB), polling interval, "only admins can print", and **Keep files (days)** (default 7, 0–90; 0 keeps no files, only the history entries).
+Under **Configure** for each printer:
 
-**Privacy:** the original of every printed file is kept for that many days under `<config>/home_print/<entry_id>/`, so the history can show a preview. These files are included in Home Assistant backups, and deleting an entry from the history doesn't remove it from backups already taken. Any logged-in Home Assistant user can see the history list and the previews: "only admins can print" limits printing and deleting, not viewing. Set **Keep files (days)** to 0 to keep no files.
+| Option | Default |
+| --- | --- |
+| Default two-sided and colour mode | your choice |
+| Max file size | 25 MB |
+| Polling interval | 60 s |
+| Only admins can print | off (limits printing, scanning and deleting, not viewing) |
+| Keep files (days) | 7 (0 keeps no files) |
+| Scanner address | found automatically, e.g. `http://192.168.1.20/eSCL` |
+| Keep scans (days) | 30 (0 keeps them forever) |
+| Max space for scans | 2000 MB (oldest scans are deleted first) |
 
-## Scanning
+If the scanner doesn't answer at start-up (the printer is asleep, for example), Home Print tries again after 1, 5 and 30 minutes, then hourly for a day.
 
-If your printer has a scanner, Home Print finds it on the printer's own address (eSCL, also known as AirScan). Nothing extra to set up.
-
-- **Card:** a printer with a scanner gets two tabs under the header, **Print** (open by default) and **Scan**. The Scan tab holds the scan panel: pick glass or document feeder (single or double-sided), colour mode, resolution and PDF or JPEG, then start. While it runs, **Cancel** stops it. When it's done you can preview, download, rename or delete the scan, or add another page to it. The scanner status sensor shows idle, scanning, paper in the feeder or stopped.
-- **History:** the clock icon in the card header opens a window with two tabs, **Prints** and **Scans**.
-- **Where files go:** every scan is saved as `home_print/scans/YYYY-MM/<name>.pdf` (or `.jpg`) in the default media root (`/media` on Home Assistant OS) and shows up in Home Assistant's **Media** panel. The scan covers the whole glass; there is no paper size picker yet.
-- **Options** (per printer, **Configure**):
-  - **Scanner address:** leave empty to find it automatically, or enter an address like `http://192.168.1.20/eSCL` if the scanner isn't found (`http://` and `/eSCL` are added when left out). If no scanner answers at start-up (printer asleep), Home Print looks again after 1, 5 and 30 minutes, then hourly for a day (forever if you typed an address). Reloading the integration starts the search over.
-  - **Keep scans (days):** default 30, 0 keeps them forever.
-  - **Max space for scans (MB):** default 2000, 0 means no limit. When it's exceeded, the oldest scans are deleted.
-- **HTTPS certificate:** if the printer was added over plain IPP, the scanner's https address (HP printers use a self-signed certificate) is used without checking its certificate; for printers added over IPPS the **verify SSL** setting applies.
-- **Sensor:** `Scanner status` on the printer's device.
-- **Action** for automations:
+## Scanning action
 
 ```yaml
 action: home_print.scan
@@ -86,105 +82,43 @@ data:
   color_mode: gray      # color | gray | bw
   resolution: 300
   format: pdf           # pdf | jpeg
-  file_name: invoice    # optional, date and time if empty
-  folder: /media/documents   # optional extra copy; must be a folder HA may write to
-response_variable: scan
-# scan.path, scan.copy, scan.name, scan.pages
+  file_name: invoice    # optional
+  folder: /media/documents   # optional extra copy
+response_variable: scan  # scan.path, scan.copy, scan.name, scan.pages
 ```
 
-Not yet: scanner-only devices without a printer entry, SANE for old USB scanners and OCR (searchable PDF) come with the Home Print Server in a later release.
+## Privacy
 
-**Privacy:** scans are visible to every logged-in Home Assistant user (list, preview and download). "Only admins can print" limits starting, renaming and deleting scans, not viewing them. The files live in your media folder, so they are included in Home Assistant backups if you back up media, and deleting a scan doesn't remove it from backups already taken. Removing the printer entry deletes the archive records but leaves the files in the media folder alone. Set **Keep scans (days)** low if you scan sensitive documents.
+- Printed files are kept for **Keep files (days)** under `<config>/home_print/<entry_id>/`, so the history can preview them.
+- Scans are saved in the media folder under `home_print/scans/YYYY-MM/`.
+- Every logged-in user can see the history, the previews and the scans.
+- Both are included in backups. Deleting an entry doesn't remove it from backups you already made.
 
 ## FAQ
 
-**Do I need Home Assistant's built-in IPP integration too?** No. Home Print talks to the printer itself. If both are set up, the printer just gets two sets of sensors; you can remove the built-in one.
+**Do I also need the built-in IPP integration?** No. If both are set up, the printer just gets two sets of sensors.
 
-**Can I print when I'm not at home?** Yes, wherever you can open your Home Assistant: the card uploads through Home Assistant's own login, so Tailscale, Nabu Casa or any other remote access you already use works. Nothing extra is exposed to the internet.
+**Can I print away from home?** Yes, through any remote access you already use (Tailscale, Nabu Casa, …).
 
-**Where are my scans?** In Home Assistant's media folder, under `home_print/scans/YYYY-MM/` (`/media` on Home Assistant OS), so they also show up in the **Media** panel. Kept print files are under `<config>/home_print/<entry_id>/`.
+**Where are my scans?** In the **Media** panel, under `home_print/scans/` (`/media` on Home Assistant OS).
 
 **The card says "Custom element doesn't exist".** See [Troubleshooting](docs/troubleshooting.md#the-card-doesnt-show-up).
 
 ## Contributing
 
-This started as a small weekend project to print at home from a phone, and it would be great to see it grow. If you have a printer that behaves differently, an idea for a feature, or a fix (big or tiny), please open an issue or send a pull request. You don't need to ask first. Typos, translations and "this didn't work on my printer" reports are just as welcome as code.
-
-If you're adding a feature, a short note in the PR about what you tested on (printer model, HA version) helps a lot. The test commands are below.
-
-## Development
+Issues and pull requests are welcome, from typo fixes to "this didn't work on my printer" reports. Please mention your printer model and Home Assistant version.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements_test.txt
-.venv/bin/pytest -q          # Python tests
-npm install && npm test      # card tests
+.venv/bin/pytest -q            # Python tests
+npm install && npm test        # card tests
+python scripts/screenshots.py  # redraw docs/images (needs playwright)
 ```
 
-`scripts/remote_check.py` checks a printer over the network without printing (and with `--print`, runs at most two small test jobs). `--scan-info` finds the scanner and prints what it can do without using paper, and `--scan` also makes one 75 dpi grayscale test scan from the glass (`scan_test.jpg`) and prints the scanner's raw answers (status codes, `Location` header). Run it from the repo folder. The saved `escl_*.xml` files contain device identifiers (serial number, UUID); don't post them publicly.
+`scripts/remote_check.py` checks a printer over the network without printing (`--print` runs up to two small test jobs, `--scan-info` and `--scan` check the scanner). Its saved `escl_*.xml` files contain serial numbers, so don't post them.
 
-**Releases:** bump `version` in `manifest.json`, commit and push, then push a matching tag: `git tag v<version> && git push origin v<version>`. The *Release zip* workflow builds `home_print.zip` from that tag (it fails if the tag and manifest disagree or a required file is missing) and publishes an English GitHub release with generated notes and the zip attached. HACS installs that single archive (`zip_release` in `hacs.json`), so an update is never half-installed. **CI** runs ruff, pytest, the card tests, hassfest and the HACS validation on every push and pull request.
+**Releases:** bump `version` in `manifest.json`, push, then push a matching tag (`git tag v<version> && git push origin v<version>`). The release workflow checks the tag against the manifest, builds `home_print.zip` and publishes the release. CI runs ruff, pytest, the card tests, hassfest and HACS validation on every push and pull request.
 
----
+## License
 
-## Türkçe
-
-Home Assistant ana sayfasından, Home Assistant'a ulaşabildiğin her yerden ağ yazıcına yazdırmanı sağlar.
-
-> **Durum: erken sürüm.** Kod testlerden ve gerçek bir HP DeskJet 4670'in yanıtlarıyla yapılan denemelerden geçti, ama henüz günlük kullanımda denenmedi.
-
-- Yazıcıyı ağda kendisi bulur ya da IP ile eklersin.
-- Durum, mürekkep seviyesi ve sorun (kâğıt bitti, sıkıştı, kapak açık) sensörleri.
-- PDF, JPEG ve PNG yazdırır. Yazıcı bir formatı doğrudan almıyorsa önce çevirir. Çift taraf, kopya, renkli/siyah-beyaz ve sayfa aralığı desteklenir. Telefonla çekilmiş büyük fotoğraflar otomatik küçültülür (JPEG 175 MP'ye, PNG 50 MP'ye kadar).
-- Telefondan dosya ya da fotoğraf seçip yazdırdığın, işin bitişini takip ettiğin bir kart.
-- Yazıcının tarayıcısıyla tarama (eSCL / AirScan): kartta **Tara** sekmesi, Medya bölümünde arşiv ve `home_print.scan` servisi. Ayrıntı aşağıda, [Tarama](#tarama).
-
-**Sorun giderme:** Kart görünmüyorsa ya da "Custom element doesn't exist" diyorsa adım adım çözümü [docs/troubleshooting.md](docs/troubleshooting.md#the-card-doesnt-show-up) sayfasında (İngilizce): kart adresini aç, 404 ise HACS'ta **Redownload** yap, Home Assistant'ı yeniden başlat, sayfayı Cmd/Ctrl+Shift+R ile yenile.
-
-**Kurulum:** HACS → üç nokta → **Custom repositories** → `https://github.com/ada-kilinc/home-print` (Integration) → **Home Print**'i indir, HA'yı yeniden başlat. Sonra **Ayarlar → Cihazlar ve Hizmetler**'den yazıcıyı ekle ve ana sayfaya **Home Print** kartını koy.
-
-**Ayarlar:** Her yazıcının **Yapılandır** ekranında varsayılan çift taraf ve renk, en büyük dosya boyutu, yoklama aralığı, "yalnızca yöneticiler yazdırabilir" ve **Dosyaları sakla (gün)** var. Sonuncusu varsayılan olarak 7 gün, 0 ile 90 arası olabilir. 0 seçersen dosya saklanmaz, yalnızca geçmiş kaydı tutulur.
-
-**Birden fazla yazıcı:** Kartın başlığındaki yazıcı adına dokunup yazıcı değiştirebilirsin. Listede her yazıcının durumu görünür; mürekkep, seçenekler, geçmiş ve tarayıcı seçtiğin yazıcıya geçer. Seçimin o tarayıcıda hatırlanır. Seçim yoksa kart `entry_id`'deki yazıcıyı, o da yoksa ilk yazıcıyı açar. Süren bir baskı ya da tarama yarıda kalmaz, geri döndüğünde durumunu yine görürsün.
-
-**Gizlilik:** Ön izleme gösterebilmek için yazdırılan her dosyanın aslı bu süre boyunca `<config>/home_print/<entry_id>/` altında durur. Bu dosyalar Home Assistant yedeklerine de girer. Geçmişten sildiğin bir kayıt, önceden alınmış yedeklerde kalır. Geçmiş listesini ve ön izlemeleri Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği görmeyi değil, yazdırmayı ve silmeyi kısıtlar. Hiç dosya saklanmasın istiyorsan **Dosyaları sakla (gün)** değerini 0 yap.
-
-Word dosyalarını şimdilik önce PDF olarak kaydetmen gerekiyor.
-
-### Tarama
-
-Yazıcının tarayıcısı varsa Home Print onu yazıcının kendi adresinde bulur (eSCL, diğer adıyla AirScan). Ayrıca kurulum gerekmez.
-
-- **Kart:** Tarayıcısı olan yazıcıda başlığın altında iki sekme var: **Yazdır** (açılışta bu gelir) ve **Tara**. Tarama paneli **Tara** sekmesinde: cam ya da belge besleyici (tek veya çift yüzlü), renk, çözünürlük ve PDF/JPEG seçip başlatırsın. Sürerken **İptal** ile durdurabilirsin. Bitince taramayı görüntüleyebilir, indirebilir, adını değiştirebilir, silebilir ya da ona sayfa ekleyebilirsin. Tarayıcı durumu sensörü boşta, taranıyor, besleyicide kâğıt var ve durdu durumlarını gösterir.
-- **Geçmiş:** Kartın başlığındaki saat simgesi **Baskılar** ve **Taramalar** diye iki sekmeli bir pencere açar.
-- **Dosyalar nerede:** Her tarama varsayılan medya klasöründe (Home Assistant OS'ta `/media`) `home_print/scans/YYYY-MM/<ad>.pdf` (ya da `.jpg`) olarak kaydolur ve Home Assistant'ın **Medya** bölümünde görünür. Tarama camın tamamını kapsar, kâğıt boyutu seçimi henüz yok.
-- **Ayarlar** (her yazıcının **Yapılandır** ekranında):
-  - **Tarayıcı adresi:** boş bırakırsan otomatik bulunur, bulunamazsa `http://192.168.1.20/eSCL` gibi elle yaz (`http://` ve `/eSCL` yazmazsan eklenir). Açılışta tarayıcı yanıt vermezse (yazıcı uykudaysa) Home Print 1, 5 ve 30 dakika sonra, ardından bir gün boyunca saatte bir yeniden bakar (adresi elle yazdıysan aramayı hiç bırakmaz). Entegrasyonu yeniden yüklersen arama baştan başlar.
-  - **Taramaları sakla (gün):** varsayılan 30, 0 hiç silme demek.
-  - **Taramalar için en fazla alan (MB):** varsayılan 2000, 0 sınırsız demek. Aşılırsa en eski taramalar silinir.
-- **HTTPS sertifikası:** Yazıcı düz IPP ile eklendiyse tarayıcının https adresi (HP yazıcılar kendinden imzalı sertifika kullanır) sertifikası kontrol edilmeden kullanılır. IPPS ile eklenen yazıcılarda **SSL doğrula** ayarı geçerlidir.
-- **Sensör:** Yazıcı cihazında `Tarayıcı durumu`.
-- **Servis** (otomasyonlar için):
-
-```yaml
-action: home_print.scan
-data:
-  config_entry_id: <yazıcı girişi>
-  source: platen        # platen | adf | adf_duplex
-  color_mode: gray      # color | gray | bw
-  resolution: 300
-  format: pdf           # pdf | jpeg
-  file_name: fatura     # isteğe bağlı, boşsa tarih ve saat
-  folder: /media/belgeler   # isteğe bağlı ek kopya; HA'nın yazabildiği bir klasör olmalı
-response_variable: tarama
-# tarama.path, tarama.copy, tarama.name, tarama.pages
-```
-
-Henüz yok: yazıcı girişi olmayan, yalnızca tarayıcı olan cihazlar, eski USB tarayıcılar için SANE ve OCR (aranabilir PDF). Bunlar sonraki sürümde Home Print Server ile gelecek.
-
-**Tarama gizliliği:** Taramaları (liste, ön izleme, indirme) Home Assistant'a giriş yapan herkes görebilir. "Yalnızca yöneticiler yazdırabilir" seçeneği taramayı başlatmayı, adını değiştirmeyi ve silmeyi kısıtlar, görmeyi kısıtlamaz. Dosyalar medya klasöründe durur, medyayı yedekliyorsan Home Assistant yedeklerine de girer. Sildiğin tarama önceden alınmış yedeklerde kalır. Yazıcı girişini silersen arşiv kayıtları gider ama medya klasöründeki dosyalara dokunulmaz. Hassas belge tarıyorsan **Taramaları sakla (gün)** değerini düşük tut.
-
-Uzaktan kontrol scripti `scripts/remote_check.py` ile `--scan-info` tarayıcıyı bulup yeteneklerini yazdırır (kâğıt harcamaz), `--scan` ise camdan 75 dpi gri tek sayfa deneme taraması yapıp `scan_test.jpg` kaydeder ve tarayıcının ham yanıtlarını (durum kodları, `Location` başlığı) yazdırır. Repo klasöründen çalıştır. Kaydedilen `escl_*.xml` dosyaları cihaz kimlikleri (seri no, UUID) içerir, herkese açık yerde paylaşma.
-
-### Katkı
-
-Bu proje evdeki yazıcıya telefondan yazdırmak için küçük bir hafta sonu işi olarak başladı. Büyüdüğünü görmek beni çok mutlu eder. Yazıcın farklı davranıyorsa, aklında bir özellik varsa ya da büyük küçük bir düzeltme yaptıysan issue açmaktan ya da pull request göndermekten çekinme. Önceden sormana gerek yok. Yazım hatası, çeviri ya da "benim yazıcımda çalışmadı" bildirimi de kod kadar değerli.
+[MIT](LICENSE)

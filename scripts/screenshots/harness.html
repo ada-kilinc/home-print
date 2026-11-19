@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {
+    margin: 0;
+    background: #111111;
+    font-family: Roboto, "DejaVu Sans", Arial, sans-serif;
+    font-size: 14px;
+    color-scheme: dark;
+    --primary-color: #03a9f4;
+    --primary-background-color: #111111;
+    --secondary-background-color: #282828;
+    --card-background-color: #1c1c1c;
+    --primary-text-color: #e1e1e1;
+    --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(225, 225, 225, 0.12);
+    --error-color: #ef5350;
+    --success-color: #43a047;
+    --text-primary-color: #ffffff;
+  }
+  ha-card {
+    display: block;
+    background: var(--card-background-color);
+    border: 1px solid var(--divider-color);
+    border-radius: 12px;
+    color: var(--primary-text-color);
+  }
+  #slot { padding: 0; }
+</style>
+</head>
+<body>
+<div id="slot"></div>
+<script src="../../custom_components/home_print/frontend/home-print-card.js"></script>
+<script type="module">
+  import { makeHass } from "./fake-hass.js";
+  const params = new URLSearchParams(location.search);
+  const card = document.createElement("home-print-card");
+  card.setConfig({});
+  document.getElementById("slot").append(card);
+  card.hass = makeHass({ several: params.has("several") });
+  window.card = card;
+  window.ready = true;
+</script>
+</body>
+</html>
