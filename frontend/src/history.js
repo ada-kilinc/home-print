@@ -30,7 +30,9 @@ export class HistoryPart {
   }
 
   _anyDialogOpen() {
-    return this._role("history-dialog").open || this._role("preview-dialog").open;
+    return ["history-dialog", "preview-dialog", "crop-dialog"].some(
+      (name) => this._role(name).open,
+    );
   }
 
   _showDialog(dialog) {
@@ -77,6 +79,7 @@ export class HistoryPart {
   }
 
   _closeHistory() {
+    this._closeCrop();
     this._closePreview();
     this._historyEntryId = null;
     this._historyToken += 1;
@@ -289,6 +292,8 @@ export class HistoryPart {
         isImage: String(record.mime ?? "").startsWith("image/"),
         pages: record.pages,
         pagePath: (page) => scanPagePath(entryId, record.id, page),
+        // Cropping is for whoever may change scans.
+        crop: canDelete ? { entryId, record } : null,
       }),
     );
     const mark = document.createElement("span");
@@ -361,6 +366,7 @@ export class HistoryPart {
       body,
       lang,
       pagePath: spec.pagePath,
+      crop: spec.crop ?? null,
       // null: unknown, pages are added one by one until one is missing.
       count: spec.isImage ? 1 : known,
       observer: null,
@@ -428,6 +434,7 @@ export class HistoryPart {
     img.addEventListener("load", () => {
       if (!live()) return;
       box.classList.add("loaded");
+      if (preview.crop) box.append(this._pageCropButton(preview, box, page));
       const next = page + 1;
       const more = preview.count === null || next <= preview.count;
       if (!more) return;
@@ -444,6 +451,30 @@ export class HistoryPart {
     });
     img.src = path;
     box.append(img);
+  }
+
+  // A crop button on a scan's preview page; after cropping the page reloads.
+  _pageCropButton(preview, box, page) {
+    const button = this._iconButton(preview.lang, "crop", "crop", "page-crop");
+    button.classList.add("page-crop");
+    button.addEventListener("click", () => {
+      const { entryId, record } = preview.crop;
+      this._openCrop({
+        entryId,
+        record,
+        page,
+        onDone: (updated) => {
+          preview.crop = { entryId, record: updated };
+          if (preview.token !== this._previewToken || !box.isConnected) return;
+          delete box.dataset.state;
+          box.classList.remove("loaded");
+          box.replaceChildren();
+          this._loadPage(preview, box);
+          this._reloadScans(entryId);
+        },
+      });
+    });
+    return button;
   }
 
   _previewNote(body, text) {

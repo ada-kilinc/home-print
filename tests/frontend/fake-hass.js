@@ -128,6 +128,7 @@ export function scanState(overrides = {}) {
  * scans/rename). `scanStart` is the scan/start answer (a state, or an object
  * with `error` to reject); `scanStates` is a queue of scan/state answers like
  * `jobs`. `scanDeleteError` and `renameError` make those calls reject.
+ * `cropError` makes scans/crop reject with that code.
  * `scanCancel` is the scan/cancel answer (a state, or an object with `error`
  * to reject); by default the scan comes back canceled.
  */
@@ -148,6 +149,7 @@ export function makeHass({
   scanDeleteError = null,
   renameError = null,
   scanCancel = null,
+  cropError = null,
 } = {}) {
   const jobQueue = [...jobs];
   const scanQueue = [...scanStates];
@@ -210,6 +212,12 @@ export function makeHass({
         const record = scanStore.find((r) => r.id === msg.scan_record_id);
         if (record) record.name = msg.name.trim();
         return { entry: record ? { ...record } : null };
+      }
+      if (msg.type === "home_print/scans/crop") {
+        if (cropError) throw { code: cropError, message: cropError };
+        const record = scanStore.find((r) => r.id === msg.scan_record_id) ?? scanRecord();
+        record.size = (record.size ?? 0) + 1;
+        return { entry: { ...record, id: msg.scan_record_id } };
       }
       if (msg.type === "auth/sign_path") {
         if (signError) throw signError;

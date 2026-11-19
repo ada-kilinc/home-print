@@ -116,6 +116,9 @@ export const TEMPLATE = `
             <button type="button" class="file-button" data-role="scan-download">
               ${svg("download")}<span data-t="scan_download"></span>
             </button>
+            <button type="button" class="file-button" data-role="scan-crop">
+              ${svg("crop")}<span data-t="crop"></span>
+            </button>
             <button type="button" class="file-button" data-role="scan-add">
               ${svg("file_plus")}<span data-t="scan_add_page"></span>
             </button>
@@ -154,6 +157,32 @@ export const TEMPLATE = `
         </button>
       </div>
       <div class="preview-body" data-role="preview-body"></div>
+    </div>
+  </dialog>
+  <dialog data-role="crop-dialog" aria-labelledby="crop-title">
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title" id="crop-title" data-role="crop-title"></span>
+        <button type="button" class="icon-button" data-role="crop-close" data-aria="close">
+          ${svg("close")}
+        </button>
+      </div>
+      <div class="crop-body">
+        <div class="crop-stage" data-role="crop-stage">
+          <div class="crop-frame" data-role="crop-frame" tabindex="0" data-aria="crop_frame" hidden>
+            <button type="button" class="crop-handle" data-corner="nw" data-aria="crop_corner_nw"></button>
+            <button type="button" class="crop-handle" data-corner="ne" data-aria="crop_corner_ne"></button>
+            <button type="button" class="crop-handle" data-corner="sw" data-aria="crop_corner_sw"></button>
+            <button type="button" class="crop-handle" data-corner="se" data-aria="crop_corner_se"></button>
+          </div>
+        </div>
+        <div class="sheet-status" data-role="crop-status" role="status"></div>
+        <div class="crop-actions">
+          <button type="button" class="file-button" data-role="crop-full" data-t="crop_full"></button>
+          <button type="button" class="file-button" data-role="crop-cancel" data-t="crop_cancel"></button>
+          <button type="button" class="print" data-role="crop-save" data-t="crop_save"></button>
+        </div>
+      </div>
     </div>
   </dialog>
 `;

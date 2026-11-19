@@ -8,6 +8,7 @@ import {
   REFRESH_MS,
   SCANNER_STATES,
 } from "./constants.js";
+import { CropPart } from "./crop.js";
 import { readStored, storageKey, usesPickMenu } from "./helpers.js";
 import { HistoryPart } from "./history.js";
 import { pickLanguage, t } from "./i18n.js";
@@ -41,6 +42,8 @@ export class HomePrintCard extends HTMLElement {
     this._historyToken = 0;
     this._previewToken = 0;
     this._preview = null;
+    this._crop = null;
+    this._cropToken = 0;
     this._deletedIds = new Set();
     // "prints" or "scans": the history tab shown.
     this._historyTab = "prints";
@@ -89,6 +92,22 @@ export class HomePrintCard extends HTMLElement {
     this._role("preview-close").addEventListener("click", () => this._closePreview());
     this._wireDialog(this._role("history-dialog"), () => this._closeHistory());
     this._wireDialog(this._role("preview-dialog"), () => this._closePreview());
+    this._wireDialog(this._role("crop-dialog"), () => {
+      if (!this._crop?.saving) this._closeCrop();
+    });
+    this._role("crop-close").addEventListener("click", () => {
+      if (!this._crop?.saving) this._closeCrop();
+    });
+    this._role("crop-cancel").addEventListener("click", () => this._closeCrop());
+    this._role("crop-full").addEventListener("click", () => this._onCropFull());
+    this._role("crop-save").addEventListener("click", () => this._onCropSave());
+    const stage = this._role("crop-stage");
+    stage.addEventListener("pointerdown", (ev) => this._onCropPointerDown(ev));
+    stage.addEventListener("pointermove", (ev) => this._onCropPointerMove(ev));
+    stage.addEventListener("pointerup", (ev) => this._onCropPointerUp(ev));
+    stage.addEventListener("pointercancel", (ev) => this._onCropPointerUp(ev));
+    stage.addEventListener("keydown", (ev) => this._onCropKey(ev));
+    this._role("scan-crop").addEventListener("click", () => this._onScanCrop());
     for (const tab of this._bodyTabs()) {
       tab.addEventListener("click", () => this._selectTab(tab.dataset.bodyTab));
     }
@@ -367,7 +386,7 @@ export class HomePrintCard extends HTMLElement {
 
 // The parts are plain classes whose methods are copied onto the card,
 // so `this` is the card in every one of them.
-for (const Part of [PrintPart, HistoryPart, ScanPart, SwitcherPart]) {
+for (const Part of [PrintPart, HistoryPart, ScanPart, SwitcherPart, CropPart]) {
   for (const key of Object.getOwnPropertyNames(Part.prototype)) {
     if (key === "constructor") continue;
     Object.defineProperty(

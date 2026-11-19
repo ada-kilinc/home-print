@@ -18,7 +18,7 @@ Print and scan with your network printer from a Home Assistant dashboard, wherev
 - Finds IPP / AirPrint printers and eSCL / AirScan scanners on the network, or add one by IP.
 - Sensors for status, ink or toner levels, problems and the last job.
 - Prints PDF, JPEG and PNG, converting when the printer can't take a format. Supports two-sided, copies, colour and page ranges. Shrinks large phone photos.
-- Scans over eSCL / AirScan to PDF or JPEG, saved in the **Media** panel. Network scanners without a printer work too.
+- Scans over eSCL / AirScan to PDF or JPEG, saved in the **Media** panel, with page-by-page cropping. Network scanners without a printer work too.
 - A dashboard card with Print and Scan tabs, history and previews.
 - `home_print.print_file` and `home_print.scan` actions for automations.
 
@@ -47,12 +47,14 @@ show_ink: true        # optional
 - **Choose file** opens the file dialog on a computer, the system sheet on iPhone/iPad, and a small menu (files, photos, camera) on Android.
 - **Several printers:** tap the printer's name in the header to switch. Each browser remembers its choice. A running print or scan keeps going while another printer is shown.
 - **History:** the clock icon opens your prints and scans. Tap an entry to preview it.
+- **Crop:** tap **Crop** under a scan, or the crop button on a page in the history preview. The frame starts on the paper's edges when it finds them, and you can drag its corners. What's outside the frame is removed from the file, not just hidden.
 
 <p>
   <img src="docs/images/printers.png" alt="Printer switcher open with three printers and their status" width="200">
   <img src="docs/images/history.png" alt="History, Prints tab" width="200">
   <img src="docs/images/scans.png" alt="History, Scans tab" width="200">
   <img src="docs/images/preview.png" alt="Preview of a printed file" width="200">
+  <img src="docs/images/crop.png" alt="Cropping a scanned receipt: the frame sits on the paper's edges" width="200">
 </p>
 
 ## Options

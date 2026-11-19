@@ -29,6 +29,7 @@ from .scanning import (
     active_state,
     allowed_resolutions,
     async_cancel_scan,
+    async_crop_scan,
     async_start_scan,
     scan_defaults,
     usable_sources,
@@ -54,6 +55,7 @@ def async_setup_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_scans)
     websocket_api.async_register_command(hass, ws_scans_delete)
     websocket_api.async_register_command(hass, ws_scans_rename)
+    websocket_api.async_register_command(hass, ws_scans_crop)
 
 
 def _loaded_entries(hass: HomeAssistant) -> list[HomePrintConfigEntry]:
@@ -510,4 +512,42 @@ async def ws_scans_rename(
     record = await entry.runtime_data.scanner.archive.async_rename(  # type: ignore[union-attr]
         msg["scan_record_id"], msg["name"]
     )
+    connection.send_result(msg["id"], {"entry": record})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "home_print/scans/crop",
+        vol.Required("entry_id"): str,
+        vol.Required("scan_record_id"): str,
+        vol.Required("page"): vol.All(int, vol.Range(min=1)),
+        vol.Required("box"): {
+            vol.Required("x"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Required("y"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Required("width"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Required("height"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        },
+    }
+)
+@websocket_api.async_response
+async def ws_scans_crop(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Cut one page of a scan down to a box; the rest is removed from the file."""
+    if (entry := _scan_entry(hass, connection, msg)) is None:
+        return
+    if not _admin_ok(entry, connection, msg):
+        return
+    box = msg["box"]
+    try:
+        record = await async_crop_scan(
+            hass,
+            entry,
+            msg["scan_record_id"],
+            msg["page"],
+            (box["x"], box["y"], box["width"], box["height"]),
+        )
+    except ScanError as err:
+        connection.send_error(msg["id"], err.code, err.code)
+        return
     connection.send_result(msg["id"], {"entry": record})

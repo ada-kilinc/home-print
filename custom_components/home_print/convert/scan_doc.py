@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import io
 
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 from PIL import Image
 
 from .errors import InvalidDocument, TooManyPages
@@ -16,6 +18,7 @@ from .render import (
     DEFAULT_MAX_PAGES,
     _encode_jpeg,
     _flatten,
+    _is_pdf,
     _open_pdf,
 )
 
@@ -159,3 +162,91 @@ def append_pdf(pdf: bytes, pages: list[bytes], dpi: int) -> bytes:
         finally:
             base.close()
     return out.getvalue()
+
+
+# A crop box is (left, top, width, height) as fractions of the page.
+CropBox = tuple[float, float, float, float]
+# Smallest crop, per side, as a fraction of the page.
+MIN_CROP = 0.02
+
+
+def valid_crop_box(box: CropBox) -> bool:
+    """Inside the page and at least MIN_CROP on each side."""
+    left, top, width, height = box
+    return (
+        0 <= left
+        and 0 <= top
+        and width >= MIN_CROP
+        and height >= MIN_CROP
+        and left + width <= 1 + 1e-6
+        and top + height <= 1 + 1e-6
+    )
+
+
+def _crop_image(image: Image.Image, box: CropBox) -> Image.Image:
+    left, top, width, height = box
+    x0 = max(0, min(image.width - 1, round(left * image.width)))
+    y0 = max(0, min(image.height - 1, round(top * image.height)))
+    x1 = max(x0 + 1, min(image.width, round((left + width) * image.width)))
+    y1 = max(y0 + 1, min(image.height, round((top + height) * image.height)))
+    return image.crop((x0, y0, x1, y1))
+
+
+def _page_image(page: pdfium.PdfPage, fallback_dpi: int) -> tuple[Image.Image, float]:
+    """The page's own image and its dpi; a rendering if it has none.
+
+    Scans made here have exactly one full-page image per page; anything else
+    (e.g. a page added by another program) is rendered at ``fallback_dpi``.
+    """
+    width_pt, _ = page.get_size()
+    images = list(page.get_objects(filter=(pdfium_c.FPDF_PAGEOBJ_IMAGE,), max_depth=1))
+    if len(images) == 1:
+        image = images[0].get_bitmap(render=False).to_pil()
+        if image.width > 0 and width_pt > 0:
+            return image, image.width / (width_pt / 72)
+    scale = fallback_dpi / 72
+    return page.render(scale=scale).to_pil(), float(fallback_dpi)
+
+
+def crop_page(data: bytes, page: int, box: CropBox, dpi: int) -> tuple[bytes, int]:
+    """The scan with one page cut down to ``box``; returns (data, pages).
+
+    The rest of the page is removed, not hidden: the page is rebuilt from
+    its cropped image (JPEG quality ``JPEG_QUALITY``). ``dpi`` is used only
+    for a PDF page that has no single image of its own.
+    """
+    if not valid_crop_box(box):
+        raise ValueError("bad crop box")
+    if not _is_pdf(data):
+        if page != 1:
+            raise InvalidDocument("no_pages")
+        try:
+            image = Image.open(io.BytesIO(data))
+            image.load()
+        except (OSError, ValueError, SyntaxError) as err:
+            raise InvalidDocument("bad_scan") from err
+        with image:
+            # Upright first: the box was drawn on the upright preview.
+            cropped = _crop_image(_flatten(image), box)
+        return _encode_jpeg(cropped, JPEG_QUALITY), 1
+    with _PDFIUM_LOCK:
+        pdf = _open_pdf(data)
+        try:
+            total = len(pdf)
+            if not 1 <= page <= total:
+                raise InvalidDocument("no_pages")
+            image, page_dpi = _page_image(pdf[page - 1], dpi)
+            cropped = _crop_image(_flatten(image), box)
+            single = _open_pdf(
+                build_pdf([_encode_jpeg(cropped, JPEG_QUALITY)], round(page_dpi) or dpi)
+            )
+            try:
+                pdf.del_page(page - 1)
+                pdf.import_pages(single, index=page - 1)
+            finally:
+                single.close()
+            out = io.BytesIO()
+            pdf.save(out)
+        finally:
+            pdf.close()
+    return out.getvalue(), total

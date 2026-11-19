@@ -3003,3 +3003,282 @@ describe("scanner without a printer (issue #10)", () => {
     expect(visible(card, "scan-panel")).toBe(false);
   });
 });
+
+describe("cropping scans (issue #9)", () => {
+  const wsCalls = (hass, type) => hass.calls.filter((m) => m.type === type);
+  let detectPaper;
+  let moveCropCorner;
+  beforeAll(() => {
+    ({ detectPaper, moveCropCorner } = HomePrintCard.helpers);
+  });
+
+  // An RGBA image: lid colour everywhere, with a paper rectangle on it.
+  const page = (w, h, { lid = 235, paper = 255, rect = null, text = false } = {}) => {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        let v = lid;
+        if (rect && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]) {
+          v = paper;
+          if (text && y % 6 === 0 && x > rect[0] + 4 && x < rect[2] - 4) v = 30;
+        }
+        const i = (y * w + x) * 4;
+        data[i] = data[i + 1] = data[i + 2] = v;
+        data[i + 3] = 255;
+      }
+    }
+    return { width: w, height: h, data };
+  };
+
+  it("finds a receipt on the glass", () => {
+    const box = detectPaper(page(200, 280, { lid: 120, paper: 250, rect: [40, 30, 110, 200] }));
+    expect(box.x).toBeCloseTo(0.19, 1);
+    expect(box.y).toBeCloseTo(0.1, 1);
+    expect(box.x + box.width).toBeCloseTo(0.56, 1);
+    expect(box.y + box.height).toBeCloseTo(0.72, 1);
+  });
+
+  it("finds white paper on a white lid by its edges and text", () => {
+    const box = detectPaper(
+      page(200, 280, { lid: 250, paper: 225, rect: [20, 20, 120, 160], text: true }),
+    );
+    expect(box).not.toBeNull();
+    expect(box.x).toBeLessThan(0.12);
+    expect(box.x + box.width).toBeGreaterThan(0.58);
+    expect(box.y + box.height).toBeLessThan(0.62);
+  });
+
+  it("finds white paper on a white lid by its faint edge alone", () => {
+    const box = detectPaper(page(256, 362, { lid: 238, paper: 252, rect: [74, 37, 165, 252] }));
+    expect(box).not.toBeNull();
+    expect(box.x).toBeCloseTo(74 / 256 - 0.01, 1);
+    expect(box.x + box.width).toBeCloseTo(165 / 256 + 0.01, 1);
+    expect(box.y).toBeCloseTo(37 / 362 - 0.01, 1);
+  });
+
+  it("ignores scanner noise on an empty lid", () => {
+    const noisy = page(256, 362, { lid: 238 });
+    let seed = 7;
+    for (let i = 0; i < noisy.data.length; i += 4) {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      const v = 238 + ((seed >> 16) % 9) - 4;
+      noisy.data[i] = noisy.data[i + 1] = noisy.data[i + 2] = v;
+    }
+    expect(detectPaper(noisy)).toBeNull();
+  });
+
+  it("suggests nothing on an empty or full page", () => {
+    expect(detectPaper(page(200, 280))).toBeNull();
+    expect(detectPaper(page(200, 280, { lid: 120, rect: [1, 1, 199, 279] }))).toBeNull();
+    expect(detectPaper({ width: 4, height: 4, data: new Uint8ClampedArray(64) })).toBeNull();
+  });
+
+  it("moves one corner and keeps the box inside the page", () => {
+    const box = { x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
+    const se = moveCropCorner(box, "se", 0.2, 0.1);
+    expect([se.x, se.y]).toEqual([0.1, 0.1]);
+    expect(se.width).toBeCloseTo(0.7);
+    expect(se.height).toBeCloseTo(0.6);
+    const nw = moveCropCorner(box, "nw", -0.5, -0.5);
+    expect([nw.x, nw.y]).toEqual([0, 0]);
+    const tiny = moveCropCorner(box, "ne", -1, 0);
+    expect(tiny.width).toBeCloseTo(0.05);
+  });
+
+  const scanning = () => deskjetPrinter({ scanner: scannerBlock() });
+  // Preview pages load one after another without an IntersectionObserver.
+  let realObserver;
+  beforeEach(() => {
+    realObserver = window.IntersectionObserver;
+    window.IntersectionObserver = undefined;
+  });
+  afterEach(() => {
+    window.IntersectionObserver = realObserver;
+  });
+
+  async function showResult(hass) {
+    const card = await mount(hass);
+    role(card, "body-tab-scan").click();
+    await flush();
+    role(card, "scan-start").click();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1500);
+    await flush();
+    return card;
+  }
+
+  const loadCropImage = async (card) => {
+    await flush();
+    role(card, "crop-img").dispatchEvent(new Event("load"));
+    await flush();
+  };
+
+  it("crops the shown page of the latest scan", async () => {
+    const record = scanRecord({ pages: 2 });
+    const hass = makeHass({
+      printers: [scanning()],
+      scanStates: [scanState({ state: "done", pages: 2, record })],
+    });
+    const card = await showResult(hass);
+    expect(visible(card, "scan-crop")).toBe(true);
+    role(card, "scan-next").click();
+    await flush();
+    role(card, "scan-crop").click();
+    expect(role(card, "crop-dialog").open).toBe(true);
+    expect(text(card, "crop-title")).toBe("Sayfa 2: kırp");
+    // Nothing to save until the frame is ready and smaller than the page.
+    expect(role(card, "crop-save").disabled).toBe(true);
+    await loadCropImage(card);
+    expect(visible(card, "crop-frame")).toBe(true);
+    expect(text(card, "crop-status")).toBe("Köşeleri sürükleyerek kırpılacak alanı seç.");
+    expect(role(card, "crop-save").disabled).toBe(true);
+
+    const corner = $(card, '[data-corner="se"]');
+    corner.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }));
+    corner.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    expect(role(card, "crop-frame").style.width).toBe("95%");
+    expect(role(card, "crop-save").disabled).toBe(false);
+    const signsBefore = wsCalls(hass, "auth/sign_path").length;
+    role(card, "crop-save").click();
+    await flush();
+    await flush();
+
+    expect(wsCalls(hass, "home_print/scans/crop")).toEqual([
+      {
+        type: "home_print/scans/crop",
+        entry_id: "deskjet",
+        scan_record_id: record.id,
+        page: 2,
+        box: { x: 0, y: 0, width: 0.95, height: 0.99 },
+      },
+    ]);
+    expect(role(card, "crop-dialog").open).toBe(false);
+    // The page is signed and loaded again.
+    expect(wsCalls(hass, "auth/sign_path").length).toBeGreaterThan(signsBefore);
+  });
+
+  it("Whole page resets the frame and Cancel keeps the page", async () => {
+    const record = scanRecord();
+    const hass = makeHass({
+      printers: [scanning()],
+      scanStates: [scanState({ state: "done", pages: 1, record })],
+    });
+    const card = await showResult(hass);
+    role(card, "scan-crop").click();
+    await loadCropImage(card);
+    const frame = role(card, "crop-frame");
+    frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(frame.style.left).toBe("0%");
+    $(card, '[data-corner="nw"]').dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(frame.style.left).toBe("1%");
+    role(card, "crop-full").click();
+    expect(frame.style.left).toBe("0%");
+    expect(role(card, "crop-save").disabled).toBe(true);
+    role(card, "crop-cancel").click();
+    expect(role(card, "crop-dialog").open).toBe(false);
+    expect(wsCalls(hass, "home_print/scans/crop")).toHaveLength(0);
+  });
+
+  it("shows why a crop failed and lets you try again", async () => {
+    const record = scanRecord();
+    const hass = makeHass({
+      printers: [scanning()],
+      scanStates: [scanState({ state: "done", pages: 1, record })],
+      cropError: "scan_running",
+    });
+    const card = await showResult(hass);
+    role(card, "scan-crop").click();
+    await loadCropImage(card);
+    $(card, '[data-corner="se"]').dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
+    role(card, "crop-save").click();
+    await flush();
+    await flush();
+    expect(role(card, "crop-dialog").open).toBe(true);
+    expect(text(card, "crop-status")).toBe("Tarama sürerken kırpılamaz.");
+    expect(role(card, "crop-status").classList.contains("error")).toBe(true);
+    expect(role(card, "crop-save").disabled).toBe(false);
+  });
+
+  it("drags a corner with the pointer", async () => {
+    const record = scanRecord();
+    const hass = makeHass({
+      printers: [scanning()],
+      scanStates: [scanState({ state: "done", pages: 1, record })],
+    });
+    const card = await showResult(hass);
+    role(card, "scan-crop").click();
+    await loadCropImage(card);
+    role(card, "crop-img").getBoundingClientRect = () => ({ width: 200, height: 400, left: 0, top: 0 });
+    const corner = $(card, '[data-corner="se"]');
+    const ev = (type, x, y) =>
+      new PointerEvent(type, { pointerId: 1, clientX: x, clientY: y, bubbles: true, button: 0 });
+    corner.dispatchEvent(ev("pointerdown", 200, 400));
+    corner.dispatchEvent(ev("pointermove", 100, 300));
+    corner.dispatchEvent(ev("pointerup", 100, 300));
+    const frame = role(card, "crop-frame");
+    expect(frame.style.width).toBe("50%");
+    expect(frame.style.height).toBe("75%");
+    // Dragging the frame itself moves it.
+    frame.dispatchEvent(ev("pointerdown", 50, 50));
+    frame.dispatchEvent(ev("pointermove", 100, 90));
+    frame.dispatchEvent(ev("pointerup", 100, 90));
+    expect(frame.style.left).toBe("25%");
+    expect(frame.style.top).toBe("10%");
+  });
+
+  it("crops a page of an older scan from its preview", async () => {
+    const record = scanRecord({ pages: 1 });
+    const hass = makeHass({ printers: [scanning()], scans: [record] });
+    const card = await mount(hass);
+    role(card, "history-button").click();
+    await flush();
+    role(card, "tab-scans").click();
+    await flush();
+    await flush();
+    $(card, '[data-role="scan-open"]').click();
+    await flush();
+    await flush();
+    const img = card.shadowRoot.querySelector('.preview-body [data-page="1"] img');
+    img.dispatchEvent(new Event("load"));
+    const button = $(card, '[data-role="page-crop"]');
+    expect(button).toBeTruthy();
+    button.click();
+    expect(role(card, "crop-dialog").open).toBe(true);
+    expect(role(card, "preview-dialog").open).toBe(true);
+    await loadCropImage(card);
+    $(card, '[data-corner="nw"]').dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    role(card, "crop-save").click();
+    await flush();
+    await flush();
+    expect(wsCalls(hass, "home_print/scans/crop")[0]).toMatchObject({
+      scan_record_id: record.id,
+      page: 1,
+      box: { x: 0, y: 0.01, width: 1, height: 0.99 },
+    });
+    expect(role(card, "crop-dialog").open).toBe(false);
+    // The page is loading again, without its old crop button.
+    expect(card.shadowRoot.querySelector('.preview-body [data-page="1"]').classList.contains("loaded")).toBe(false);
+  });
+
+  it("no crop for someone who may not change scans", async () => {
+    const record = scanRecord();
+    const viewer = deskjetPrinter({ scanner: scannerBlock(), can_print: false });
+    const card = await mount(makeHass({ printers: [viewer], scans: [record] }));
+    role(card, "history-button").click();
+    await flush();
+    role(card, "tab-scans").click();
+    await flush();
+    await flush();
+    $(card, '[data-role="scan-open"]').click();
+    await flush();
+    await flush();
+    card.shadowRoot.querySelector('.preview-body [data-page="1"] img').dispatchEvent(new Event("load"));
+    expect($(card, '[data-role="page-crop"]')).toBeNull();
+  });
+});

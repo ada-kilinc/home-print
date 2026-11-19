@@ -13,7 +13,15 @@ from homeassistant.core import HomeAssistant
 
 from .const import EVENT_SCAN
 from .convert.errors import InvalidDocument, TooManyPages
-from .convert.scan_doc import SCAN_MAX_PIXELS, append_pdf, build_pdf, normalize_page
+from .convert.scan_doc import (
+    SCAN_MAX_PIXELS,
+    CropBox,
+    append_pdf,
+    build_pdf,
+    crop_page,
+    normalize_page,
+    valid_crop_box,
+)
 from .escl.errors import EsclError, ScannerBusy
 from .escl.models import ScannerCaps, ScanSettings, SourceCaps
 from .scans import ScanArchive
@@ -46,6 +54,8 @@ _KNOWN_ERRORS = frozenset(
         "too_large",
         "too_many_pages",
         "not_found",
+        "invalid_crop",
+        "scan_running",
     }
 )
 
@@ -394,3 +404,43 @@ def scan_defaults(caps: ScannerCaps) -> dict[str, Any]:
         "resolution": resolution,
         "format": "pdf",
     }
+
+
+async def async_crop_scan(
+    hass: HomeAssistant,
+    entry: HomePrintConfigEntry,
+    record_id: str,
+    page: int,
+    box: CropBox,
+) -> dict[str, Any]:
+    """Cut one page of a stored scan down to ``box``; returns the record.
+
+    Not while a scan of this entry runs: it may be adding pages to this
+    very file.
+    """
+    runtime = entry.runtime_data.scanner
+    if runtime is None:
+        raise ScanError("no_scanner")
+    active = active_state(runtime)
+    if active is not None and active.state in ("scanning", "saving"):
+        raise ScanError("scan_running")
+    if not valid_crop_box(box):
+        raise ScanError("invalid_crop")
+    archive = runtime.archive
+    record = archive.record(record_id)
+    path = await archive.async_file_path(record_id)
+    if record is None or path is None:
+        raise ScanError("not_found")
+    data = await hass.async_add_executor_job(_read, path)
+    dpi = int(record.get("resolution") or 300)
+    try:
+        cropped, pages = await hass.async_add_executor_job(
+            crop_page, data, page, box, dpi
+        )
+    except InvalidDocument as err:
+        code = "not_found" if str(err) == "no_pages" else "bad_scan"
+        raise ScanError(code) from err
+    updated = await archive.async_replace_file(record_id, cropped, pages)
+    if updated is None:
+        raise ScanError("not_found")
+    return updated

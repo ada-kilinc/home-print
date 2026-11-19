@@ -49,7 +49,9 @@ var SCAN_ERRORS = [
   "no_scanner",
   "unauthorized",
   "scan_failed",
-  "canceled"
+  "canceled",
+  "invalid_crop",
+  "scan_running"
 ];
 var FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
 var DEFAULT_FORMATS = ["application/pdf", "image/jpeg", "image/png"];
@@ -88,6 +90,9 @@ var PRINTER_ERROR_LIMIT = 3;
 var KNOWN_STATES = ["idle", "processing", "stopped"];
 var SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"];
 var HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
+var CROP_DETECT_SIZE = 256;
+var CROP_KEY_STEP = 0.01;
+var CROP_KEY_STEP_BIG = 0.05;
 
 // frontend/src/i18n.js
 var STRINGS = {
@@ -216,6 +221,22 @@ var STRINGS = {
     scans_empty: "Henüz tarama yok.",
     scan_error_scanner_busy: "Tarayıcı şu an meşgul.",
     scan_error_scanner_unavailable: "Tarayıcıya ulaşılamadı.",
+    crop: "Kırp",
+    crop_title: "Sayfa {n}: kırp",
+    crop_save: "Kırp",
+    crop_full: "Tüm sayfa",
+    crop_cancel: "Vazgeç",
+    crop_hint: "Köşeleri sürükleyerek kırpılacak alanı seç.",
+    crop_found: "Kâğıdın kenarları bulundu. Gerekirse köşeleri düzelt.",
+    crop_saving: "Kırpılıyor…",
+    crop_failed: "Sayfa kırpılamadı.",
+    crop_corner_nw: "Sol üst köşe",
+    crop_corner_ne: "Sağ üst köşe",
+    crop_corner_sw: "Sol alt köşe",
+    crop_corner_se: "Sağ alt köşe",
+    crop_frame: "Kırpma alanı",
+    scan_error_invalid_crop: "Kırpma alanı geçersiz.",
+    scan_error_scan_running: "Tarama sürerken kırpılamaz.",
     scan_error_adf_empty: "Besleyicide kâğıt yok.",
     scan_error_invalid_option: "Tarayıcı bu ayarı desteklemiyor. Başka bir ayar seç.",
     scan_error_bad_scan: "Tarayıcıdan gelen görüntü okunamadı. Tekrar dene.",
@@ -352,6 +373,22 @@ var STRINGS = {
     scans_empty: "No scans yet.",
     scan_error_scanner_busy: "The scanner is busy right now.",
     scan_error_scanner_unavailable: "Couldn't reach the scanner.",
+    crop: "Crop",
+    crop_title: "Page {n}: crop",
+    crop_save: "Crop",
+    crop_full: "Whole page",
+    crop_cancel: "Cancel",
+    crop_hint: "Drag the corners to choose the area to keep.",
+    crop_found: "Found the paper's edges. Adjust the corners if needed.",
+    crop_saving: "Cropping…",
+    crop_failed: "Couldn't crop the page.",
+    crop_corner_nw: "Top left corner",
+    crop_corner_ne: "Top right corner",
+    crop_corner_sw: "Bottom left corner",
+    crop_corner_se: "Bottom right corner",
+    crop_frame: "Crop area",
+    scan_error_invalid_crop: "The crop area is not valid.",
+    scan_error_scan_running: "Can't crop while a scan is running.",
     scan_error_adf_empty: "The document feeder is empty.",
     scan_error_invalid_option: "The scanner doesn't support this setting. Pick another one.",
     scan_error_bad_scan: "Couldn't read the image from the scanner. Try again.",
@@ -543,6 +580,300 @@ function writeStored(key, value) {
   } catch (_err) {
   }
 }
+function detectPaper(image) {
+  const { width: w, height: h, data } = image ?? {};
+  if (!data || w < 16 || h < 16) return null;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) {
+    lum[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+  const band = Math.max(1, Math.round(Math.min(w, h) * 0.02));
+  const samples = [[], [], []];
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (x >= band && x < w - band && y >= band && y < h - band) continue;
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c += 1) samples[c].push(data[i + c]);
+    }
+  }
+  const bg = samples.map((list) => {
+    list.sort((a, b) => a - b);
+    return list[list.length >> 1];
+  });
+  const blur = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const row = (y + dy) * w + x;
+        sum += lum[row - 1] + lum[row] + lum[row + 1];
+      }
+      blur[y * w + x] = sum / 9;
+    }
+  }
+  const COLOR_DIFF = 40;
+  const EDGE_DIFF = 8;
+  const margin = Math.max(2, Math.round(Math.min(w, h) * 0.015));
+  const rows = new Uint32Array(h);
+  const cols = new Uint32Array(w);
+  for (let y = margin; y < h - margin; y += 1) {
+    for (let x = margin; x < w - margin; x += 1) {
+      const p = y * w + x;
+      const i = p * 4;
+      const colorDiff = Math.max(
+        Math.abs(data[i] - bg[0]),
+        Math.abs(data[i + 1] - bg[1]),
+        Math.abs(data[i + 2] - bg[2])
+      );
+      const edge = Math.abs(blur[p + 1] - blur[p - 1]) + Math.abs(blur[p + w] - blur[p - w]);
+      if (colorDiff > COLOR_DIFF || edge > EDGE_DIFF) {
+        rows[y] += 1;
+        cols[x] += 1;
+      }
+    }
+  }
+  const rowMin = Math.max(2, Math.round(w * 0.02));
+  const colMin = Math.max(2, Math.round(h * 0.02));
+  const first = (counts, min) => counts.findIndex((n) => n >= min);
+  const last = (counts, min) => {
+    for (let i = counts.length - 1; i >= 0; i -= 1) if (counts[i] >= min) return i;
+    return -1;
+  };
+  const top = first(rows, rowMin);
+  const bottom = last(rows, rowMin);
+  const left = first(cols, colMin);
+  const right = last(cols, colMin);
+  if (top < 0 || left < 0 || bottom <= top || right <= left) return null;
+  const pad = 0.01;
+  const x0 = Math.max(0, left / w - pad);
+  const y0 = Math.max(0, top / h - pad);
+  const x1 = Math.min(1, (right + 1) / w + pad);
+  const y1 = Math.min(1, (bottom + 1) / h + pad);
+  const box = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  if (box.width * box.height > 0.95 || box.width < 0.05 || box.height < 0.05) return null;
+  return box;
+}
+function clampCropBox(box, min = 0.05) {
+  const width = Math.min(1, Math.max(min, box.width));
+  const height = Math.min(1, Math.max(min, box.height));
+  const x = Math.min(1 - width, Math.max(0, box.x));
+  const y = Math.min(1 - height, Math.max(0, box.y));
+  return { x, y, width, height };
+}
+function moveCropCorner(box, corner, dx, dy, min = 0.05) {
+  let x0 = box.x;
+  let y0 = box.y;
+  let x1 = box.x + box.width;
+  let y1 = box.y + box.height;
+  if (corner.includes("w")) x0 = Math.min(x1 - min, Math.max(0, x0 + dx));
+  if (corner.includes("e")) x1 = Math.max(x0 + min, Math.min(1, x1 + dx));
+  if (corner.includes("n")) y0 = Math.min(y1 - min, Math.max(0, y0 + dy));
+  if (corner.includes("s")) y1 = Math.max(y0 + min, Math.min(1, y1 + dy));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+// frontend/src/crop.js
+var FULL_PAGE = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
+var CropPart = class {
+  // spec: { entryId, record, page, onDone(record) }
+  _openCrop(spec) {
+    this._closeCrop();
+    const lang = pickLanguage(this._hass);
+    const crop = {
+      spec,
+      lang,
+      token: ++this._cropToken,
+      box: { ...FULL_PAGE },
+      found: false,
+      drag: null,
+      saving: false
+    };
+    this._crop = crop;
+    this._role("crop-title").textContent = t(lang, "crop_title", { n: spec.page });
+    this._role("crop-frame").hidden = true;
+    this._setCropStatus(t(lang, "history_loading"));
+    this._renderCropButtons();
+    this._showDialog(this._role("crop-dialog"));
+    this._loadCropImage(crop);
+  }
+  async _loadCropImage(crop) {
+    const { spec, lang } = crop;
+    let path;
+    try {
+      path = await this._signPath(scanPagePath(spec.entryId, spec.record.id, spec.page));
+    } catch (_err) {
+      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+      return;
+    }
+    if (crop !== this._crop) return;
+    const img = document.createElement("img");
+    img.dataset.role = "crop-img";
+    img.draggable = false;
+    img.alt = t(lang, "preview_page", { n: spec.page });
+    this._role("crop-img")?.remove();
+    this._role("crop-stage").prepend(img);
+    img.onload = () => {
+      if (crop !== this._crop) return;
+      const found = this._findPaper(img);
+      crop.found = Boolean(found);
+      crop.box = found ?? { ...FULL_PAGE };
+      this._role("crop-frame").hidden = false;
+      this._setCropStatus(t(lang, found ? "crop_found" : "crop_hint"));
+      this._renderCrop();
+    };
+    img.onerror = () => {
+      if (crop === this._crop) this._setCropStatus(t(lang, "preview_failed"), true);
+    };
+    img.src = path;
+  }
+  // The paper's edges, found on a small copy of the page; null if the
+  // browser can't read the pixels.
+  _findPaper(img) {
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+    if (!width || !height) return null;
+    const scale = Math.min(1, CROP_DETECT_SIZE / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    try {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return detectPaper(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    } catch (_err) {
+      return null;
+    }
+  }
+  _renderCrop() {
+    const crop = this._crop;
+    if (!crop) return;
+    const frame = this._role("crop-frame");
+    const { x, y, width, height } = crop.box;
+    frame.style.left = `${x * 100}%`;
+    frame.style.top = `${y * 100}%`;
+    frame.style.width = `${width * 100}%`;
+    frame.style.height = `${height * 100}%`;
+    this._renderCropButtons();
+  }
+  _renderCropButtons() {
+    const crop = this._crop;
+    const ready = Boolean(crop) && !this._role("crop-frame").hidden;
+    const whole = !crop || isFullPage(crop.box);
+    this._role("crop-save").disabled = !ready || crop.saving || whole;
+    this._role("crop-full").disabled = !ready || crop.saving || whole;
+    this._role("crop-cancel").disabled = Boolean(crop?.saving);
+  }
+  _setCropStatus(text, error = false) {
+    const status = this._role("crop-status");
+    status.textContent = text;
+    status.classList.toggle("error", error);
+  }
+  // ---- pointer: drag a corner, or the frame itself to move it
+  _onCropPointerDown(ev) {
+    const crop = this._crop;
+    if (!crop || crop.saving || ev.button > 0) return;
+    const corner = ev.target.closest?.("[data-corner]")?.dataset.corner ?? null;
+    if (!corner && !ev.target.closest?.('[data-role="crop-frame"]')) return;
+    ev.preventDefault();
+    const rect = this._role("crop-img")?.getBoundingClientRect();
+    if (!rect?.width || !rect.height) return;
+    crop.drag = {
+      id: ev.pointerId,
+      corner,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      startBox: { ...crop.box },
+      width: rect.width,
+      height: rect.height
+    };
+    ev.target.setPointerCapture?.(ev.pointerId);
+  }
+  _onCropPointerMove(ev) {
+    const drag = this._crop?.drag;
+    if (!drag || drag.id !== ev.pointerId) return;
+    ev.preventDefault();
+    const dx = (ev.clientX - drag.startX) / drag.width;
+    const dy = (ev.clientY - drag.startY) / drag.height;
+    this._crop.box = drag.corner ? moveCropCorner(drag.startBox, drag.corner, dx, dy) : clampCropBox({ ...drag.startBox, x: drag.startBox.x + dx, y: drag.startBox.y + dy });
+    this._renderCrop();
+  }
+  _onCropPointerUp(ev) {
+    const crop = this._crop;
+    if (!crop?.drag || crop.drag.id !== ev.pointerId) return;
+    crop.drag = null;
+  }
+  // ---- keyboard: arrows move the focused corner, or the whole frame
+  _onCropKey(ev) {
+    const crop = this._crop;
+    if (!crop || crop.saving) return;
+    const step = ev.shiftKey ? CROP_KEY_STEP_BIG : CROP_KEY_STEP;
+    const moves = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step]
+    };
+    const move = moves[ev.key];
+    if (!move) return;
+    ev.preventDefault();
+    const corner = ev.target.closest?.("[data-corner]")?.dataset.corner;
+    crop.box = corner ? moveCropCorner(crop.box, corner, move[0], move[1]) : clampCropBox({ ...crop.box, x: crop.box.x + move[0], y: crop.box.y + move[1] });
+    this._renderCrop();
+  }
+  _onCropFull() {
+    const crop = this._crop;
+    if (!crop || crop.saving) return;
+    crop.box = { ...FULL_PAGE };
+    this._setCropStatus(t(crop.lang, "crop_hint"));
+    this._renderCrop();
+  }
+  async _onCropSave() {
+    const crop = this._crop;
+    if (!crop || crop.saving || isFullPage(crop.box)) return;
+    const { spec, lang } = crop;
+    crop.saving = true;
+    this._setCropStatus(t(lang, "crop_saving"));
+    this._renderCropButtons();
+    let record;
+    try {
+      record = (await this._hass.callWS({
+        type: "home_print/scans/crop",
+        entry_id: spec.entryId,
+        scan_record_id: spec.record.id,
+        page: spec.page,
+        box: roundBox(crop.box)
+      }))?.entry;
+    } catch (err) {
+      if (crop !== this._crop) return;
+      crop.saving = false;
+      const code = err?.code;
+      this._setCropStatus(code ? scanErrorText(lang, code) : t(lang, "crop_failed"), true);
+      this._renderCropButtons();
+      return;
+    }
+    if (crop !== this._crop) return;
+    this._closeCrop();
+    spec.onDone?.(record ?? spec.record);
+  }
+  _closeCrop() {
+    if (this._crop) this._crop.drag = null;
+    this._crop = null;
+    this._cropToken += 1;
+    this._role("crop-img")?.remove();
+    this._hideDialog(this._role("crop-dialog"));
+  }
+};
+function isFullPage(box) {
+  return box.x <= 1e-3 && box.y <= 1e-3 && box.width >= 0.999 && box.height >= 0.999;
+}
+function roundBox(box) {
+  const r = (v) => Math.round(v * 1e4) / 1e4;
+  return clampCropBox(
+    { x: r(box.x), y: r(box.y), width: r(box.width), height: r(box.height) },
+    0.02
+  );
+}
 
 // frontend/src/icons.js
 var ICONS = {
@@ -560,7 +891,8 @@ var ICONS = {
   printer: "M18,3H6V7H18M19,12A1,1 0 0,1 18,11A1,1 0 0,1 19,10A1,1 0 0,1 20,11A1,1 0 0,1 19,12M16,19H8V14H16M19,8H5A3,3 0 0,0 2,11V17H6V21H18V17H22V11A3,3 0 0,0 19,8Z",
   // mdi:unfold-more-horizontal
   unfold: "M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z",
-  check: "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"
+  check: "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z",
+  crop: "M7,17V1H5V5H1V7H5V17A2,2 0 0,0 7,19H17V23H19V19H23V17M17,15H19V7C19,5.89 18.1,5 17,5H9V7H17V15Z"
 };
 var svg = (name) => `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="${ICONS[name]}"></path></svg>`;
 function svgIcon(name) {
@@ -601,7 +933,9 @@ var HistoryPart = class {
     });
   }
   _anyDialogOpen() {
-    return this._role("history-dialog").open || this._role("preview-dialog").open;
+    return ["history-dialog", "preview-dialog", "crop-dialog"].some(
+      (name) => this._role(name).open
+    );
   }
   _showDialog(dialog) {
     if (dialog.open) return;
@@ -641,6 +975,7 @@ var HistoryPart = class {
     this._loadHistory();
   }
   _closeHistory() {
+    this._closeCrop();
     this._closePreview();
     this._historyEntryId = null;
     this._historyToken += 1;
@@ -831,7 +1166,9 @@ var HistoryPart = class {
         gone: false,
         isImage: String(record.mime ?? "").startsWith("image/"),
         pages: record.pages,
-        pagePath: (page) => scanPagePath(entryId, record.id, page)
+        pagePath: (page) => scanPagePath(entryId, record.id, page),
+        // Cropping is for whoever may change scans.
+        crop: canDelete ? { entryId, record } : null
       })
     );
     const mark = document.createElement("span");
@@ -901,6 +1238,7 @@ var HistoryPart = class {
       body,
       lang,
       pagePath: spec.pagePath,
+      crop: spec.crop ?? null,
       // null: unknown, pages are added one by one until one is missing.
       count: spec.isImage ? 1 : known,
       observer: null
@@ -962,6 +1300,7 @@ var HistoryPart = class {
     img.addEventListener("load", () => {
       if (!live()) return;
       box.classList.add("loaded");
+      if (preview.crop) box.append(this._pageCropButton(preview, box, page));
       const next = page + 1;
       const more = preview.count === null || next <= preview.count;
       if (!more) return;
@@ -976,6 +1315,29 @@ var HistoryPart = class {
     });
     img.src = path;
     box.append(img);
+  }
+  // A crop button on a scan's preview page; after cropping the page reloads.
+  _pageCropButton(preview, box, page) {
+    const button = this._iconButton(preview.lang, "crop", "crop", "page-crop");
+    button.classList.add("page-crop");
+    button.addEventListener("click", () => {
+      const { entryId, record } = preview.crop;
+      this._openCrop({
+        entryId,
+        record,
+        page,
+        onDone: (updated) => {
+          preview.crop = { entryId, record: updated };
+          if (preview.token !== this._previewToken || !box.isConnected) return;
+          delete box.dataset.state;
+          box.classList.remove("loaded");
+          box.replaceChildren();
+          this._loadPage(preview, box);
+          this._reloadScans(entryId);
+        }
+      });
+    });
+    return button;
   }
   _previewNote(body, text) {
     const note = document.createElement("div");
@@ -1618,6 +1980,22 @@ var ScanPart = class {
     img.src = path;
     box.replaceChildren(img);
   }
+  _onScanCrop() {
+    const result = this._scanResult;
+    if (!result || this._scanBusy() || result.deleting) return;
+    this._openCrop({
+      entryId: result.entryId,
+      record: result.record,
+      page: result.page,
+      onDone: (updated) => {
+        if (this._scanResult !== result) return;
+        result.record = { ...result.record, ...updated };
+        this._loadScanImage();
+        this._reloadScans(result.entryId);
+        this._update();
+      }
+    });
+  }
   _onScanNameKey(ev) {
     const result = this._scanResult;
     if (!result) return;
@@ -1834,6 +2212,9 @@ var ScanPart = class {
     this._role("scan-prev").disabled = result.page <= 1;
     this._role("scan-next").disabled = result.page >= total;
     this._role("scan-name").disabled = busy || !editable;
+    const crop = this._role("scan-crop");
+    crop.hidden = !editable;
+    crop.disabled = busy || result.deleting;
     const add = this._role("scan-add");
     add.hidden = !editable || record.mime !== "application/pdf" || record.source !== "platen";
     add.disabled = busy;
@@ -2407,6 +2788,84 @@ var STYLE = `
   .tab[aria-selected="true"] { color: var(--primary-color); border-bottom-color: var(--primary-color); }
   .tab:disabled { opacity: 0.5; cursor: default; }
   .history-mark svg { color: var(--secondary-text-color); vertical-align: middle; }
+  /* Crop dialog */
+  .crop-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .crop-stage {
+    position: relative;
+    align-self: center;
+    max-width: 100%;
+    overflow: hidden;
+    line-height: 0;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .crop-stage img {
+    display: block;
+    max-width: 100%;
+    max-height: 55vh;
+    max-height: 55dvh;
+    background: #fff;
+  }
+  .crop-frame {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px solid var(--primary-color);
+    /* Dims everything outside the frame. */
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+    cursor: move;
+    touch-action: none;
+    outline: none;
+  }
+  .crop-frame:focus-visible { border-style: dashed; }
+  .crop-handle {
+    position: absolute;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    background: none;
+    touch-action: none;
+    cursor: pointer;
+  }
+  .crop-handle::after {
+    content: "";
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    border: 2px solid #fff;
+    box-sizing: border-box;
+  }
+  .crop-handle[data-corner="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+  .crop-handle[data-corner="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+  .crop-handle[data-corner="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
+  .crop-handle[data-corner="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
+  .crop-handle[data-corner="nw"]::after { left: -9px; top: -9px; }
+  .crop-handle[data-corner="ne"]::after { right: -9px; top: -9px; }
+  .crop-handle[data-corner="sw"]::after { left: -9px; bottom: -9px; }
+  .crop-handle[data-corner="se"]::after { right: -9px; bottom: -9px; }
+  .crop-handle:focus-visible::after { outline: 2px solid #fff; outline-offset: 2px; }
+  .crop-body .sheet-status { padding: 0; text-align: center; }
+  .crop-body .sheet-status.error { color: var(--error-color); }
+  .crop-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+  .crop-actions .print { flex: 1 1 120px; width: auto; }
+  .page { position: relative; }
+  .page-crop {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    background: var(--card-background-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
 `;
 
 // frontend/src/template.js
@@ -2521,6 +2980,9 @@ var TEMPLATE = `
             <button type="button" class="file-button" data-role="scan-download">
               ${svg("download")}<span data-t="scan_download"></span>
             </button>
+            <button type="button" class="file-button" data-role="scan-crop">
+              ${svg("crop")}<span data-t="crop"></span>
+            </button>
             <button type="button" class="file-button" data-role="scan-add">
               ${svg("file_plus")}<span data-t="scan_add_page"></span>
             </button>
@@ -2561,6 +3023,32 @@ var TEMPLATE = `
       <div class="preview-body" data-role="preview-body"></div>
     </div>
   </dialog>
+  <dialog data-role="crop-dialog" aria-labelledby="crop-title">
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title" id="crop-title" data-role="crop-title"></span>
+        <button type="button" class="icon-button" data-role="crop-close" data-aria="close">
+          ${svg("close")}
+        </button>
+      </div>
+      <div class="crop-body">
+        <div class="crop-stage" data-role="crop-stage">
+          <div class="crop-frame" data-role="crop-frame" tabindex="0" data-aria="crop_frame" hidden>
+            <button type="button" class="crop-handle" data-corner="nw" data-aria="crop_corner_nw"></button>
+            <button type="button" class="crop-handle" data-corner="ne" data-aria="crop_corner_ne"></button>
+            <button type="button" class="crop-handle" data-corner="sw" data-aria="crop_corner_sw"></button>
+            <button type="button" class="crop-handle" data-corner="se" data-aria="crop_corner_se"></button>
+          </div>
+        </div>
+        <div class="sheet-status" data-role="crop-status" role="status"></div>
+        <div class="crop-actions">
+          <button type="button" class="file-button" data-role="crop-full" data-t="crop_full"></button>
+          <button type="button" class="file-button" data-role="crop-cancel" data-t="crop_cancel"></button>
+          <button type="button" class="print" data-role="crop-save" data-t="crop_save"></button>
+        </div>
+      </div>
+    </div>
+  </dialog>
 `;
 
 // frontend/src/card.js
@@ -2588,6 +3076,8 @@ var HomePrintCard = class extends HTMLElement {
     this._historyToken = 0;
     this._previewToken = 0;
     this._preview = null;
+    this._crop = null;
+    this._cropToken = 0;
     this._deletedIds = /* @__PURE__ */ new Set();
     this._historyTab = "prints";
     this._savedOverflow = null;
@@ -2629,6 +3119,22 @@ var HomePrintCard = class extends HTMLElement {
     this._role("preview-close").addEventListener("click", () => this._closePreview());
     this._wireDialog(this._role("history-dialog"), () => this._closeHistory());
     this._wireDialog(this._role("preview-dialog"), () => this._closePreview());
+    this._wireDialog(this._role("crop-dialog"), () => {
+      if (!this._crop?.saving) this._closeCrop();
+    });
+    this._role("crop-close").addEventListener("click", () => {
+      if (!this._crop?.saving) this._closeCrop();
+    });
+    this._role("crop-cancel").addEventListener("click", () => this._closeCrop());
+    this._role("crop-full").addEventListener("click", () => this._onCropFull());
+    this._role("crop-save").addEventListener("click", () => this._onCropSave());
+    const stage = this._role("crop-stage");
+    stage.addEventListener("pointerdown", (ev) => this._onCropPointerDown(ev));
+    stage.addEventListener("pointermove", (ev) => this._onCropPointerMove(ev));
+    stage.addEventListener("pointerup", (ev) => this._onCropPointerUp(ev));
+    stage.addEventListener("pointercancel", (ev) => this._onCropPointerUp(ev));
+    stage.addEventListener("keydown", (ev) => this._onCropKey(ev));
+    this._role("scan-crop").addEventListener("click", () => this._onScanCrop());
     for (const tab of this._bodyTabs()) {
       tab.addEventListener("click", () => this._selectTab(tab.dataset.bodyTab));
     }
@@ -2871,7 +3377,7 @@ var HomePrintCard = class extends HTMLElement {
     return text;
   }
 };
-for (const Part of [PrintPart, HistoryPart, ScanPart, SwitcherPart]) {
+for (const Part of [PrintPart, HistoryPart, ScanPart, SwitcherPart, CropPart]) {
   for (const key of Object.getOwnPropertyNames(Part.prototype)) {
     if (key === "constructor") continue;
     Object.defineProperty(
@@ -3038,7 +3544,9 @@ HomePrintCard.helpers = Object.freeze({
   historyStateIcon,
   scanErrorText,
   scanPagePath,
-  scanFilePath
+  scanFilePath,
+  detectPaper,
+  moveCropCorner
 });
 if (!customElements.get(CARD_TYPE)) {
   customElements.define(CARD_TYPE, HomePrintCard);

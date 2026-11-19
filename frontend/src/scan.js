@@ -326,6 +326,23 @@ export class ScanPart {
     box.replaceChildren(img);
   }
 
+  _onScanCrop() {
+    const result = this._scanResult;
+    if (!result || this._scanBusy() || result.deleting) return;
+    this._openCrop({
+      entryId: result.entryId,
+      record: result.record,
+      page: result.page,
+      onDone: (updated) => {
+        if (this._scanResult !== result) return;
+        result.record = { ...result.record, ...updated };
+        this._loadScanImage();
+        this._reloadScans(result.entryId);
+        this._update();
+      },
+    });
+  }
+
   _onScanNameKey(ev) {
     const result = this._scanResult;
     if (!result) return;
@@ -559,6 +576,9 @@ export class ScanPart {
     this._role("scan-prev").disabled = result.page <= 1;
     this._role("scan-next").disabled = result.page >= total;
     this._role("scan-name").disabled = busy || !editable;
+    const crop = this._role("scan-crop");
+    crop.hidden = !editable;
+    crop.disabled = busy || result.deleting;
     const add = this._role("scan-add");
     add.hidden = !editable || record.mime !== "application/pdf" || record.source !== "platen";
     add.disabled = busy;

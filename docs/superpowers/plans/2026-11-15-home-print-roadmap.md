@@ -23,4 +23,5 @@ Plan 4 (tarama) uygulandı: eSCL istemcisi, arşiv, `home_print.scan`, kartta Ta
 - eSCL fixture'ları gerçek DeskJet 4670 dökümlerinden geliyor. Çift taraflı besleyici ve siyah-beyaz için tek sentetik dosya kaldı.
 - Kart `frontend/src/` altında modüllere bölündü, esbuild ile tek dosyaya derleniyor (ADR 1).
 - Tarayıcı keşfi (`_uscan`/`_uscans`) ve yazıcısı olmayan tarayıcılar eklendi (#10).
-- Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5), tarama için kâğıt boyutu.
+- Kâğıt boyutu seçimi yerine taramadan sonra sayfa sayfa kırpma geldi: kenarlar otomatik bulunuyor, kırpılan kısım dosyadan gerçekten siliniyor, geçmişteki taramalarda da çalışıyor (#9).
+- Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5).

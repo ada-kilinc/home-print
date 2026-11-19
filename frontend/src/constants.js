@@ -43,6 +43,8 @@ export const SCAN_ERRORS = [
   "unauthorized",
   "scan_failed",
   "canceled",
+  "invalid_crop",
+  "scan_running",
 ];
 // Poll answers that mean the scan can no longer be followed.
 export const FATAL_SCAN_ERRORS = ["not_found", "no_scanner", "unauthorized"];
@@ -85,3 +87,8 @@ export const KNOWN_STATES = ["idle", "processing", "stopped"];
 // States of the scanner status sensor (a scanner without a printer).
 export const SCANNER_STATES = ["idle", "scanning", "adf_loaded", "stopped"];
 export const HISTORY_STATES = ["sent", "completed", "aborted", "canceled", "error"];
+// Crop dialog: the page is checked for paper edges at this size (pixels on
+// the long side); arrow keys move a corner by this much (Shift: more).
+export const CROP_DETECT_SIZE = 256;
+export const CROP_KEY_STEP = 0.01;
+export const CROP_KEY_STEP_BIG = 0.05;

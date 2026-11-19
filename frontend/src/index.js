@@ -5,12 +5,14 @@ import { CARD_TYPE, EDITOR_TYPE } from "./constants.js";
 import { HomePrintCardEditor } from "./editor.js";
 import {
   buildForm,
+  detectPaper,
   formatHistoryTime,
   historyStateIcon,
   isIOS,
   isProblemState,
   isWordFile,
   jobLabel,
+  moveCropCorner,
   reasonLabel,
   scanErrorText,
   scanFilePath,
@@ -38,6 +40,8 @@ HomePrintCard.helpers = Object.freeze({
   scanErrorText,
   scanPagePath,
   scanFilePath,
+  detectPaper,
+  moveCropCorner,
 });
 
 if (!customElements.get(CARD_TYPE)) {

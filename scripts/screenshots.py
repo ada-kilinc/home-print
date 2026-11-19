@@ -20,7 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from playwright.sync_api import Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +59,24 @@ def sample_page() -> bytes:
         x0 = box[0] + step * i + step * 0.25
         top = box[3] - (box[3] - box[1] - 20) * value
         draw.rectangle((x0, top, x0 + step * 0.5, box[3]), fill="#4a86d8")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+@functools.cache
+def sample_receipt() -> bytes:
+    """A receipt lying on the scanner glass, for the crop dialog."""
+    w, h = 620, 877
+    img = Image.new("RGB", (w, h), (238, 238, 236))
+    ImageDraw.Draw(img).rectangle((182, 92, 402, 612), fill=(205, 205, 205))
+    img = img.filter(ImageFilter.GaussianBlur(3))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((180, 90, 400, 610), fill=(252, 252, 250))
+    draw.text((205, 108), "MARKET", fill="#141414", font=_font(16, bold=True))
+    for i in range(18):
+        right = 380 - (i % 3) * 40
+        draw.rectangle((200, 150 + i * 24, right, 156 + i * 24), fill="#464646")
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
@@ -132,6 +150,28 @@ def run(chrome: str | None) -> None:
             page.locator("home-print-card .scan-page img").wait_for()
             page.wait_for_timeout(300)
             card_shot(page, "scan.png")
+
+            # The crop dialog on a receipt, with the paper's edges found.
+            page.unroute("**/api/home_print/**")
+            page.route(
+                "**/api/home_print/**",
+                lambda route: route.fulfill(
+                    content_type="image/png", body=sample_receipt()
+                ),
+            )
+            open_card(page, base)
+            page.set_viewport_size({"width": WIDTH, "height": 740})
+            page.click(shadow(page, "body-tab-scan"))
+            page.click(shadow(page, "scan-start"))
+            page.locator("home-print-card .scan-page img").wait_for()
+            page.click(shadow(page, "scan-crop"))
+            page.locator(
+                'home-print-card [data-role="crop-frame"]:not([hidden])'
+            ).wait_for()
+            page.wait_for_timeout(300)
+            page_shot(page, "crop.png")
+            page.unroute("**/api/home_print/**")
+            page.set_viewport_size({"width": WIDTH, "height": 900})
 
             # Several printers: the switcher list open.
             open_card(page, base, several=True)

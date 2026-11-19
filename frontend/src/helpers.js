@@ -229,3 +229,115 @@ export function writeStored(key, value) {
     // Private mode or storage off: the choice lasts until the page reloads.
   }
 }
+
+// Where the paper lies on a scanned page, as fractions of the page, or null
+// when nothing clear stands out (then the whole page is the start).
+// ``image`` is ImageData-like: { width, height, data } with RGBA bytes,
+// best a small copy (a few hundred pixels wide).
+//
+// The scanner lid is the background: its colour is taken from the page's
+// border. A pixel belongs to the paper when its colour differs from the lid,
+// or when it sits on a sharp change of brightness (the paper's edge or
+// shadow, which also finds white paper on a white lid). Rows and columns
+// with enough such pixels give the box, padded a little.
+export function detectPaper(image) {
+  const { width: w, height: h, data } = image ?? {};
+  if (!data || w < 16 || h < 16) return null;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) {
+    lum[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+  // The lid's colour: the median of a thin band along the border.
+  const band = Math.max(1, Math.round(Math.min(w, h) * 0.02));
+  const samples = [[], [], []];
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (x >= band && x < w - band && y >= band && y < h - band) continue;
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c += 1) samples[c].push(data[i + c]);
+    }
+  }
+  const bg = samples.map((list) => {
+    list.sort((a, b) => a - b);
+    return list[list.length >> 1];
+  });
+  // A light blur first, so scanner noise and JPEG grain don't count as
+  // edges, but the faint step from a white lid to white paper does.
+  const blur = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const row = (y + dy) * w + x;
+        sum += lum[row - 1] + lum[row] + lum[row + 1];
+      }
+      blur[y * w + x] = sum / 9;
+    }
+  }
+  const COLOR_DIFF = 40;
+  const EDGE_DIFF = 8;
+  const margin = Math.max(2, Math.round(Math.min(w, h) * 0.015));
+  const rows = new Uint32Array(h);
+  const cols = new Uint32Array(w);
+  for (let y = margin; y < h - margin; y += 1) {
+    for (let x = margin; x < w - margin; x += 1) {
+      const p = y * w + x;
+      const i = p * 4;
+      const colorDiff = Math.max(
+        Math.abs(data[i] - bg[0]),
+        Math.abs(data[i + 1] - bg[1]),
+        Math.abs(data[i + 2] - bg[2]),
+      );
+      const edge = Math.abs(blur[p + 1] - blur[p - 1]) + Math.abs(blur[p + w] - blur[p - w]);
+      if (colorDiff > COLOR_DIFF || edge > EDGE_DIFF) {
+        rows[y] += 1;
+        cols[x] += 1;
+      }
+    }
+  }
+  // Specks and dust: a row or column needs a few percent of hits.
+  const rowMin = Math.max(2, Math.round(w * 0.02));
+  const colMin = Math.max(2, Math.round(h * 0.02));
+  const first = (counts, min) => counts.findIndex((n) => n >= min);
+  const last = (counts, min) => {
+    for (let i = counts.length - 1; i >= 0; i -= 1) if (counts[i] >= min) return i;
+    return -1;
+  };
+  const top = first(rows, rowMin);
+  const bottom = last(rows, rowMin);
+  const left = first(cols, colMin);
+  const right = last(cols, colMin);
+  if (top < 0 || left < 0 || bottom <= top || right <= left) return null;
+  const pad = 0.01;
+  const x0 = Math.max(0, left / w - pad);
+  const y0 = Math.max(0, top / h - pad);
+  const x1 = Math.min(1, (right + 1) / w + pad);
+  const y1 = Math.min(1, (bottom + 1) / h + pad);
+  const box = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  // Almost the whole page, or a sliver: no useful suggestion.
+  if (box.width * box.height > 0.95 || box.width < 0.05 || box.height < 0.05) return null;
+  return box;
+}
+
+// Keeps a crop box inside the page and at least ``min`` on each side.
+export function clampCropBox(box, min = 0.05) {
+  const width = Math.min(1, Math.max(min, box.width));
+  const height = Math.min(1, Math.max(min, box.height));
+  const x = Math.min(1 - width, Math.max(0, box.x));
+  const y = Math.min(1 - height, Math.max(0, box.y));
+  return { x, y, width, height };
+}
+
+// Moves one corner (``nw``, ``ne``, ``sw``, ``se``) of a box by (dx, dy),
+// keeping the opposite corner where it is.
+export function moveCropCorner(box, corner, dx, dy, min = 0.05) {
+  let x0 = box.x;
+  let y0 = box.y;
+  let x1 = box.x + box.width;
+  let y1 = box.y + box.height;
+  if (corner.includes("w")) x0 = Math.min(x1 - min, Math.max(0, x0 + dx));
+  if (corner.includes("e")) x1 = Math.max(x0 + min, Math.min(1, x1 + dx));
+  if (corner.includes("n")) y0 = Math.min(y1 - min, Math.max(0, y0 + dy));
+  if (corner.includes("s")) y1 = Math.max(y0 + min, Math.min(1, y1 + dy));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
