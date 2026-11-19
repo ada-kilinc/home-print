@@ -38,6 +38,7 @@ from .scanner import (
 )
 from .scans import ScanArchive
 from .services import async_setup_services
+from .update_check import async_setup_update_check
 from .websocket import async_setup_websocket
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
@@ -74,6 +75,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.http.register_view(ScanFileView())
     hass.http.register_view(ScanPreviewView())
     await async_register_frontend(hass)
+    await async_setup_update_check(hass)
     return True
 
 

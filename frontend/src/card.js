@@ -52,6 +52,7 @@ export class HomePrintCard extends HTMLElement {
     this._preview = null;
     this._crop = null;
     this._cropToken = 0;
+    this._restartRequired = null;
     this._deletedIds = new Set();
     // "prints" or "scans": the history tab shown.
     this._historyTab = "prints";
@@ -117,6 +118,10 @@ export class HomePrintCard extends HTMLElement {
     stage.addEventListener("keydown", (ev) => this._onCropKey(ev));
     this._role("scan-crop").addEventListener("click", () => this._onScanCrop());
     this._role("update-reload").addEventListener("click", () => reloadNow());
+    const restart = this._role("update-restart");
+    restart.addEventListener("click", () =>
+      this._confirmTap(restart, () => this._restartHomeAssistant(), "update_restart_confirm"),
+    );
     // Back on the tab (or the app in front again): look for news at once.
     this._onVisible = () => {
       if (document.visibilityState === "visible" && this._hass) this._loadPrinters();
@@ -220,6 +225,8 @@ export class HomePrintCard extends HTMLElement {
       const result = await this._hass.callWS({ type: "home_print/printers" });
       this._printers = Array.isArray(result?.printers) ? result.printers : [];
       noteServerVersion(result?.version);
+      this._restartRequired =
+        typeof result?.restart_required === "string" ? result.restart_required : null;
       this._loadFailed = false;
     } catch (_err) {
       // Keep the last good list; only complain when there never was one.
@@ -260,7 +267,7 @@ export class HomePrintCard extends HTMLElement {
 
   // First tap arms the button ("Sure?"), the second within CONFIRM_MS runs
   // `action`; otherwise it goes back to how it was.
-  _confirmTap(button, action) {
+  _confirmTap(button, action, key = "confirm_delete") {
     if (this._armed.has(button)) {
       this._disarm(button);
       action();
@@ -268,7 +275,7 @@ export class HomePrintCard extends HTMLElement {
     }
     const lang = pickLanguage(this._hass);
     const label = document.createElement("span");
-    label.textContent = t(lang, "confirm_delete");
+    label.textContent = t(lang, key);
     this._armed.set(button, {
       children: [...button.childNodes],
       label: button.getAttribute("aria-label"),
@@ -381,14 +388,36 @@ export class HomePrintCard extends HTMLElement {
     );
   }
 
-  // A newer Home Print is installed: reload when idle, else offer the button.
+  // A newer Home Print: reload when idle, else offer the button. Installed
+  // but not running yet: Home Assistant needs a restart (admins get a button).
   _renderUpdate(lang) {
     const version = pendingVersion();
+    const installed = version ? null : this._restartRequired;
     const bar = this._role("update");
-    bar.hidden = !version;
-    if (!version) return;
-    this._role("update-text").textContent = t(lang, "update_available", { version });
-    maybeReload();
+    bar.hidden = !version && !installed;
+    this._role("update-reload").hidden = !version;
+    const restart = this._role("update-restart");
+    restart.hidden = !installed || !this._hass?.user?.is_admin;
+    if (version) {
+      this._role("update-text").textContent = t(lang, "update_available", { version });
+      maybeReload();
+    } else if (installed) {
+      this._role("update-text").textContent = t(lang, "update_restart_needed", {
+        version: installed,
+      });
+    }
+  }
+
+  async _restartHomeAssistant() {
+    const lang = pickLanguage(this._hass);
+    try {
+      await this._hass.callService("homeassistant", "restart", {});
+    } catch (_err) {
+      // The connection drops while Home Assistant goes down; that is fine.
+      return;
+    }
+    this._role("update-text").textContent = t(lang, "update_restarting");
+    this._role("update-restart").hidden = true;
   }
 
   _renderNotice(lang, printer, unknown, wanted) {

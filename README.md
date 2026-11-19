@@ -106,7 +106,7 @@ response_variable: scan  # scan.path, scan.copy, scan.name, scan.pages
 
 **Where are my scans?** In the **Media** panel, under `home_print/scans/` (`/media` on Home Assistant OS).
 
-**I updated Home Print. Do open dashboards change?** Yes, after Home Assistant restarts. An open card notices the newer version within a minute, or as soon as you come back to the tab or app, and reloads the page once. If you're in the middle of something (a file chosen, a print or scan running, a dialog open), it waits and shows a **Reload** button instead.
+**I updated Home Print. Do open dashboards change?** Yes, after Home Assistant restarts. Until then, Home Print shows a notice in **Settings → Repairs** and on the card (admins get a **Restart** button there). An open card notices the newer version within a minute, or as soon as you come back to the tab or app, and reloads the page once. If you're in the middle of something (a file chosen, a print or scan running, a dialog open), it waits and shows a **Reload** button instead.
 
 **The card says "Custom element doesn't exist".** See [Troubleshooting](docs/troubleshooting.md#the-card-doesnt-show-up).
 

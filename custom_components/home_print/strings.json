@@ -312,5 +312,11 @@
     "not_a_printer": {
       "message": "This device is a scanner without a printer, so it can't print."
     }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Restart Home Assistant to finish the Home Print update",
+      "description": "Home Print {installed} is installed, but Home Assistant is still running {running}. Restart Home Assistant (Settings → System → Restart) to use the new version. Open dashboards update themselves afterwards."
+    }
   }
 }

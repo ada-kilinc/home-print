@@ -134,6 +134,11 @@ export const STRINGS = {
     scan_error_scanner_unavailable: "Tarayıcıya ulaşılamadı.",
     update_available: "Home Print {version} sürümüne güncellendi.",
     update_reload: "Yenile",
+    update_restart_needed:
+      "Home Print {version} yüklendi. Bitmesi için Home Assistant'ın yeniden başlaması gerekiyor.",
+    update_restart: "Yeniden başlat",
+    update_restart_confirm: "Emin misin?",
+    update_restarting: "Home Assistant yeniden başlıyor…",
     crop: "Kırp",
     crop_title: "Sayfa {n}: kırp",
     crop_save: "Kırp",
@@ -293,6 +298,11 @@ export const STRINGS = {
     scan_error_scanner_unavailable: "Couldn't reach the scanner.",
     update_available: "Home Print was updated to {version}.",
     update_reload: "Reload",
+    update_restart_needed:
+      "Home Print {version} is installed. Home Assistant needs to restart to finish the update.",
+    update_restart: "Restart",
+    update_restart_confirm: "Sure?",
+    update_restarting: "Home Assistant is restarting…",
     crop: "Crop",
     crop_title: "Page {n}: crop",
     crop_save: "Crop",

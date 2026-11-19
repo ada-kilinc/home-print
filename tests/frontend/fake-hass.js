@@ -128,6 +128,8 @@ export function scanState(overrides = {}) {
  * scans/rename). `scanStart` is the scan/start answer (a state, or an object
  * with `error` to reject); `scanStates` is a queue of scan/state answers like
  * `jobs`. `scanDeleteError` and `renameError` make those calls reject.
+ * `restartRequired` is a newer version installed on disk (printers
+ * `restart_required`); `user` is hass.user.
  * `version` is the integration version printers reports (a value, or a
  * function for one that changes); left out by default.
  * `cropError` makes scans/crop reject with that code.
@@ -153,6 +155,8 @@ export function makeHass({
   scanCancel = null,
   cropError = null,
   version = undefined,
+  restartRequired = undefined,
+  user = { name: "Ada", is_admin: true },
 } = {}) {
   const jobQueue = [...jobs];
   const scanQueue = [...scanStates];
@@ -162,13 +166,17 @@ export function makeHass({
     language,
     locale: { language },
     states,
+    user,
     calls: [],
+    callService: vi.fn(async () => ({})),
     callWS: vi.fn(async (msg) => {
       hass.calls.push(msg);
       if (msg.type === "home_print/printers") {
         if (printersError) throw printersError;
         const v = typeof version === "function" ? version() : version;
-        return v === undefined ? { printers } : { version: v, printers };
+        const answer = v === undefined ? { printers } : { version: v, printers };
+        if (restartRequired !== undefined) answer.restart_required = restartRequired;
+        return answer;
       }
       if (msg.type === "home_print/job") {
         const next = jobQueue.length > 1 ? jobQueue.shift() : jobQueue[0];

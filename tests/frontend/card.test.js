@@ -3363,3 +3363,47 @@ describe("reload after an update", () => {
     expect(reloads).toBe(1);
   });
 });
+
+describe("restart needed after an update", () => {
+  beforeEach(() => HomePrintCard.updateState.reset({ reload: () => {} }));
+  afterEach(() => HomePrintCard.updateState.reset());
+
+  it("tells admins to restart, with a button that asks first", async () => {
+    const hass = makeHass({ version: "0.3.9", restartRequired: "0.3.16" });
+    const card = await mount(hass);
+    expect(visible(card, "update")).toBe(true);
+    expect(text(card, "update-text")).toBe(
+      "Home Print 0.3.16 yüklendi. Bitmesi için Home Assistant'ın yeniden başlaması gerekiyor.",
+    );
+    expect(visible(card, "update-reload")).toBe(false);
+    const button = role(card, "update-restart");
+    expect(visible(card, "update-restart")).toBe(true);
+    button.click();
+    expect(button.textContent).toBe("Emin misin?");
+    expect(hass.callService).not.toHaveBeenCalled();
+    button.click();
+    await flush();
+    expect(hass.callService).toHaveBeenCalledWith("homeassistant", "restart", {});
+    expect(text(card, "update-text")).toBe("Home Assistant yeniden başlıyor…");
+  });
+
+  it("others see the notice without the button", async () => {
+    const card = await mount(
+      makeHass({
+        version: "0.3.9",
+        restartRequired: "0.3.16",
+        user: { name: "Dad", is_admin: false },
+        language: "en",
+      }),
+    );
+    expect(text(card, "update-text")).toBe(
+      "Home Print 0.3.16 is installed. Home Assistant needs to restart to finish the update.",
+    );
+    expect(visible(card, "update-restart")).toBe(false);
+  });
+
+  it("shows nothing when no restart is waiting", async () => {
+    const card = await mount(makeHass({ version: "0.3.9", restartRequired: null }));
+    expect(visible(card, "update")).toBe(false);
+  });
+});

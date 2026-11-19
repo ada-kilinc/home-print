@@ -35,6 +35,7 @@ from .scanning import (
     scan_defaults,
     usable_sources,
 )
+from .update_check import DATA_INSTALLED
 
 if TYPE_CHECKING:
     from . import HomePrintConfigEntry
@@ -218,11 +219,14 @@ def ws_printers(
 
     ``version`` is the integration's: a card from an older version reloads
     the page, so an update reaches dashboards that are already open.
+    ``restart_required`` is a newer version already installed on disk that
+    only takes effect after Home Assistant restarts (else None).
     """
     connection.send_result(
         msg["id"],
         {
             "version": hass.data.get(DATA_VERSION),
+            "restart_required": hass.data.get(DATA_INSTALLED),
             "printers": [
                 _printer(hass, entry, connection) for entry in _listed_entries(hass)
             ],

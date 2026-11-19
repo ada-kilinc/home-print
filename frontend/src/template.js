@@ -28,6 +28,7 @@ export const TEMPLATE = `
       <div class="update" data-role="update" role="status" hidden>
         <span class="update-text" data-role="update-text"></span>
         <button type="button" class="file-button" data-role="update-reload" data-t="update_reload"></button>
+        <button type="button" class="file-button" data-role="update-restart" data-t="update_restart" hidden></button>
       </div>
       <div class="notice" data-role="notice" role="alert" hidden></div>
       <div class="tabs" role="tablist" data-role="body-tabs" hidden>
