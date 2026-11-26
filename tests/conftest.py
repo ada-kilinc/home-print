@@ -112,3 +112,50 @@ def mock_escl():
         cls.return_value = client
         cls.client = client
         yield cls
+
+
+@pytest.fixture
+def forbid_loop_disk_io(hass, monkeypatch):
+    """Fail if a path is resolved/stat-ed or the allowlist read on the event loop.
+
+    HA's own blocking-call detection doesn't cover these; on SD cards and
+    network shares each one stalls Home Assistant. Use as a context manager
+    around the code under test.
+    """
+    import contextlib
+    import pathlib
+    import threading
+
+    loop_thread = threading.get_ident()
+    calls: list[str] = []
+    active = False
+
+    def guard(name, original):
+        def wrapper(*args, **kwargs):
+            if active and threading.get_ident() == loop_thread:
+                calls.append(name)
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name in ("resolve", "is_file", "is_dir", "exists", "stat"):
+        monkeypatch.setattr(
+            pathlib.Path, name, guard(f"Path.{name}", getattr(pathlib.Path, name))
+        )
+    monkeypatch.setattr(
+        hass.config,
+        "is_allowed_path",
+        guard("is_allowed_path", hass.config.is_allowed_path),
+    )
+
+    @contextlib.contextmanager
+    def watching():
+        nonlocal active
+        active = True
+        try:
+            yield calls
+        finally:
+            active = False
+        assert calls == [], f"blocking disk calls on the event loop: {calls}"
+
+    return watching

@@ -119,6 +119,24 @@ def _read_allowed_file(hass: HomeAssistant, path: str, limit: int) -> bytes:
     return data
 
 
+def _check_folder(hass: HomeAssistant, folder: str) -> str:
+    """Resolve and authorize a copy target. Runs in the executor.
+
+    Returns the resolved folder, "not_allowed" or "not_found". The resolved
+    path is authorized (a symlink can't point outside the allowlist) before
+    looking at whether it exists, so callers can't probe outside it.
+    """
+    try:
+        resolved = Path(folder).resolve()
+    except (OSError, RuntimeError):
+        return "not_allowed"
+    if not hass.config.is_allowed_path(str(resolved)):
+        return "not_allowed"
+    if not resolved.is_dir():
+        return "not_found"
+    return str(resolved)
+
+
 def _copy_unique(source: Path, folder: str, name: str) -> str:
     """Copy ``source`` into an allowed folder under a free name. Executor job."""
     target_dir = Path(folder).resolve()
@@ -220,23 +238,18 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
         folder: str | None = call.data.get(ATTR_FOLDER)
         if folder:
-            try:
-                resolved = Path(folder).resolve()
-            except (OSError, RuntimeError):
-                resolved = None
-            if resolved is None or not hass.config.is_allowed_path(str(resolved)):
+            checked = await hass.async_add_executor_job(_check_folder, hass, folder)
+            if checked in ("not_allowed", "not_found"):
                 raise ServiceValidationError(
                     translation_domain=DOMAIN,
-                    translation_key="path_not_allowed",
+                    translation_key=(
+                        "path_not_allowed"
+                        if checked == "not_allowed"
+                        else "folder_not_found"
+                    ),
                     translation_placeholders={"path": folder},
                 )
-            if not await hass.async_add_executor_job(resolved.is_dir):
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="folder_not_found",
-                    translation_placeholders={"path": folder},
-                )
-            folder = str(resolved)
+            folder = checked
 
         defaults = scan_defaults(scanner.caps)
         request = ScanRequest(
@@ -261,7 +274,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 translation_key=f"scan_error_{state.error or 'scan_failed'}",
             )
         record = state.record
-        archived = scanner.archive.file_path(record["id"])
+        archived = await scanner.archive.async_file_path(record["id"])
         if archived is None:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="scan_error_scan_failed"

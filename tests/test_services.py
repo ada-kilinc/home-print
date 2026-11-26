@@ -266,3 +266,17 @@ async def test_scan_service_admin_only_blocks_non_admin(
             context=Context(user_id=hass_read_only_user.id),
         )
     mock_escl.client.scan.assert_not_called()
+
+
+async def test_scan_service_does_no_disk_io_on_the_event_loop(
+    hass, scan_entry, allowed_dir, forbid_loop_disk_io
+):
+    with forbid_loop_disk_io():
+        result = await scan_call(
+            hass, config_entry_id=scan_entry.entry_id, folder=str(allowed_dir)
+        )
+        with pytest.raises(ServiceValidationError):
+            await scan_call(
+                hass, config_entry_id=scan_entry.entry_id, folder="/not/allowed"
+            )
+    assert result["copy"]

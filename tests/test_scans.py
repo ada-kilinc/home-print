@@ -89,12 +89,13 @@ async def test_clean_name_strips_path_and_limits_80(hass, tmp_path):
 
     archive = _setup(hass, tmp_path)
     record = await _add(archive, "../../etc/x")
-    path = archive.file_path(record["id"])
+    path = await archive.async_file_path(record["id"])
     assert path is not None
     assert _scans_dir(tmp_path) in path.resolve().parents
     assert "/" not in record["name"]
     record = await _add(archive, "/etc/passwd")
-    assert _scans_dir(tmp_path) in archive.file_path(record["id"]).resolve().parents
+    path = await archive.async_file_path(record["id"])
+    assert _scans_dir(tmp_path) in path.resolve().parents
 
 
 async def test_default_name_tr_and_en(hass):
@@ -123,12 +124,12 @@ async def test_rename_moves_file(hass, tmp_path):
     assert renamed["name"] == "new"
     assert not old_path.exists()
     assert (old_path.parent / "new.pdf").read_bytes() == PDF
-    assert archive.file_path(record["id"]) == old_path.parent / "new.pdf"
+    assert await archive.async_file_path(record["id"]) == old_path.parent / "new.pdf"
     clash = await archive.async_rename(record["id"], "taken")
     assert clash["name"] == "taken (2)"
     assert (old_path.parent / "taken (2).pdf").exists()
     assert (old_path.parent / "taken.pdf").exists()
-    assert archive.file_path(other["id"]) is not None
+    assert await archive.async_file_path(other["id"]) is not None
     assert await archive.async_rename("0" * 32, "x") is None
 
 
@@ -176,7 +177,7 @@ async def test_cleanup_drops_record_when_file_missing(hass, tmp_path):
     gone = await _add(archive, "gone")
     kept = await _add(archive, "kept")
     (tmp_path / "media" / gone["path"]).unlink()
-    assert archive.file_path(gone["id"]) is None
+    assert await archive.async_file_path(gone["id"]) is None
     await archive.async_cleanup()
     assert [e["id"] for e in archive.entries()] == [kept["id"]]
 
@@ -204,17 +205,17 @@ async def test_cleanup_size_cap_removes_oldest(hass, tmp_path):
 async def test_file_path_rejects_bad_id_and_outside_root(hass, tmp_path):
     archive = _setup(hass, tmp_path)
     record = await _add(archive)
-    assert archive.file_path(record["id"]) is not None
-    assert archive.file_path("../../etc/passwd") is None
-    assert archive.file_path("g" * 32) is None
-    assert archive.file_path("0" * 32) is None
+    assert await archive.async_file_path(record["id"]) is not None
+    assert await archive.async_file_path("../../etc/passwd") is None
+    assert await archive.async_file_path("g" * 32) is None
+    assert await archive.async_file_path("0" * 32) is None
     # A tampered record pointing outside the scans folder is refused.
     outside = tmp_path / "media" / "other.pdf"
     outside.write_bytes(PDF)
     archive._entries[0]["path"] = "other.pdf"
-    assert archive.file_path(record["id"]) is None
+    assert await archive.async_file_path(record["id"]) is None
     archive._entries[0]["path"] = "home_print/scans/../../../outside.pdf"
-    assert archive.file_path(record["id"]) is None
+    assert await archive.async_file_path(record["id"]) is None
 
 
 async def test_records_survive_reload(hass, tmp_path):
@@ -224,7 +225,7 @@ async def test_records_survive_reload(hass, tmp_path):
     again = ScanArchive(hass, archive._entry)
     await again.async_load()
     assert again.entries() == archive.entries()
-    assert again.file_path(record["id"]) is not None
+    assert await again.async_file_path(record["id"]) is not None
 
 
 async def test_delayed_save_writes_store(hass, tmp_path, hass_storage):
@@ -255,7 +256,7 @@ async def test_size_cap_keeps_newest_even_if_alone_over_cap(hass, tmp_path):
     await hass.async_block_till_done()
     await archive.async_cleanup()
     assert [e["id"] for e in archive.entries()] == [big["id"]]
-    assert archive.file_path(big["id"]) is not None
+    assert await archive.async_file_path(big["id"]) is not None
     assert not (tmp_path / "media" / old["path"]).exists()
 
 
@@ -318,7 +319,10 @@ async def test_async_file_path_and_existing_entries(hass, tmp_path):
     archive = _setup(hass, tmp_path)
     kept = await _add(archive, name="kept")
     gone = await _add(archive, name="gone")
-    assert await archive.async_file_path(kept["id"]) == archive.file_path(kept["id"])
+    assert (
+        await archive.async_file_path(kept["id"])
+        == (tmp_path / "media" / kept["path"]).resolve()
+    )
     assert await archive.async_file_path("0" * 32) is None
     assert await archive.async_file_path("../x") is None
     (tmp_path / "media" / gone["path"]).unlink()
@@ -326,3 +330,22 @@ async def test_async_file_path_and_existing_entries(hass, tmp_path):
     entries, missing = await archive.async_existing_entries()
     assert [e["id"] for e in entries] == [kept["id"]]
     assert missing is True
+
+
+async def test_archive_does_no_disk_io_on_the_event_loop(
+    hass, tmp_path, forbid_loop_disk_io
+):
+    archive = _setup(hass, tmp_path, scan_max_mb=1, scan_days=1)
+    await archive.async_load()
+    first = await _add(archive, name="first")
+    second = await _add(archive, name="second")
+    await hass.async_block_till_done()
+    with forbid_loop_disk_io():
+        assert await archive.async_file_path(first["id"]) is not None
+        assert await archive.async_replace_file(first["id"], PDF, 2) is not None
+        assert (await archive.async_rename(first["id"], "renamed"))["name"] == "renamed"
+        await archive.async_existing_entries()
+        assert await archive.async_delete(second["id"])
+        await archive.async_cleanup()
+        await archive.async_cleanup(now=dt_util.utcnow() + timedelta(days=30))
+        await hass.async_block_till_done()

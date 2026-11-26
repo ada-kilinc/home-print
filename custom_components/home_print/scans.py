@@ -239,9 +239,19 @@ class ScanArchive:
         """Overwrite the scan's file (after adding pages); None if unknown."""
         async with self._lock:
             record = self._find(record_id)
-            if record is None or (path := self.file_path(record_id)) is None:
+            if record is None:
                 return None
-            await self._hass.async_add_executor_job(_write_file, path, data)
+
+            def replace(rel: str) -> bool:
+                if (path := self._existing_file(rel)) is None:
+                    return False
+                _write_file(path, data)
+                return True
+
+            if not await self._hass.async_add_executor_job(
+                replace, str(record["path"])
+            ):
+                return None
             record["pages"] = pages
             record["size"] = len(data)
             self._schedule_save()
@@ -251,14 +261,24 @@ class ScanArchive:
         """Rename a scan and its file in place; None if unknown or file gone."""
         async with self._lock:
             record = self._find(record_id)
-            if record is None or (path := self.file_path(record_id)) is None:
+            if record is None:
                 return None
             clean = clean_scan_name(name, record["name"])
-            unique = await self._hass.async_add_executor_job(_rename_file, path, clean)
+
+            def rename(rel: str) -> tuple[str, str] | None:
+                if (path := self._existing_file(rel)) is None:
+                    return None
+                return _rename_file(path, clean), path.suffix
+
+            renamed = await self._hass.async_add_executor_job(
+                rename, str(record["path"])
+            )
+            if renamed is None:
+                return None
+            unique, suffix = renamed
             record["name"] = unique
             record["path"] = (
-                Path(record["path"]).parent
-                / path.with_name(f"{unique}{path.suffix}").name
+                Path(record["path"]).parent / f"{unique}{suffix}"
             ).as_posix()
             self._schedule_save()
             return dict(record)
@@ -269,31 +289,23 @@ class ScanArchive:
             record = self._find(record_id)
             if record is None:
                 return False
-            path = self._resolve(record)
             self._entries[:] = [r for r in self._entries if r is not record]
             self._schedule_save()
-            if path is not None:
-                await self._hass.async_add_executor_job(
-                    _remove_file, path, self._scans_dir()
-                )
+            scans_dir = self._scans_dir()
+
+            def delete(rel: str) -> None:
+                if (path := self._resolve_rel(rel)) is not None:
+                    _remove_file(path, scans_dir)
+
+            await self._hass.async_add_executor_job(delete, str(record["path"]))
             return True
 
-    def file_path(self, record_id: str) -> Path | None:
-        """Absolute path of a scan, or None.
+    async def async_file_path(self, record_id: str) -> Path | None:
+        """Absolute path of a scan, or None (disk checks run in the executor).
 
         Only well-formed ids of known records resolve, the file must exist and
         must lie inside ``<media>/home_print/scans/``.
         """
-        if not RECORD_ID_RE.fullmatch(record_id):
-            return None
-        record = self._find(record_id)
-        if record is None:
-            return None
-        path = self._resolve(record)
-        return path if path is not None and path.is_file() else None
-
-    async def async_file_path(self, record_id: str) -> Path | None:
-        """``file_path`` with the disk checks run in the executor."""
         if not RECORD_ID_RE.fullmatch(record_id):
             return None
         record = self._find(record_id)
@@ -331,20 +343,31 @@ class ScanArchive:
                 if cutoff is not None and self._expired(r, cutoff)
             ]
             expired_ids = {r["id"] for r in expired}
-            expired_paths = [p for r in expired if (p := self._resolve(r)) is not None]
-            wanted = [
-                (r["id"], p)
+            expired_rels = [str(r["path"]) for r in expired]
+            wanted_rels = [
+                (r["id"], str(r["path"]))
                 for r in self._entries
-                if r["id"] not in expired_ids and (p := self._resolve(r)) is not None
+                if r["id"] not in expired_ids
             ]
+            max_bytes = max_mb * 1024 * 1024 if max_mb > 0 else 0
+            scans_dir = self._scans_dir()
+
+            def sweep() -> set[str]:
+                # Resolving touches the disk too, so it happens here, off the loop.
+                expired_paths = [
+                    p
+                    for rel in expired_rels
+                    if (p := self._resolve_rel(rel)) is not None
+                ]
+                wanted = [
+                    (record_id, p)
+                    for record_id, rel in wanted_rels
+                    if (p := self._resolve_rel(rel)) is not None
+                ]
+                return _sweep(scans_dir, expired_paths, wanted, max_bytes)
+
             try:
-                kept = await self._hass.async_add_executor_job(
-                    _sweep,
-                    self._scans_dir(),
-                    expired_paths,
-                    wanted,
-                    max_mb * 1024 * 1024 if max_mb > 0 else 0,
-                )
+                kept = await self._hass.async_add_executor_job(sweep)
             except OSError:
                 _LOGGER.warning("Could not clean up scans", exc_info=True)
                 return
@@ -377,10 +400,6 @@ class ScanArchive:
     def _find(self, record_id: str) -> dict[str, Any] | None:
         return next((r for r in self._entries if r["id"] == record_id), None)
 
-    def _resolve(self, record: dict[str, Any]) -> Path | None:
-        """Absolute path of the record's file if it lies inside the scans folder."""
-        return self._resolve_rel(str(record["path"]))
-
     def _existing_file(self, rel: str) -> Path | None:
         """``_resolve_rel`` that also requires the file to exist (blocking)."""
         path = self._resolve_rel(rel)
@@ -390,6 +409,7 @@ class ScanArchive:
             return None
 
     def _resolve_rel(self, rel: str) -> Path | None:
+        """Absolute path of ``rel`` if it lies inside the scans folder (blocking)."""
         try:
             path = (self._root() / rel).resolve()
             scans = self._scans_dir().resolve()
