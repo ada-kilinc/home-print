@@ -319,6 +319,9 @@ async def test_async_file_path_and_existing_entries(hass, tmp_path):
     archive = _setup(hass, tmp_path)
     kept = await _add(archive, name="kept")
     gone = await _add(archive, name="gone")
+    # Each add schedules a cleanup; let it finish before the file vanishes,
+    # or it may drop the record first (it runs in the executor since 1.0.0).
+    await hass.async_block_till_done()
     assert (
         await archive.async_file_path(kept["id"])
         == (tmp_path / "media" / kept["path"]).resolve()
