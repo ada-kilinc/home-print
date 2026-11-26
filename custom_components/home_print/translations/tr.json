@@ -316,7 +316,7 @@
   "issues": {
     "restart_required": {
       "title": "Home Print güncellemesini bitirmek için Home Assistant'ı yeniden başlat",
-      "description": "Home Print {installed} yüklendi, ama Home Assistant hâlâ {running} sürümüyle çalışıyor. Yeni sürümü kullanmak için Home Assistant'ı yeniden başlat (Ayarlar → Sistem → Yeniden başlat). Açık paneller sonra kendiliğinden yenilenir."
+      "description": "Home Print {installed} yüklendi, ama Home Assistant hâlâ {running} sürümüyle çalışıyor. Yeni sürümü kullanmak için Home Assistant'ı yeniden başlat (Ayarlar → Sistem → Yeniden başlat). Ardından açık panellerde bir Yenile düğmesi çıkar."
     }
   }
 }

@@ -316,7 +316,7 @@
   "issues": {
     "restart_required": {
       "title": "Restart Home Assistant to finish the Home Print update",
-      "description": "Home Print {installed} is installed, but Home Assistant is still running {running}. Restart Home Assistant (Settings → System → Restart) to use the new version. Open dashboards update themselves afterwards."
+      "description": "Home Print {installed} is installed, but Home Assistant is still running {running}. Restart Home Assistant (Settings → System → Restart) to use the new version. Open dashboards then show a Reload button."
     }
   }
 }
