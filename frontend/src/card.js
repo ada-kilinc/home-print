@@ -17,7 +17,6 @@ import { ScanPart } from "./scan.js";
 import { SwitcherPart } from "./switcher.js";
 import { TEMPLATE } from "./template.js";
 import {
-  maybeReload,
   noteServerVersion,
   pendingVersion,
   registerCard,
@@ -381,16 +380,8 @@ export class HomePrintCard extends HTMLElement {
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
 
-  // Something that a reload after an update would interrupt.
-  _isBusy() {
-    return (
-      Boolean(this._uploading || this._job || this._scan || this._crop || this._file) ||
-      this._anyDialogOpen() ||
-      !this._role("pick-menu").hidden
-    );
-  }
-
-  // A newer Home Print: reload when idle, else offer the button. Installed
+  // A newer Home Print: the bar offers a Reload button; the page is only
+  // reloaded when the user taps it. Installed
   // but not running yet: Home Assistant needs a restart (admins get a button).
   _renderUpdate(lang) {
     const version = pendingVersion();
@@ -402,7 +393,6 @@ export class HomePrintCard extends HTMLElement {
     restart.hidden = !installed || !this._hass?.user?.is_admin;
     if (version) {
       this._role("update-text").textContent = t(lang, "update_available", { version });
-      maybeReload();
     } else if (installed) {
       this._role("update-text").textContent = t(lang, "update_restart_needed", {
         version: installed,

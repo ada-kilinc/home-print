@@ -3133,7 +3133,6 @@ var TEMPLATE = `
 `;
 
 // frontend/src/update.js
-var STORAGE_KEY = "home-print-card:reloaded-for";
 function ownVersion() {
   try {
     return new URL(import.meta.url).searchParams.get("v");
@@ -3150,19 +3149,6 @@ var state = {
   cards: /* @__PURE__ */ new Set(),
   reload: () => globalThis.location.reload()
 };
-function reloadedFor() {
-  try {
-    return globalThis.sessionStorage?.getItem(STORAGE_KEY) ?? null;
-  } catch (_err) {
-    return null;
-  }
-}
-function markReloaded(version) {
-  try {
-    globalThis.sessionStorage?.setItem(STORAGE_KEY, version);
-  } catch (_err) {
-  }
-}
 function registerCard(card) {
   state.cards.add(card);
 }
@@ -3182,16 +3168,7 @@ function noteServerVersion(version) {
 function pendingVersion() {
   return state.pending;
 }
-function maybeReload() {
-  const version = state.pending;
-  if (!version || reloadedFor() === version) return false;
-  for (const card of state.cards) if (card._isBusy()) return false;
-  markReloaded(version);
-  state.reload();
-  return true;
-}
 function reloadNow() {
-  if (state.pending) markReloaded(state.pending);
   state.reload();
 }
 var updateState = {
@@ -3199,10 +3176,6 @@ var updateState = {
     state.running = running;
     state.pending = null;
     if (reload) state.reload = reload;
-    try {
-      globalThis.sessionStorage?.removeItem(STORAGE_KEY);
-    } catch (_err) {
-    }
   }
 };
 
@@ -3524,11 +3497,8 @@ var HomePrintCard = class extends HTMLElement {
     }
     if (this._historyEntryId && this._historyEntryId !== printer?.entry_id) this._closeHistory();
   }
-  // Something that a reload after an update would interrupt.
-  _isBusy() {
-    return Boolean(this._uploading || this._job || this._scan || this._crop || this._file) || this._anyDialogOpen() || !this._role("pick-menu").hidden;
-  }
-  // A newer Home Print: reload when idle, else offer the button. Installed
+  // A newer Home Print: the bar offers a Reload button; the page is only
+  // reloaded when the user taps it. Installed
   // but not running yet: Home Assistant needs a restart (admins get a button).
   _renderUpdate(lang) {
     const version = pendingVersion();
@@ -3540,7 +3510,6 @@ var HomePrintCard = class extends HTMLElement {
     restart.hidden = !installed || !this._hass?.user?.is_admin;
     if (version) {
       this._role("update-text").textContent = t(lang, "update_available", { version });
-      maybeReload();
     } else if (installed) {
       this._role("update-text").textContent = t(lang, "update_restart_needed", {
         version: installed

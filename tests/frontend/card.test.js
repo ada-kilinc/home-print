@@ -3333,7 +3333,7 @@ describe("cropping scans (issue #9)", () => {
   });
 });
 
-describe("reload after an update", () => {
+describe("update bar after an update", () => {
   let reloads;
   beforeEach(() => {
     reloads = 0;
@@ -3343,74 +3343,69 @@ describe("reload after an update", () => {
     HomePrintCard.updateState.reset();
   });
 
-  const refresh = async (card) => {
+  const refresh = async () => {
     await vi.advanceTimersByTimeAsync(60 * 1000);
     await flush();
   };
 
-  it("reloads once when the integration becomes newer", async () => {
+  it("shows the bar but never reloads the page on its own", async () => {
     let version = "0.3.14";
     const card = await mount(makeHass({ version: () => version }));
     expect(visible(card, "update")).toBe(false);
-    await refresh(card);
-    expect(reloads).toBe(0);
+    await refresh();
     version = "0.3.15";
-    await refresh(card);
-    expect(reloads).toBe(1);
-    // The same version never reloads twice (a stale cache can't loop).
-    await refresh(card);
-    expect(reloads).toBe(1);
+    await refresh();
+    await refresh();
+    expect(reloads).toBe(0);
     expect(visible(card, "update")).toBe(true);
+    expect(visible(card, "update-reload")).toBe(true);
     expect(text(card, "update-text")).toBe("Home Print 0.3.15 sürümüne güncellendi.");
   });
 
-  it("waits while a file is chosen, and the button reloads at once", async () => {
+  it("reloads only when the Reload button is tapped", async () => {
     let version = "1.0.0";
     const card = await mount(makeHass({ version: () => version, language: "en" }));
     await selectFile(card, makeFile("rapor.pdf", "application/pdf"));
     version = "1.1.0";
-    await refresh(card);
+    await refresh();
     expect(reloads).toBe(0);
-    expect(visible(card, "update")).toBe(true);
     expect(text(card, "update-text")).toBe("Home Print was updated to 1.1.0.");
     expect(text(card, "update-reload")).toBe("Reload");
     role(card, "update-reload").click();
     expect(reloads).toBe(1);
   });
 
-  it("waits for a busy card elsewhere on the page", async () => {
+  it("every card on the page shows the bar", async () => {
     let version = "2.0.0";
     const hass = makeHass({ version: () => version });
-    const idle = await mount(hass);
-    const busy = await mount(hass);
-    await selectFile(busy, makeFile("rapor.pdf", "application/pdf"));
+    const first = await mount(hass);
+    const second = await mount(hass);
     version = "2.0.1";
-    await refresh(idle);
+    await refresh();
+    expect(visible(first, "update")).toBe(true);
+    expect(visible(second, "update")).toBe(true);
     expect(reloads).toBe(0);
-    expect(visible(idle, "update")).toBe(true);
-    // Once the file is cleared there, the page reloads.
-    busy._file = null;
-    busy._update();
-    expect(reloads).toBe(1);
   });
 
   it("knows its own version from the card's address", async () => {
     HomePrintCard.updateState.reset({ running: "0.3.14", reload: () => (reloads += 1) });
-    await mount(makeHass({ version: "0.3.15" }));
-    expect(reloads).toBe(1);
+    const card = await mount(makeHass({ version: "0.3.15" }));
+    expect(visible(card, "update")).toBe(true);
+    expect(reloads).toBe(0);
   });
 
   it("looks again when the tab comes back", async () => {
     let version = "3.0.0";
     const hass = makeHass({ version: () => version });
-    await mount(hass);
+    const card = await mount(hass);
     version = "3.0.1";
     const before = hass.calls.filter((m) => m.type === "home_print/printers").length;
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
     await flush();
     expect(hass.calls.filter((m) => m.type === "home_print/printers").length).toBe(before + 1);
-    expect(reloads).toBe(1);
+    expect(visible(card, "update")).toBe(true);
+    expect(reloads).toBe(0);
   });
 });
 
