@@ -6,8 +6,6 @@
 
 Print and scan with your network printer from a Home Assistant dashboard, wherever you can open Home Assistant.
 
-> **Early release.** Tested in code and against a real HP DeskJet 4670, not yet in daily use. Please open an issue when something breaks.
-
 ![The Home Print card: the Print tab, the Scan tab with a finished scan, and cropping a scanned receipt](docs/images/overview.png)
 
 ## Features
