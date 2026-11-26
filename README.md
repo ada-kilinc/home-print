@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ada-kilinc/home-print/actions/workflows/ci.yml/badge.svg)](https://github.com/ada-kilinc/home-print/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ada-kilinc/home-print)](https://github.com/ada-kilinc/home-print/releases)
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+[![HACS](https://img.shields.io/badge/HACS-Integration-41BDF5.svg)](https://hacs.xyz)
 
 Print and scan with your network printer from a Home Assistant dashboard, wherever you can open Home Assistant.
 
@@ -26,7 +26,8 @@ Not supported yet: Word/ODF files (save as PDF), USB-only printers, SANE scanner
 [![Open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ada-kilinc&repository=home-print&category=integration)
 [![Add the Home Print integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=home_print)
 
-1. In HACS, add `https://github.com/ada-kilinc/home-print` as a custom repository (type **Integration**), download **Home Print** and restart Home Assistant.
+1. Open **HACS**, search for **Home Print**, download it and restart Home Assistant.
+   (Not listed in your HACS yet? Add `https://github.com/ada-kilinc/home-print` as a custom repository of type **Integration** first, then search again.)
 2. Go to **Settings → Devices & services**. Your printer or scanner should appear as discovered. If it doesn't, add **Home Print** and enter its IP address (for a scanner, an eSCL address like `http://192.168.1.20/eSCL` works too).
 3. On a dashboard: **Edit → Add card → Home Print**. No resource setup is needed.
 
@@ -97,7 +98,7 @@ response_variable: scan  # scan.path, scan.copy, scan.name, scan.pages
 
 **Where are my scans?** In the **Media** panel, under `home_print/scans/` (`/media` on Home Assistant OS).
 
-**I updated Home Print. Do open dashboards change?** Yes, after Home Assistant restarts. Until then, Home Print shows a notice in **Settings → Repairs** and on the card (admins get a **Restart** button there). An open card notices the newer version within a minute, or as soon as you come back to the tab or app, and reloads the page once. If you're in the middle of something (a file chosen, a print or scan running, a dialog open), it waits and shows a **Reload** button instead.
+**I updated Home Print. Do open dashboards change?** Yes, after Home Assistant restarts. Until then, Home Print shows a notice in **Settings → Repairs** and on the card (admins get a **Restart** button there). An open card notices the newer version within a minute, or as soon as you come back to the tab or app, and shows a **Reload** button. It never reloads the page by itself, so tap it when it suits you.
 
 **The card says "Custom element doesn't exist".** See [Troubleshooting](docs/troubleshooting.md#the-card-doesnt-show-up).
 
