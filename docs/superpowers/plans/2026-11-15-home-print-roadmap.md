@@ -10,7 +10,7 @@ Spec birbirinden bağımsız test edilebilen birkaç alt sistemi kapsıyor. Bu y
 | 2 | Kart: Yazdır sekmesi | Ana sayfa kartından telefonla yazdırma | 7.3 |
 | 3 | Dönüştürme | Raster yazıcılar, sayfa aralığı, fotoğrafı sayfaya sığdırma | 13 |
 | 4 | Tarama: eSCL, arşiv, Yazdır'ın altında Tara düğmesi; geçmişte Taramalar sekmesi | Tarama, ön izleme, indirme, geçmişte Taramalar sekmesi, `home_print.scan` | 7.5 |
-| 5 | Home Print Server: CUPS + SANE köprüsü + OCR | Eski/USB cihazlar ve aranabilir PDF; HA eklentisi ve bağımsız Docker imajı | 7.4, 7.5 (SANE/OCR) |
+| 5 | ~~Home Print Server: CUPS + SANE köprüsü + OCR~~ **İptal edildi (#5)** | Eski/USB cihazlar ve aranabilir PDF; HA eklentisi ve bağımsız Docker imajı | 7.4, 7.5 (SANE/OCR) |
 | 6 | Yayın | İsim çakışma kontrolü, README (tr+en, tek tık düğmeleri), CI (hassfest, HACS, eklenti derlemesi), ilk sürüm | 10, 11, 12 |
 
 ## Durum notu (2026-11-16)
@@ -25,3 +25,8 @@ Plan 4 (tarama) uygulandı: eSCL istemcisi, arşiv, `home_print.scan`, kartta Ta
 - Tarayıcı keşfi (`_uscan`/`_uscans`) ve yazıcısı olmayan tarayıcılar eklendi (#10).
 - Kâğıt boyutu seçimi yerine taramadan sonra sayfa sayfa kırpma geldi: kenarlar otomatik bulunuyor, kırpılan kısım dosyadan gerçekten siliniyor, geçmişteki taramalarda da çalışıyor (#9).
 - Kalanlar: HACS varsayılan listesine kabul ve Android'de gerçek cihaz testi (#4), Plan 5 (#5).
+
+## Durum notu (2026-11-26)
+
+- HACS varsayılan listesine kabul edildi, sürüm 1.0.0.
+- **Plan 5 iptal edildi (#5).** Home Print Server (CUPS, SANE köprüsü, OCR) yapılmayacak: evdeki yazıcıların çoğu artık ağ yazıcısı ve Home Print onlara doğrudan ulaşıyor; USB ya da eski cihazlar için hazır eklentiler var. Yazıcısı olmayan tarayıcılar ve `_uscan`/`_uscans` keşfi v0.3.13'ten beri entegrasyonda.

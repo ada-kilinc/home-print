@@ -17,7 +17,7 @@ Print and scan with your network printer from a Home Assistant dashboard, wherev
 - A dashboard card with Print and Scan tabs, history and previews.
 - `home_print.print_file` and `home_print.scan` actions for automations.
 
-Not supported yet: Word/ODF files (save as PDF), USB-only printers, SANE scanners and OCR.
+Not supported: Word/ODF files (save as PDF), USB-only printers, SANE scanners and OCR.
 
 ## Install
 

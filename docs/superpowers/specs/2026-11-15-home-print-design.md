@@ -127,6 +127,8 @@ Son: rapor.pdf ✓ 16:52 — Ada
 
 ### 7.4 İsteğe bağlı yardımcı sunucu: Home Print Server (`server/`)
 
+> **Plan 5 iptal edildi (2026-11-26, #5).** Home Print Server (CUPS, SANE köprüsü, OCR) yapılmayacak. Yazıcısı olmayan tarayıcılar ve `_uscan`/`_uscans` keşfi entegrasyonda v0.3.13'ten beri var.
+
 HA eklentisi olarak gelir, bağımsız bir Docker imajı olarak da çalışır. İçinde CUPS, SANE köprüsü ve OCR ucu var.
 
 
@@ -174,6 +176,8 @@ Format [PDF ▾]
 - Kartta "Son taramalar" listesi olur. Her satırda ad, tarih, kimin taradığı, sayfa sayısı ve İndir / Ön izle / Sil düğmeleri bulunur.
 - Silme süresi ayarlardan değişir (varsayılan 30 gün, "hiç silme" de seçilebilir). İsteğe bağlı bir toplam boyut sınırı da konur, aşılırsa en eskiler silinir.
 - Dosya adı varsayılan olarak `tarama_2026-11-15_1652.pdf` biçiminde olur, kartta değiştirilebilir.
+
+> **Plan 5 iptal edildi (2026-11-26, #5).** SANE ve OCR yapılmayacak; aşağıdaki karar geçersiz.
 
 **SANE ve OCR ilk sürümde var (Ada).** İkisi de yerel (native) programlara dayanıyor: SANE sürücüleri, Tesseract. HA'nın Python ortamına pip ile kurulamıyorlar. Benim kararım bunları **yardımcı sunucuda** çalıştırmak (bkz. 7.4, artık "Home Print Server"):
 - **SANE:** Sunucu SANE ile gördüğü tarayıcıları (USB veya eski ağ tarayıcıları) eSCL olarak ağa yayınlar (AirSane benzeri bir köprü). Entegrasyon bunları sıradan eSCL tarayıcısı gibi bulur. Böylece entegrasyonda tek bir tarama kod yolu kalır.

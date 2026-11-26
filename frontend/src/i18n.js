@@ -62,7 +62,7 @@ export const STRINGS = {
       "Kartta ayarlı yazıcı ({id}) şu an listede yok. Entegrasyon hâlâ yükleniyor olabilir; silindiyse kart ayarlarından başka bir yazıcı seç.",
     not_allowed: "Bu yazıcıyla yalnızca yöneticiler yazdırabilir.",
     word_file:
-      "Word dosyalarını şimdilik yazdıramıyorum. Dosyayı önce PDF olarak kaydet (telefonda: Paylaş → PDF olarak yazdır/kaydet).",
+      "Word dosyalarını yazdıramıyorum. Dosyayı önce PDF olarak kaydet (telefonda: Paylaş → PDF olarak yazdır/kaydet).",
     unsupported_type: "Bu dosya türünü yazdıramıyorum. PDF, JPEG ya da PNG seç.",
     too_large: "Dosya çok büyük. En fazla {mb} MB olabilir.",
     bad_pages: "Sayfa aralığını anlayamadım. Örnek: 1-3,5",
@@ -227,7 +227,7 @@ export const STRINGS = {
     unknown_printer:
       "The printer set for this card ({id}) isn't listed right now. The integration may still be loading; if it was removed, pick another printer in the card settings.",
     not_allowed: "Only administrators can print on this printer.",
-    word_file: "Word files can't be printed yet. Save the file as PDF first.",
+    word_file: "Word files can't be printed. Save the file as PDF first.",
     unsupported_type: "This file type can't be printed. Choose a PDF, JPEG or PNG.",
     too_large: "The file is too large. The limit is {mb} MB.",
     bad_pages: "Couldn't read the page range. Example: 1-3,5",

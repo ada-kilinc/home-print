@@ -246,7 +246,7 @@ describe("file checks", () => {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ),
     );
-    expect(text(card, "message")).toContain("Word dosyalarını şimdilik yazdıramıyorum");
+    expect(text(card, "message")).toContain("Word dosyalarını yazdıramıyorum");
     await clickPrint(card);
     expect(hass.fetchWithAuth).not.toHaveBeenCalled();
   });
